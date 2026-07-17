@@ -13,9 +13,10 @@ MarkPDF.xcodeproj/
 .swiftpm/
 .build/
 
-# Node（Web 编辑器内核）
-node_modules/
-MarkPDF/Resources/Web/dist/
+# Web 内核（Node）：依赖与构建产物不入库；保留 dist/.gitkeep 占位使 xcodegen 校验通过
+MarkPDF/Resources/Web/node_modules/
+MarkPDF/Resources/Web/dist/*
+!MarkPDF/Resources/Web/dist/.gitkeep
 
 # macOS
 .DS_Store

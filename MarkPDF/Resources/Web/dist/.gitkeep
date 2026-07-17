@@ -1,0 +1,1 @@
+占位文件：保证 dist/ 目录随仓库入库，使 xcodegen generate 在首次构建 Web 内核（npm run build）之前即可通过源码目录校验。editor.js 由构建生成，不入库。

@@ -26,10 +26,15 @@ targets:
         buildPhase: resources
         type: folder
     preBuildScripts:
-      # 内核产物缺失时自动构建（npm 需位于 /opt/homebrew/bin 或 /usr/local/bin）
+      # 内核产物缺失时自动构建（npm 需位于 /opt/homebrew/bin 或 /usr/local/bin；兼容 nvm）
       - name: Build Web Editor Core
         script: |
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          # nvm 安装的 Node 不在默认 PATH，尝试加载
+          if [ -s "$HOME/.nvm/nvm.sh" ]; then
+            export NVM_DIR="$HOME/.nvm"
+            . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+          fi
           WEB_DIR="${SRCROOT}/MarkPDF/Resources/Web"
           if [ ! -f "${WEB_DIR}/dist/editor.js" ]; then
             echo "Web 内核未构建，执行 npm ci && npm run build"

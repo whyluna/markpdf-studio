@@ -19,17 +19,16 @@ brew install node xcodegen
 git clone git@github.com:whyluna/markpdf-studio.git
 cd markpdf-studio
 
+# 构建编辑器内核（生成 dist/editor.js；首次必须先做这一步）
+cd MarkPDF/Resources/Web && npm ci && npm run build && cd ../../..
+
 # 生成 Xcode 工程（.xcodeproj 不入库，由 project.yml 生成）
 xcodegen generate
 
 open MarkPDF.xcodeproj   # Cmd+R 运行
 ```
 
-首次编译时若 `MarkPDF/Resources/Web/dist/` 缺失，preBuild 脚本会自动执行 `npm ci && npm run build` 构建编辑器内核；也可手动构建：
-
-```bash
-cd MarkPDF/Resources/Web && npm ci && npm run build
-```
+若跳过手动构建，Xcode 首次编译时 preBuild 脚本也会自动执行 `npm ci && npm run build`（耗时一两分钟，需 npm 位于 `/opt/homebrew/bin`、`/usr/local/bin` 或经由 nvm 安装）。
 
 ## 使用
 
