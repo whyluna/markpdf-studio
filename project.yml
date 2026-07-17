@@ -15,7 +15,26 @@ targets:
     type: application
     platform: macOS
     sources:
+      # Swift 源码与常规资源（排除 Resources，Web 内核单独处理）
       - path: MarkPDF
+        excludes:
+          - "Resources/**"
+      # Web 内核页面：index.html 平铺进 bundle 根目录
+      - path: MarkPDF/Resources/Web/index.html
+      # 内核构建产物：以文件夹引用保留 dist/ 结构（index.html 按此相对路径加载）
+      - path: MarkPDF/Resources/Web/dist
+        buildPhase: resources
+        type: folder
+    preBuildScripts:
+      # 内核产物缺失时自动构建（npm 需位于 /opt/homebrew/bin 或 /usr/local/bin）
+      - name: Build Web Editor Core
+        script: |
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          WEB_DIR="${SRCROOT}/MarkPDF/Resources/Web"
+          if [ ! -f "${WEB_DIR}/dist/editor.js" ]; then
+            echo "Web 内核未构建，执行 npm ci && npm run build"
+            cd "${WEB_DIR}" && npm ci && npm run build
+          fi
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.whyluna.markpdf
