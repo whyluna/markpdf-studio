@@ -13,43 +13,33 @@ Swift 5.9 · SwiftUI + AppKit · PDFKit · WKWebView（CodeMirror 6 编辑器内
 ## 本地开发
 
 ```bash
-# 前置：Xcode 15+、Node.js、XcodeGen
-brew install xcodegen node
+# 前置：Xcode 15+，Node.js 20+（编辑器内核构建），XcodeGen
+brew install node xcodegen
 
 git clone git@github.com:whyluna/markpdf-studio.git
 cd markpdf-studio
 
-# 1) 构建 Web 编辑器内核（WKWebView 加载的页面与脚本）
-cd MarkPDF/Resources/Web && npm ci && npm run build && cd -
-
-# 2) 生成 Xcode 工程
+# 生成 Xcode 工程（.xcodeproj 不入库，由 project.yml 生成）
 xcodegen generate
 
 open MarkPDF.xcodeproj   # Cmd+R 运行
 ```
 
-> Xcode 的 preBuild 脚本会在 `dist/editor.js` 缺失时自动补建内核，
-> 但首次 clone 后建议按上面顺序手动执行一次，确保 xcodegen 能识别 dist 目录。
-
-## Web 编辑器内核（MarkPDF/Resources/Web）
-
-所见即所得 Markdown 编辑器（CodeMirror 6 实现），可脱离 App 在浏览器中独立调试：
+首次编译时若 `MarkPDF/Resources/Web/dist/` 缺失，preBuild 脚本会自动执行 `npm ci && npm run build` 构建编辑器内核；也可手动构建：
 
 ```bash
-cd MarkPDF/Resources/Web
-npm ci          # 首次安装（package-lock 锁定版本）
-npm run build   # 产出 dist/editor.js（WKWebView 加载）
-npm run serve   # 打开 http://localhost:8000 调试页
+cd MarkPDF/Resources/Web && npm ci && npm run build
 ```
 
-- `index.html`：WKWebView 加载入口 + 浏览器调试台（URL 加 `?app=1` 隐藏调试栏）
-- `src/wysiwyg.js`：所见即所得装饰层（FR-2.1）
-- `src/bridge.js`：Swift ↔ Web 类型化消息协议（开发规范 §3.4），对应原生侧 `Core/Bridge/WebBridge.swift`
-- `dist/` 为构建产物，不入库
+## 使用
+
+- **⌘O** 打开一个文件夹作为工作区，左侧文件树展示其中的 Markdown / PDF / 图片
+- 点击 `.md` 进入编辑（所见即所得 / 源码 / 阅读 三模式）；停止输入 0.5 秒自动保存，**⌘S** 立即保存
+- 点击 `.pdf` / 图片直接预览（PDF 标注能力在 M2 提供）
 
 ## CI
 
-每次 push 到 `main`（非文档改动）自动在 GitHub Actions macOS runner 上执行 `xcodebuild build test`，文档/原型改动不触发构建以节省额度。
+[`docs/macos-ci.yml`](docs/macos-ci.yml) 是现成的 GitHub Actions 模板（Node 环境 → 构建 Web 内核 → XcodeGen → 编译 + 测试）。启用方式：复制为 `.github/workflows/macos.yml` 后 push（自动化 token 无 workflow scope，需手动添加一次）。
 
 ## 协作约定
 
