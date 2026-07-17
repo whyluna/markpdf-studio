@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MarkPDF Studio · UI 设计稿</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --desk1:#b9c9dd; --desk2:#8ea6c4;
+  --win-bg:#ffffff; --chrome:#f6f6f8;
+  --sidebar:#f3f3f5; --panel:#fafafc;
+  --border:#e2e2e6; --border2:#ececef;
+  --text:#1d1d1f; --text2:#6e6e73; --text3:#aeaeb2;
+  --hover:rgba(0,0,0,.045); --active:rgba(0,0,0,.08); --sel:rgba(10,132,255,.15);
+  --accent:#0a84ff;
+  --tabbg:#ebebee; --tabactive:#ffffff;
+  --code-bg:#f6f8fa; --paper:#ffffff; --pdfbg:#e8e8ec;
+  --hl-y:rgba(255,235,59,.55); --hl-g:rgba(165,214,167,.6); --ul-r:#e03131;
+  --shadow:0 30px 90px rgba(20,30,50,.35),0 4px 18px rgba(20,30,50,.15);
+}
+[data-theme="dark"]{
+  --desk1:#161c2b; --desk2:#0a0e18;
+  --win-bg:#1e1e21; --chrome:#28282c;
+  --sidebar:#26262a; --panel:#26262a;
+  --border:#3c3c41; --border2:#333338;
+  --text:#f5f5f7; --text2:#a1a1a6; --text3:#6c6c70;
+  --hover:rgba(255,255,255,.06); --active:rgba(255,255,255,.11); --sel:rgba(10,132,255,.35);
+  --tabbg:#242428; --tabactive:#1e1e21;
+  --code-bg:#2a2a30; --pdfbg:#141417;
+  --shadow:0 30px 90px rgba(0,0,0,.7);
+}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;
+  background:linear-gradient(135deg,var(--desk1),var(--desk2));
+  color:var(--text);
+  display:flex;align-items:center;justify-content:center;
+  padding:28px;overflow:hidden;
+}
+.window{
+  width:min(1380px,100%);height:min(900px,calc(100vh - 56px));
+  background:var(--win-bg);border-radius:12px;box-shadow:var(--shadow);
+  display:flex;flex-direction:column;overflow:hidden;
+  border:1px solid var(--border);min-width:1080px;
+}
+/* ---------- 顶部工具栏 ---------- */
+.toolbar{
+  position:relative;height:52px;flex:none;
+  display:flex;align-items:center;gap:10px;padding:0 12px;
+  background:var(--chrome);border-bottom:1px solid var(--border);
+}
+.traffic{display:flex;gap:8px;margin-right:4px}
+.tl{width:12px;height:12px;border-radius:50%;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.15)}
+.tl.r{background:#ff5f57}.tl.y{background:#febc2e}.tl.g{background:#28c840}
+.ttitle{
+  font-size:13.5px;font-weight:600;color:var(--text);
+  display:flex;align-items:center;gap:8px;white-space:nowrap;
+  max-width:300px;overflow:hidden;
+}
+.ttitle #docTitle{overflow:hidden;text-overflow:ellipsis}
+.badge{font-size:10px;font-weight:600;color:var(--accent);background:var(--sel);padding:2px 8px;border-radius:10px;letter-spacing:.05em}
+.tbtn{
+  width:28px;height:28px;flex:none;border:none;border-radius:6px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:transparent;color:var(--text2);transition:.12s;
+}
+.tbtn:hover{background:var(--hover);color:var(--text)}
+.tbtn.on{color:var(--accent);background:var(--sel)}
+.tbtn svg{width:17px;height:17px}
+.spacer{flex:1}
+.search{
+  display:flex;align-items:center;gap:6px;height:28px;width:190px;
+  background:var(--hover);border:1px solid transparent;border-radius:7px;padding:0 9px;
+  color:var(--text2);transition:.15s;
+}
+.search:focus-within{background:var(--win-bg);border-color:var(--accent);box-shadow:0 0 0 3px var(--sel)}
+.search svg{width:14px;height:14px;flex:none}
+.search input{border:none;outline:none;background:transparent;font-size:13px;color:var(--text);width:100%;font-family:inherit}
+.vdiv{width:1px;height:20px;background:var(--border);flex:none;margin:0 2px}
+#pdfTools{display:flex;align-items:center;gap:2px}
+.cdot{width:16px;height:16px;border-radius:50%;border:2px solid transparent;cursor:pointer;flex:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.12)}
+.cdot.on{border-color:var(--accent);box-shadow:0 0 0 2px var(--sel)}
+/* ---------- 主体三栏 ---------- */
+.main{flex:1;display:flex;overflow:hidden}
+.sidebar{
+  width:238px;flex:none;background:var(--sidebar);border-right:1px solid var(--border);
+  overflow-y:auto;padding:10px 8px;
+}
+.sidebar.hide{display:none}
+.sec{margin-bottom:16px}
+.sec-t{font-size:11px;font-weight:600;color:var(--text3);padding:4px 8px;letter-spacing:.03em}
+.titem{
+  display:flex;align-items:center;gap:7px;padding:4.5px 8px;border-radius:6px;
+  font-size:13.5px;color:var(--text);cursor:pointer;white-space:nowrap;user-select:none;
+}
+.titem:hover{background:var(--hover)}
+.titem.sel{background:var(--sel);color:var(--accent);font-weight:500}
+.titem svg{width:15px;height:15px;flex:none;color:var(--text2)}
+.titem.sel svg{color:var(--accent)}
+.titem .chev{width:11px;height:11px;transition:transform .15s;color:var(--text3)}
+.tnode:not(.closed)>.titem .chev{transform:rotate(90deg)}
+.tnode.closed>.kids{display:none}
+.kids{padding-left:15px}
+.ficon{position:relative;width:15px;height:15px;flex:none;display:inline-flex}
+.ficon i{
+  position:absolute;right:-3px;bottom:-3px;font-style:normal;font-size:7.5px;font-weight:800;
+  line-height:1;padding:1.5px 2.5px;border-radius:3px;color:#fff;
+}
+.ficon i.md{background:#0a84ff}.ficon i.pdf{background:#ff453a}.ficon i.img{background:#30d158}
+.tname{overflow:hidden;text-overflow:ellipsis}
+/* ---------- 中间内容区 ---------- */
+.content{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.tabbar{display:flex;align-items:flex-end;gap:3px;background:var(--tabbg);border-bottom:1px solid var(--border);padding:6px 8px 0;flex:none}
+.tab{
+  display:flex;align-items:center;gap:8px;padding:7px 12px;max-width:230px;
+  border-radius:8px 8px 0 0;font-size:13px;color:var(--text2);cursor:pointer;
+  border:1px solid transparent;border-bottom:none;background:transparent;user-select:none;
+}
+.tab.on{background:var(--tabactive);color:var(--text);border-color:var(--border)}
+.tab:not(.on):hover{background:var(--hover)}
+.tab svg{width:14px;height:14px;flex:none}
+.tab .tx{width:16px;height:16px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text3);flex:none}
+.tab .tx:hover{background:var(--active);color:var(--text)}
+.tab .tx svg{width:10px;height:10px}
+.tabadd{width:26px;height:26px;border:none;background:transparent;color:var(--text3);border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-bottom:3px}
+.tabadd:hover{background:var(--hover);color:var(--text)}
+.panes{flex:1;display:flex;overflow:hidden;background:var(--win-bg)}
+.pane{flex:1;overflow:auto;display:none;min-width:0}
+.pane.on{display:block}
+.panes.split .pane{display:block;flex:1}
+.panes.split .pane-pdf{order:-1;border-right:1px solid var(--border)}
+.panes.split .paper{zoom:.62!important}
+.empty{flex:1;display:none;align-items:center;justify-content:center;color:var(--text3);font-size:14px}
+.panes.none .empty{display:flex}
+.panes.none .pane{display:none!important}
+/* ---------- Markdown 排版 ---------- */
+.mdwrap{max-width:780px;margin:0 auto;padding:38px 52px 140px;line-height:1.8;font-size:15.5px}
+.mdwrap h1{font-size:27px;font-weight:700;padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:6px}
+.mdwrap h2{font-size:20px;font-weight:650;margin:30px 0 10px}
+.mdwrap p{margin:10px 0}
+.mdwrap .meta{color:var(--text3);font-size:12.5px;margin-bottom:14px}
+.mdwrap code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.86em;background:var(--code-bg);padding:2px 6px;border-radius:5px;color:#c7254e}
+[data-theme="dark"] .mdwrap code{color:#ff7a9e}
+.mdwrap strong{font-weight:650}
+.mdwrap ul,.mdwrap ol{padding-left:24px;margin:10px 0}
+.mdwrap li{margin:4px 0}
+.mdwrap blockquote{
+  margin:14px 0;padding:10px 16px;border-left:3px solid var(--accent);
+  background:var(--code-bg);border-radius:0 8px 8px 0;color:var(--text2);font-size:14.5px;
+}
+.mdwrap blockquote a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)}
+.mdwrap table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+.mdwrap th,.mdwrap td{border:1px solid var(--border);padding:8px 12px;text-align:left}
+.mdwrap th{background:var(--code-bg);font-weight:600}
+.mdwrap tr:nth-child(even) td{background:color-mix(in srgb,var(--code-bg) 45%,transparent)}
+.codeblock{
+  background:var(--code-bg);border:1px solid var(--border2);border-radius:10px;
+  margin:16px 0;overflow:hidden;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13px;
+}
+.codeblock .cb-h{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-bottom:1px solid var(--border2);color:var(--text3);font-size:11.5px}
+.codeblock pre{padding:14px 16px;overflow-x:auto;line-height:1.65}
+.tok-k{color:#af3ad4}.tok-s{color:#c9352b}.tok-c{color:#8e8e93;font-style:italic}.tok-f{color:#0a84ff}.tok-n{color:#b05c00}
+[data-theme="dark"] .tok-k{color:#e08cff}[data-theme="dark"] .tok-s{color:#ff9a8a}
+[data-theme="dark"] .tok-f{color:#6ab8ff}[data-theme="dark"] .tok-n{color:#ffbe5c}
+.math{
+  text-align:center;margin:18px 0;font-family:Georgia,"Times New Roman",serif;
+  font-style:italic;font-size:17px;letter-spacing:.02em;
+}
+.task li{list-style:none;display:flex;align-items:center;gap:9px}
+.task input{width:15px;height:15px;accent-color:var(--accent)}
+.task li.done{color:var(--text3);text-decoration:line-through}
+.raw{
+  font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13.5px;line-height:1.7;
+  background:var(--code-bg);border:1.5px dashed var(--accent);border-radius:8px;
+  padding:12px 15px;margin:10px 0;position:relative;white-space:pre-wrap;overflow-wrap:break-word;
+}
+.raw .etag{
+  position:absolute;top:-11px;right:12px;background:var(--accent);color:#fff;
+  font-size:10.5px;font-weight:600;padding:2px 9px;border-radius:10px;font-family:inherit;
+}
+.caret{display:inline-block;width:2px;height:1.05em;background:var(--accent);vertical-align:-2px;animation:blink 1.05s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+/* ---------- PDF 阅读 ---------- */
+.pane-pdf{background:var(--pdfbg)}
+.pdfscroll{padding:26px 24px 70px}
+.paper{
+  width:710px;margin:0 auto 26px;background:var(--paper);color:#191919;
+  font-family:Georgia,"Times New Roman","Songti SC",serif;
+  box-shadow:0 2px 14px rgba(0,0,0,.22);border-radius:3px;
+  padding:58px 66px 64px;position:relative;
+}
+.paper h1{font-size:21px;line-height:1.4;text-align:center;font-weight:700;margin-bottom:14px}
+.paper .authors{text-align:center;font-size:12px;color:#555;margin-bottom:4px}
+.paper .conf{text-align:center;font-size:11px;color:#888;margin-bottom:26px}
+.paper h3{font-size:14.5px;margin:20px 0 8px;font-weight:700}
+.paper p{font-size:12.6px;line-height:1.72;text-align:justify;margin:8px 0}
+.paper .abs{font-size:12px;background:#f5f5f5;padding:12px 16px;border-radius:4px;margin-bottom:14px}
+.hl-y{background:var(--hl-y);padding:0 1px;border-radius:2px}
+.hl-g{background:var(--hl-g);padding:0 1px;border-radius:2px}
+.ul-r{border-bottom:2px solid var(--ul-r)}
+.wavy{text-decoration:underline wavy #e8590c 1.5px;text-underline-offset:3px}
+.fig{
+  border:1px solid #d5d5d5;background:#fafafa;border-radius:4px;margin:16px 0;
+  padding:14px;text-align:center;
+}
+.fig .box{height:110px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11.5px;border:1px dashed #c8c8c8;border-radius:3px;background:repeating-linear-gradient(45deg,#f4f4f4,#f4f4f4 10px,#efefef 10px,#efefef 20px)}
+.fig .cap{font-size:11px;color:#666;margin-top:8px}
+.pageno{position:absolute;bottom:20px;left:0;right:0;text-align:center;font-size:11px;color:#999}
+.notemark{
+  position:absolute;right:26px;width:18px;height:18px;background:#ffd43b;border-radius:3px 3px 3px 0;
+  box-shadow:0 1px 4px rgba(0,0,0,.25);cursor:pointer;
+}
+.notemark::after{content:"";position:absolute;left:3px;top:5px;width:12px;height:1.6px;background:#a8870a;box-shadow:0 3.4px 0 #a8870a,0 6.8px 0 #a8870a}
+.notemark:hover .tip{display:block}
+.notemark .tip{
+  display:none;position:absolute;right:22px;top:-4px;width:190px;z-index:5;
+  background:#fff9db;color:#5c4a00;border:1px solid #ffd43b;border-radius:8px;
+  font-size:11.5px;line-height:1.5;padding:9px 11px;box-shadow:0 6px 20px rgba(0,0,0,.18);
+  font-family:-apple-system,"PingFang SC",sans-serif;text-align:left;
+}
+.flash{outline:2.5px solid var(--accent)!important;outline-offset:2px;border-radius:2px}
+/* ---------- 右侧面板 ---------- */
+.rightpanel{
+  width:266px;flex:none;background:var(--panel);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.rightpanel.hide{display:none}
+.rp-h{flex:none;padding:10px 12px 8px;border-bottom:1px solid var(--border2)}
+.seg{display:flex;background:var(--tabbg);border-radius:8px;padding:2px;gap:2px}
+.seg button{
+  flex:1;border:none;background:transparent;color:var(--text2);font-size:12px;
+  padding:5px 0;border-radius:6px;cursor:pointer;font-family:inherit;
+}
+.seg button.on{background:var(--win-bg);color:var(--text);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.rp-b{flex:1;overflow-y:auto;padding:8px}
+.rp-title{font-size:11px;font-weight:600;color:var(--text3);padding:6px 6px 6px;letter-spacing:.03em}
+.oli{padding:5px 8px;border-radius:6px;font-size:13px;cursor:pointer;color:var(--text)}
+.oli:hover{background:var(--hover)}
+.oli.h1{font-weight:600}
+.oli.h2{padding-left:22px;color:var(--text2)}
+.anno{
+  display:flex;gap:9px;padding:9px 9px;border-radius:8px;cursor:pointer;margin-bottom:2px;
+  align-items:flex-start;
+}
+.anno:hover{background:var(--hover)}
+.anno .dot{width:10px;height:10px;border-radius:3px;flex:none;margin-top:3.5px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.15)}
+.anno .tx{flex:1;min-width:0}
+.anno .q{font-size:12.5px;line-height:1.5;color:var(--text);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.anno .pg{font-size:10.5px;color:var(--text3);margin-top:3px}
+.anno .pg b{font-weight:600;color:var(--accent)}
+.thumb{
+  width:120px;margin:6px auto 12px;background:var(--paper);border:1px solid var(--border);
+  border-radius:3px;box-shadow:0 1px 5px rgba(0,0,0,.1);padding:10px 9px;cursor:pointer;
+}
+.thumb.cur{outline:2px solid var(--accent)}
+.thumb .l{height:3px;background:#d8d8dc;border-radius:2px;margin-bottom:4px}
+.thumb .l.w8{width:80%}.thumb .l.w6{width:60%}.thumb .l.w9{width:90%}.thumb .l.t{height:5px;width:70%;margin:0 auto 7px;background:#c5c5ca}
+.thumb .pn{text-align:center;font-size:9px;color:var(--text3);margin-top:6px}
+.bmk{padding:7px 9px;border-radius:7px;font-size:12.5px;cursor:pointer;display:flex;justify-content:space-between;color:var(--text)}
+.bmk:hover{background:var(--hover)}
+.bmk span{color:var(--text3);font-size:11px}
+.backlink{
+  margin:6px 4px;padding:10px 11px;border:1px solid var(--border2);border-radius:9px;
+  background:var(--win-bg);font-size:12px;color:var(--text2);line-height:1.6;
+}
+.backlink b{color:var(--accent);font-weight:600}
+/* ---------- 状态栏 ---------- */
+.statusbar{
+  height:29px;flex:none;border-top:1px solid var(--border);background:var(--chrome);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 12px;font-size:12px;color:var(--text2);
+}
+.statusbar .grp{display:flex;align-items:center;gap:14px}
+.zbtn{width:20px;height:20px;border:none;background:transparent;color:var(--text2);border-radius:4px;cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center}
+.zbtn:hover{background:var(--hover);color:var(--text)}
+/* ---------- 导出菜单 / Toast ---------- */
+.menu{
+  position:absolute;top:56px;right:118px;z-index:60;display:none;
+  background:var(--win-bg);border:1px solid var(--border);border-radius:10px;
+  box-shadow:0 12px 36px rgba(0,0,0,.2);padding:6px;min-width:200px;
+}
+.menu.open{display:block}
+.mi{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:7px;font-size:13px;cursor:pointer;color:var(--text)}
+.mi:hover{background:var(--hover)}
+.mi svg{width:15px;height:15px;color:var(--text2)}
+.menu .sep{height:1px;background:var(--border2);margin:5px 8px}
+.toast{
+  position:fixed;bottom:34px;left:50%;transform:translateX(-50%) translateY(12px);
+  background:rgba(28,28,30,.94);color:#fff;padding:9px 18px;border-radius:9px;
+  font-size:13px;opacity:0;transition:.25s;pointer-events:none;z-index:99;
+  box-shadow:0 8px 28px rgba(0,0,0,.3);
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:rgba(120,120,128,.35);border-radius:5px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(120,120,128,.6);border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div class="window">
+  <!-- ===== 顶部工具栏 ===== -->
+  <header class="toolbar">
+    <div class="traffic"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span></div>
+    <button class="tbtn" id="btnSide" title="切换文件侧栏">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9.5" y1="4" x2="9.5" y2="20"/></svg>
+    </button>
+    <div class="ttitle"><span id="docTitle">KV Cache 调研笔记.md</span><span class="badge">UI 设计稿</span></div>
+    <div class="spacer"></div>
+    <div class="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+      <input id="q" placeholder="搜索文件 / 全文 (⇧⌘F)">
+    </div>
+    <div class="vdiv"></div>
+    <div id="pdfTools">
+      <button class="tbtn gtool on" title="高亮">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l1.2-4.2L16 5l3 3L8.2 18.8 4 20z"/><path d="M13.5 7.5l3 3"/></svg>
+      </button>
+      <button class="tbtn gtool" title="下划线">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 4v6a6 6 0 0 0 12 0V4"/><line x1="5" y1="20" x2="19" y2="20"/></svg>
+      </button>
+      <button class="tbtn gtool" title="删除线 / 波浪线">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="12" x2="20" y2="12"/><path d="M8 6.5c1-2 7-2 8 0M8 17.5c1 2 7 2 8 0"/></svg>
+      </button>
+      <button class="tbtn gtool" title="便签批注">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M5 4h14v11l-4 4H5z"/><path d="M15 19v-4h4"/></svg>
+      </button>
+      <button class="tbtn gtool" title="文本框">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 7V5h14v2M12 5v15m-3 0h6"/></svg>
+      </button>
+      <button class="tbtn gtool" title="手绘">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 20.5c2 0 3-1 3-3L17 7a2.1 2.1 0 0 0-3-3L3.5 14.5c0 2-.5 3-.5 4s.5 2 .5 2z"/></svg>
+      </button>
+      <button class="tbtn gtool" title="形状">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="6" width="16" height="12" rx="1.5"/></svg>
+      </button>
+      <div class="vdiv"></div>
+      <span class="cdot on" style="background:#ffd43b" title="黄"></span>
+      <span class="cdot" style="background:#94d82d" title="绿"></span>
+      <span class="cdot" style="background:#74c0fc" title="蓝"></span>
+      <span class="cdot" style="background:#ff8787" title="红"></span>
+    </div>
+    <div class="vdiv"></div>
+    <button class="tbtn" id="btnSplit" title="分栏对照（PDF + 笔记）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+    </button>
+    <button class="tbtn" id="btnExport" title="导出">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14V4m0 0L8 8m4-4l4 4"/><path d="M4 15v3a2.5 2.5 0 0 0 2.5 2.5h11A2.5 2.5 0 0 0 20 18v-3"/></svg>
+    </button>
+    <button class="tbtn" id="btnTheme" title="明暗主题">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M20.5 13.5A8.5 8.5 0 1 1 10.5 3.5a7 7 0 0 0 10 10z"/></svg>
+    </button>
+    <button class="tbtn" id="btnRight" title="切换右侧面板">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="14.5" y1="4" x2="14.5" y2="20"/></svg>
+    </button>
+  </header>
+  <!-- 导出下拉菜单 -->
+  <div class="menu" id="exmenu">
+    <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>导出为 PDF</div>
+    <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6l-5 6 5 6M16 6l5 6-5 6"/></svg>导出为 HTML</div>
+    <div class="sep"></div>
+    <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20l1.2-4.2L16 5l3 3L8.2 18.8 4 20z"/></svg>导出全部标注为 Markdown</div>
+  </div>
+
+  <!-- ===== 三栏主体 ===== -->
+  <div class="main">
+    <!-- 左侧文件树 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sec">
+        <div class="sec-t">工作区 · 论文阅读</div>
+        <div id="tree">
+          <div class="tnode">
+            <div class="titem folder" data-name="papers">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+              <span class="tname">papers</span>
+            </div>
+            <div class="kids">
+              <div class="titem" data-type="pdf" data-name="vllm.pdf">
+                <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="pdf">P</i></span><span class="tname">vllm.pdf</span>
+              </div>
+              <div class="titem" data-type="pdf" data-name="lmcache.pdf">
+                <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="pdf">P</i></span><span class="tname">lmcache.pdf</span>
+              </div>
+              <div class="titem" data-type="pdf" data-name="mooncake.pdf">
+                <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="pdf">P</i></span><span class="tname">mooncake.pdf</span>
+              </div>
+              <div class="titem" data-type="pdf" data-name="attention-is-all-you-need.pdf">
+                <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="pdf">P</i></span><span class="tname">attention-is-all-you-need.pdf</span>
+              </div>
+            </div>
+          </div>
+          <div class="tnode">
+            <div class="titem folder" data-name="notes">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+              <span class="tname">notes</span>
+            </div>
+            <div class="kids">
+              <div class="titem sel" data-type="md" data-name="KV Cache 调研笔记.md">
+                <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="md">M</i></span><span class="tname">KV Cache 调研笔记.md</span>
+              </div>
+              <div class="titem" data-type="md" data-name="vLLM 精读.md">
+                <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="md">M</i></span><span class="tname">vLLM 精读.md</span>
+              </div>
+              <div class="titem" data-type="md" data-name="组会汇报.md">
+                <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="md">M</i></span><span class="tname">组会汇报.md</span>
+              </div>
+            </div>
+          </div>
+          <div class="tnode">
+            <div class="titem folder" data-name="assets">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+              <span class="tname">assets</span>
+            </div>
+            <div class="kids">
+              <div class="titem" data-type="img" data-name="paged-attention.png">
+                <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 15.5l-5-5-9.5 9.5"/></svg><i class="img">I</i></span><span class="tname">paged-attention.png</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="sec-t">收藏</div>
+        <div class="titem" data-type="md" data-name="KV Cache 调研笔记.md">
+          <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="md">M</i></span><span class="tname">KV Cache 调研笔记.md</span>
+        </div>
+        <div class="titem" data-type="pdf" data-name="vllm.pdf">
+          <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="pdf">P</i></span><span class="tname">vllm.pdf</span>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="sec-t">最近打开</div>
+        <div class="titem" data-type="pdf" data-name="mooncake.pdf">
+          <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="pdf">P</i></span><span class="tname">mooncake.pdf</span>
+        </div>
+        <div class="titem" data-type="md" data-name="vLLM 精读.md">
+          <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="md">M</i></span><span class="tname">vLLM 精读.md</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 中间：标签页 + 内容 -->
+    <section class="content">
+      <div class="tabbar">
+        <div class="tab" data-doc="pdf">
+          <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="pdf">P</i></span>
+          <span class="tname">vllm.pdf</span>
+          <span class="tx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+        </div>
+        <div class="tab on" data-doc="md">
+          <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><i class="md">M</i></span>
+          <span class="tname">KV Cache 调研笔记.md</span>
+          <span class="tx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+        </div>
+        <button class="tabadd" title="新标签页"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+
+      <div class="panes" id="panes">
+        <!-- Markdown 编辑视图 -->
+        <div class="pane pane-md on" data-doc="md">
+          <div class="mdwrap">
+            <h1>KV Cache 调研笔记</h1>
+            <div class="meta">更新于 2026-07-15 · 标签：#LLM推理 #KVCache #系统优化 · 关联文献：vllm.pdf、lmcache.pdf、mooncake.pdf</div>
+
+            <h2 id="h1">1. 背景与问题</h2>
+            <p>自回归解码时，每步都要对历史所有 token 的 <code>K/V</code> 做注意力，因此把 <strong>KV Cache</strong> 驻留显存是避免重复计算的关键。但 KV Cache 的显存占用随 <strong>batch size × 序列长度</strong> 线性膨胀，很快成为吞吐瓶颈。</p>
+            <div class="raw"><span class="etag">编辑中 · 当前段显示源码</span>**PagedAttention** 借鉴操作系统的 `虚拟内存 + 分页` 思想：把 KV Cache 切成固定大小的 block，再用 block table 做逻辑块 → 物理块的映射，从根上消除显存碎片。<span class="caret"></span></div>
+
+            <h2 id="h2">2. vLLM：PagedAttention</h2>
+            <ul>
+              <li>逻辑块连续、物理块离散，按需分配，显存浪费压到 <strong>&lt; 4%</strong></li>
+              <li>共享前缀（system prompt / 并行采样）映射同一物理块，引用计数 + Copy-on-Write</li>
+              <li>配套连续批处理（continuous batching），吞吐相比 HF 提升一个数量级</li>
+            </ul>
+            <div class="math">Attention(q, K, V) = softmax( q·K<sup>T</sup> / √d ) · V，按 block 分块计算</div>
+            <div class="codeblock">
+              <div class="cb-h"><span>Python · 推理示例</span><span>复制</span></div>
+              <pre><span class="tok-k">from</span> vllm <span class="tok-k">import</span> LLM, SamplingParams
+
+llm = <span class="tok-f">LLM</span>(model=<span class="tok-s">"Qwen/Qwen2.5-7B"</span>, gpu_memory_utilization=<span class="tok-n">0.9</span>)
+out = llm.<span class="tok-f">generate</span>(prompts, SamplingParams(max_tokens=<span class="tok-n">512</span>))  <span class="tok-c"># block 自动分页管理</span></pre>
+            </div>
+
+            <h2 id="h3">3. 卸载与预取：LMCache / Mooncake</h2>
+            <table>
+              <tr><th>系统</th><th>卸载目标</th><th>预取策略</th><th>压缩</th><th>备注</th></tr>
+              <tr><td>vLLM</td><td>—（原生驻留 GPU）</td><td>—</td><td>—</td><td>PagedAttention 基座</td></tr>
+              <tr><td>LMCache</td><td>CPU / Disk</td><td>层间流水预取</td><td>可选</td><td>HybridBackend 混合后端</td></tr>
+              <tr><td>Mooncake</td><td>CPU / SSD / 远端</td><td>以存换算，前缀复用</td><td>—</td><td>KVCache 中心化池化</td></tr>
+              <tr><td>CacheGen</td><td>网络传输</td><td>流式分层解码</td><td>Δ 编码 + 量化</td><td>面向跨节点传输</td></tr>
+            </table>
+
+            <h2 id="h4">4. 待办</h2>
+            <ul class="task">
+              <li class="done"><input type="checkbox" checked>精读 vllm.pdf 第 4 节 PagedAttention</li>
+              <li><input type="checkbox">在服务器上复现 LMCache HybridBackend 卸载实验</li>
+              <li><input type="checkbox">整理 Mooncake 存储后端配置笔记</li>
+              <li><input type="checkbox">把三篇对比写成组会汇报（见 组会汇报.md）</li>
+            </ul>
+            <blockquote>
+              “PagedAttention divides the request's KV cache into blocks ... near-zero waste (less than 4%).”
+              —— 摘录自 <a>vllm.pdf 第 3 页</a>，点击可跳转原文 ↗
+            </blockquote>
+          </div>
+        </div>
+
+        <!-- PDF 阅读视图 -->
+        <div class="pane pane-pdf" data-doc="pdf">
+          <div class="pdfscroll">
+            <div class="paper">
+              <h1>vLLM: Efficient Memory Management for Large Language Model Serving with PagedAttention</h1>
+              <div class="authors">Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu,<br>Joseph E. Gonzalez, Hao Zhang, Ion Stoica — UC Berkeley</div>
+              <div class="conf">SOSP '23 · 12 pages · 本页 3 / 12</div>
+
+              <h3>4. PagedAttention</h3>
+              <div class="notemark" style="top:343px"><span class="tip"><b>便签 · p.3</b><br>核心：逻辑块 → 物理块映射，完全类比 OS 页表。写笔记时重点对比 §4.2。</span></div>
+              <p>Inspired by the virtual memory and paging techniques in operating systems, we propose PagedAttention, an attention algorithm that allows storing continuous keys and values in non-contiguous memory space. Specifically, <span class="hl-y" id="a1">PagedAttention divides the request's KV cache into blocks, each of which can contain the attention keys and values of a fixed number of tokens</span>. In PagedAttention, <span class="ul-r" id="a2">the blocks for the KV cache do not need to be contiguous in physical memory</span>, which allows us to manage the KV cache in a more flexible way as in OS's virtual memory: one can think of blocks as pages, tokens as bytes, and requests as processes.</p>
+              <p>This design eliminates most memory waste: the internal fragmentation only happens at the last block of a request. As a result, <span class="hl-g" id="a3">the memory waste is limited to under 4%, turning into near-zero waste in KV cache memory</span>. This empowers the serving system to batch more sequences together, increase GPU utilization, and thereby significantly improve the throughput, as we show in the evaluation results.</p>
+              <div class="fig">
+                <div class="box">插图占位 · Block Table 逻辑块 → 物理块映射示意</div>
+                <div class="cap">Figure 7. PagedAttention block table translation and memory layout.</div>
+              </div>
+              <p>Furthermore, the block-level sharing enables efficient memory sharing for complex decoding scenarios, e.g., parallel sampling and beam search, where <span class="wavy">multiple output sequences are generated from the same prompt</span> and can share the prompt's KV blocks via a copy-on-write mechanism.</p>
+              <div class="pageno">— 3 —</div>
+            </div>
+
+            <div class="paper" style="min-height:300px">
+              <h3>4.2 KV Block Manager</h3>
+              <p style="color:#999">（下一页预览：连续滚动模式下接续显示……）</p>
+              <div class="pageno">— 4 —</div>
+            </div>
+          </div>
+        </div>
+        <div class="empty">没有打开的文件 — 从左侧文件树选择一个文档开始</div>
+      </div>
+    </section>
+
+    <!-- 右侧面板 -->
+    <aside class="rightpanel" id="rightpanel">
+      <!-- Markdown：大纲 -->
+      <div id="rp-md" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+        <div class="rp-h"><div class="seg"><button class="on">大纲</button><button id="seg-bl">引用</button></div></div>
+        <div class="rp-b" id="plist-outline">
+          <div class="rp-title">文档大纲</div>
+          <div class="oli h1">KV Cache 调研笔记</div>
+          <div class="oli h2" data-t="h1">1. 背景与问题</div>
+          <div class="oli h2" data-t="h2">2. vLLM：PagedAttention</div>
+          <div class="oli h2" data-t="h3">3. 卸载与预取：LMCache / Mooncake</div>
+          <div class="oli h2" data-t="h4">4. 待办</div>
+        </div>
+        <div class="rp-b" id="plist-backlink" style="display:none">
+          <div class="rp-title">反向链接 · 本文被引用 3 次</div>
+          <div class="backlink"><b>vllm.pdf</b> 第 3 页高亮<br>“PagedAttention divides the KV cache into blocks...” → 已同步到本文第 2 节</div>
+          <div class="backlink"><b>组会汇报.md</b><br>“详见 [[KV Cache 调研笔记]] 第 3 节对比表”</div>
+          <div class="backlink"><b>mooncake.pdf</b> 便签<br>“存储后端细节见调研笔记 §3”</div>
+        </div>
+      </div>
+      <!-- PDF：缩略图 / 书签 / 标注 -->
+      <div id="rp-pdf" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+        <div class="rp-h"><div class="seg" id="pdfseg">
+          <button data-p="thumb">缩略图</button><button data-p="bmk">书签</button><button class="on" data-p="anno">标注 5</button>
+        </div></div>
+        <div class="rp-b" id="plist-thumb" style="display:none">
+          <div class="thumb"><div class="l t"></div><div class="l w9"></div><div class="l w8"></div><div class="l w6"></div><div class="pn">1</div></div>
+          <div class="thumb"><div class="l w9"></div><div class="l w8"></div><div class="l w9"></div><div class="l w6"></div><div class="pn">2</div></div>
+          <div class="thumb cur"><div class="l w8"></div><div class="l w9" style="background:#ffe066"></div><div class="l w9"></div><div class="l w6" style="background:#b2d8b4"></div><div class="pn">3</div></div>
+          <div class="thumb"><div class="l w9"></div><div class="l w8"></div><div class="l w6"></div><div class="pn">4</div></div>
+        </div>
+        <div class="rp-b" id="plist-bmk" style="display:none">
+          <div class="bmk">1. Introduction <span>p.1</span></div>
+          <div class="bmk">3. KV Cache Challenges <span>p.2</span></div>
+          <div class="bmk">4. PagedAttention <span>p.3</span></div>
+          <div class="bmk">4.2 KV Block Manager <span>p.4</span></div>
+          <div class="bmk">6. Evaluation <span>p.8</span></div>
+        </div>
+        <div class="rp-b" id="plist-anno">
+          <div class="rp-title">全部标注 · 按页码排序</div>
+          <div class="anno" data-ref="a1"><span class="dot" style="background:#ffd43b"></span><div class="tx"><div class="q">PagedAttention divides the request's KV cache into blocks, each of which can contain...</div><div class="pg">高亮 · <b>第 3 页</b></div></div></div>
+          <div class="anno" data-ref="a2"><span class="dot" style="background:#fa5252"></span><div class="tx"><div class="q">the blocks for the KV cache do not need to be contiguous in physical memory</div><div class="pg">下划线 · <b>第 3 页</b></div></div></div>
+          <div class="anno" data-ref="a3"><span class="dot" style="background:#94d82d"></span><div class="tx"><div class="q">the memory waste is limited to under 4%, turning into near-zero waste...</div><div class="pg">高亮 · <b>第 3 页</b></div></div></div>
+          <div class="anno"><span class="dot" style="background:#ffd43b;border-radius:50% 50% 50% 0"></span><div class="tx"><div class="q">核心：逻辑块 → 物理块映射，类比 OS 页表。写笔记时重点对比 §4.2。</div><div class="pg">便签 · <b>第 3 页</b></div></div></div>
+          <div class="anno"><span class="dot" style="background:#74c0fc"></span><div class="tx"><div class="q">multiple output sequences are generated from the same prompt...</div><div class="pg">波浪线 · <b>第 3 页</b></div></div></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ===== 状态栏 ===== -->
+  <footer class="statusbar">
+    <div class="grp" id="sb-md" style="display:flex">
+      <span>1,286 字 · 阅读约 5 分钟</span>
+    </div>
+    <div class="grp" id="sb-pdf" style="display:none">
+      <span>vllm.pdf · 第 3 / 12 页</span>
+    </div>
+    <div class="grp">
+      <span id="sb-mode">Markdown · 所见即所得</span>
+      <span id="sb-zoom" style="display:none;align-items:center;gap:6px">
+        <button class="zbtn" id="zout">−</button><span id="zval">100%</span><button class="zbtn" id="zin">+</button>
+      </span>
+      <span>UTF-8</span>
+    </div>
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+let active='md', split=false, z=1.0, tt;
+
+function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),1800);}
+
+/* 主题 */
+$('#btnTheme').onclick=()=>{const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark';};
+
+/* 侧栏开关 */
+$('#btnSide').onclick=()=>$('#sidebar').classList.toggle('hide');
+$('#btnRight').onclick=()=>$('#rightpanel').classList.toggle('hide');
+
+/* 标签页与文档切换 */
+function setActive(doc){
+  active=doc;
+  $$('.tab').forEach(t=>t.classList.toggle('on',t.dataset.doc===doc&&t.style.display!=='none'));
+  if(!split){$$('.pane').forEach(p=>p.classList.toggle('on',p.dataset.doc===doc));}
+  syncChrome();
+}
+function syncChrome(){
+  const pdfCtx = active==='pdf'||split;
+  $('#pdfTools').style.visibility = pdfCtx?'visible':'hidden';
+  $('#rp-md').style.display  = (active==='md'&&!split)?'flex':'none';
+  $('#rp-pdf').style.display = pdfCtx?'flex':'none';
+  $('#sb-md').style.display  = active==='md'?'flex':'none';
+  $('#sb-pdf').style.display = active==='pdf'?'flex':'none';
+  $('#sb-mode').textContent  = active==='md'?'Markdown · 所见即所得':'PDF · 阅读 / 标注';
+  $('#sb-zoom').style.display= active==='pdf'?'flex':'none';
+  const t=$('.tab.on .tname'); if(t) $('#docTitle').textContent=t.textContent;
+}
+$$('.tab').forEach(tab=>{
+  tab.addEventListener('click',e=>{ if(e.target.closest('.tx'))return; setActive(tab.dataset.doc); });
+  tab.querySelector('.tx').addEventListener('click',e=>{
+    e.stopPropagation(); tab.style.display='none';
+    if(tab.classList.contains('on')){
+      const rest=$$('.tab').find(t=>t.style.display!=='none');
+      if(rest) setActive(rest.dataset.doc);
+      else {$('#panes').classList.add('none');$('#docTitle').textContent='无打开的文件';}
+    }
+  });
+});
+
+/* 打开文件（文件树 / 收藏 / 最近） */
+function openFile(name,type){
+  if(type==='img'){toast('图片预览在演示版中未内置，正式版将支持图库视图');return;}
+  const tab=$(`.tab[data-doc="${type}"]`);
+  tab.style.display='flex';
+  tab.querySelector('.tname').textContent=name;
+  $('#panes').classList.remove('none');
+  $$('.titem').forEach(i=>i.classList.toggle('sel',i.dataset.name===name&&!i.classList.contains('folder')));
+  setActive(type);
+  toast(`已打开 ${name}`);
+}
+$$('.titem').forEach(it=>{
+  it.addEventListener('click',()=>{
+    if(it.classList.contains('folder')){it.parentElement.classList.toggle('closed');return;}
+    openFile(it.dataset.name,it.dataset.type);
+  });
+});
+
+/* 分栏对照 */
+$('#btnSplit').onclick=e=>{
+  split=!split;
+  $('#panes').classList.toggle('split',split);
+  e.currentTarget.classList.toggle('on',split);
+  if(split){$$('.pane').forEach(p=>p.classList.add('on'));toast('分栏对照：左 PDF · 右笔记');}
+  else setActive(active);
+  syncChrome();
+};
+
+/* 导出菜单 */
+$('#btnExport').addEventListener('click',e=>{e.stopPropagation();$('#exmenu').classList.toggle('open');});
+document.addEventListener('click',()=>$('#exmenu').classList.remove('open'));
+$$('#exmenu .mi').forEach(m=>m.addEventListener('click',()=>{toast(`演示：${m.textContent.trim()} 完成`);}));
+
+/* 标注工具与颜色 */
+$$('#pdfTools .gtool').forEach(b=>b.onclick=()=>{
+  $$('#pdfTools .gtool').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+  toast(`已选择工具：${b.title}`);
+});
+$$('#pdfTools .cdot').forEach(c=>c.onclick=()=>{
+  $$('#pdfTools .cdot').forEach(x=>x.classList.remove('on'));c.classList.add('on');
+});
+
+/* PDF 缩放 */
+function setZ(v){z=Math.min(1.6,Math.max(0.6,Math.round(v*10)/10));
+  $$('.paper').forEach(p=>p.style.zoom=z);
+  $('#zval').textContent=Math.round(z*100)+'%';}
+$('#zin').onclick=()=>setZ(z+0.1);
+$('#zout').onclick=()=>setZ(z-0.1);
+
+/* 大纲跳转 */
+$$('#plist-outline .oli').forEach(o=>o.onclick=()=>{
+  const h=document.getElementById(o.dataset.t);
+  if(h)h.scrollIntoView({behavior:'smooth',block:'start'});
+});
+
+/* 右侧分段切换 */
+$('#seg-bl').onclick=e=>{
+  $$('#rp-md .seg button').forEach(b=>b.classList.remove('on'));e.target.classList.add('on');
+  $('#plist-outline').style.display='none';$('#plist-backlink').style.display='block';
+};
+$$('#rp-md .seg button').forEach(b=>{
+  if(b.textContent==='大纲')b.onclick=()=>{
+    $$('#rp-md .seg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+    $('#plist-backlink').style.display='none';$('#plist-outline').style.display='block';
+  };
+});
+$$('#pdfseg button').forEach(b=>b.onclick=()=>{
+  $$('#pdfseg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+  ['thumb','bmk','anno'].forEach(k=>$('#plist-'+k).style.display=b.dataset.p===k?'block':'none');
+});
+
+/* 标注列表 → 原文定位 */
+$$('.anno').forEach(a=>a.onclick=()=>{
+  const id=a.dataset.ref; if(!id)return;
+  const el=document.getElementById(id); if(!el)return;
+  el.scrollIntoView({behavior:'smooth',block:'center'});
+  el.classList.add('flash');setTimeout(()=>el.classList.remove('flash'),1300);
+});
+
+/* 搜索过滤文件树 */
+$('#q').addEventListener('input',e=>{
+  const q=e.target.value.trim().toLowerCase();
+  $$('#tree .titem[data-type]').forEach(it=>{
+    it.style.display=(!q||it.dataset.name.toLowerCase().includes(q))?'flex':'none';
+  });
+  $$('#tree .tnode').forEach(nd=>{
+    const items=[...nd.querySelectorAll('.kids .titem')];
+    const any=items.some(i=>i.style.display!=='none');
+    nd.querySelector(':scope>.titem').style.display=(any||!q)?'flex':'none';
+    if(q&&any)nd.classList.remove('closed');
+  });
+});
+
+syncChrome();
+</script>
+</body>
+</html>
