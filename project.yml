@@ -40,6 +40,9 @@ targets:
             echo "Web 内核未构建，执行 npm ci && npm run build"
             cd "${WEB_DIR}" && npm ci && npm run build
           fi
+        # 声明输出：内核已构建时 Xcode 跳过此脚本（消除 every build 警告）
+        outputFiles:
+          - "$(SRCROOT)/MarkPDF/Resources/Web/dist/editor.js"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.whyluna.markpdf

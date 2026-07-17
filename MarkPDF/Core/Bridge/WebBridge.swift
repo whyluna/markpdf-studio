@@ -82,7 +82,9 @@ final class WebBridge: NSObject {
       let data = try? JSONSerialization.data(withJSONObject: envelope),
       let json = String(data: data, encoding: .utf8)
     else {
-      Logger.editor.error("\(BridgeError.invalidBody.localizedDescription): \(envelope["type"] ?? "?")")
+      // os_log 插值需要具体类型；Any 会让类型检查器报不出诊断（compiler bug 面）
+      let typeName = envelope["type"] as? String ?? "?"
+      Logger.editor.error("\(BridgeError.invalidBody.localizedDescription): \(typeName)")
       return
     }
     DispatchQueue.main.async { [weak self] in

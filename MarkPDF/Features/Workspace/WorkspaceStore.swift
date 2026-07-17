@@ -39,10 +39,11 @@ final class WorkspaceStore: ObservableObject {
     Logger.workspace.info("打开工作区: \(url.path, privacy: .public)")
     scanTask = Task.detached(priority: .userInitiated) { [weak self] in
       let tree = Self.scan(url: url, depth: 0)
-      guard !Task.isCancelled else { return }
+      // 转强引用（let）：消除“并发代码捕获 var self”的 Swift 6 预警
+      guard !Task.isCancelled, let self else { return }
       await MainActor.run {
-        self?.root = tree
-        self?.isLoading = false
+        self.root = tree
+        self.isLoading = false
       }
     }
   }
