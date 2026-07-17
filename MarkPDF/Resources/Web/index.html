@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MarkPDF 编辑器内核</title>
+<style>
+:root{
+  --win-bg:#ffffff; --text:#1d1d1f; --text2:#6e6e73; --text3:#aeaeb2;
+  --border:#e2e2e6; --sel:rgba(10,132,255,.15); --accent:#0a84ff; --code-bg:#f6f8fa;
+  --tok-k:#af3ad4; --tok-s:#c9352b; --tok-c:#8e8e93; --tok-f:#0a84ff; --tok-n:#b05c00;
+  --editor-font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","PingFang SC",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+[data-theme="dark"]{
+  --win-bg:#1e1e21; --text:#f5f5f7; --text2:#a1a1a6; --text3:#6c6c70;
+  --border:#3c3c41; --sel:rgba(10,132,255,.35); --accent:#0a84ff; --code-bg:#2a2a30;
+  --tok-k:#e08cff; --tok-s:#ff9a8a; --tok-c:#8e8e93; --tok-f:#6ab8ff; --tok-n:#ffbe5c;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--win-bg);color:var(--text);font-family:var(--editor-font)}
+
+/* ---------- 开发调试工具栏（App 内通过 ?app=1 隐藏） ---------- */
+#devbar{
+  height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 14px;
+  border-bottom:1px solid var(--border);font-size:13px;color:var(--text2);
+  background:var(--code-bg);
+}
+#devbar .label{font-weight:600;color:var(--text);margin-right:4px}
+#devbar button{
+  border:1px solid var(--border);background:var(--win-bg);color:var(--text);
+  border-radius:6px;padding:4px 12px;font-size:12.5px;cursor:pointer;font-family:inherit;
+}
+#devbar button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+#devbar .sep{width:1px;height:18px;background:var(--border);margin:0 4px}
+#devbar .hint{margin-left:auto;font-size:11.5px;color:var(--text3)}
+body.app #devbar{display:none}
+body{display:flex;flex-direction:column}
+#editor{flex:1;overflow:hidden}
+
+/* ---------- 所见即所得装饰样式 ---------- */
+.cm-h1{font-size:27px;font-weight:700;border-bottom:1px solid var(--border);padding-bottom:8px;margin:4px 0}
+.cm-h2{font-size:20px;font-weight:650;margin:18px 0 2px}
+.cm-h3{font-size:17px;font-weight:600;margin:12px 0 2px}
+.cm-h4,.cm-h5,.cm-h6{font-size:15.5px;font-weight:600;margin:8px 0 2px}
+.cm-strong{font-weight:650}
+.cm-em{font-style:italic}
+.cm-strike{text-decoration:line-through;color:var(--text2)}
+.cm-inline-code{
+  font-family:var(--mono);font-size:.86em;background:var(--code-bg);
+  border-radius:5px;padding:1px 5px;color:#c7254e;
+}
+[data-theme="dark"] .cm-inline-code{color:#ff7a9e}
+.cm-link{color:var(--accent);border-bottom:1px dashed var(--accent)}
+.cm-image{color:var(--accent)}
+.cm-quote-line{
+  border-left:3px solid var(--accent);background:var(--code-bg);
+  color:var(--text2);padding-left:14px;
+}
+.cm-codeblock-line{font-family:var(--mono);font-size:13px;line-height:1.65;background:var(--code-bg)}
+.cm-fence-badge{
+  display:block;text-align:right;font-family:var(--mono);font-size:11px;
+  color:var(--text3);background:var(--code-bg);padding:4px 10px 2px;
+}
+.cm-fence-end{display:block;height:3px;background:var(--code-bg)}
+.cm-task-checkbox{
+  width:15px;height:15px;margin-right:7px;accent-color:var(--accent);
+  vertical-align:-2px;cursor:pointer;
+}
+.cm-hr{display:block;width:100%;border-top:1px solid var(--border);height:0;margin-top:4px}
+.cm-table-line{font-family:var(--mono);font-size:13.5px}
+</style>
+</head>
+<body>
+<div id="devbar">
+  <span class="label">内核调试台</span>
+  <button data-mode="wysiwyg" class="on">所见即所得</button>
+  <button data-mode="source">源码</button>
+  <button data-mode="reading">阅读</button>
+  <div class="sep"></div>
+  <button id="themeBtn">切换明暗</button>
+  <div class="sep"></div>
+  <button id="getBtn">getContent → console</button>
+  <span class="hint">此工具栏仅开发环境可见（?app=1 隐藏）</span>
+</div>
+<div id="editor"></div>
+<script src="dist/editor.js"></script>
+<script>
+// 开发调试台：通过 bridge 协议驱动内核，与 native 调用路径完全一致
+(function () {
+  const isApp = new URLSearchParams(location.search).get("app") === "1";
+  if (isApp) document.body.classList.add("app");
+
+  const modeBtns = [...document.querySelectorAll("#devbar [data-mode]")];
+  modeBtns.forEach((b) =>
+    b.addEventListener("click", () => {
+      modeBtns.forEach((x) => x.classList.toggle("on", x === b));
+      window.bridge.receive({ type: "editor.setMode", payload: { mode: b.dataset.mode } });
+    })
+  );
+
+  document.getElementById("themeBtn").addEventListener("click", () => {
+    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    window.bridge.receive({ type: "editor.setTheme", payload: { theme: next } });
+  });
+
+  document.getElementById("getBtn").addEventListener("click", () => {
+    window.bridge.request
+      ? window.bridge
+          .request("editor.getContent", {})
+          .then((p) => console.log("[getContent mock-ack]", p))
+      : null;
+    // 直接走 receive + id，观察 respond 回包
+    window.bridge.receive({ id: "dev-1", type: "editor.getContent", payload: {} });
+  });
+})();
+</script>
+</body>
+</html>

@@ -13,5 +13,9 @@ MarkPDF.xcodeproj/
 .swiftpm/
 .build/
 
+# Node（Web 编辑器内核）
+node_modules/
+MarkPDF/Resources/Web/dist/
+
 # macOS
 .DS_Store

@@ -25,6 +25,22 @@ xcodegen generate
 open MarkPDF.xcodeproj   # Cmd+R 运行
 ```
 
+## Web 编辑器内核（MarkPDF/Resources/Web）
+
+所见即所得 Markdown 编辑器（CodeMirror 6 实现），可脱离 App 在浏览器中独立调试：
+
+```bash
+cd MarkPDF/Resources/Web
+npm ci          # 首次安装（package-lock 锁定版本）
+npm run build   # 产出 dist/editor.js（WKWebView 加载）
+npm run serve   # 打开 http://localhost:8000 调试页
+```
+
+- `index.html`：WKWebView 加载入口 + 浏览器调试台（URL 加 `?app=1` 隐藏调试栏）
+- `src/wysiwyg.js`：所见即所得装饰层（FR-2.1）
+- `src/bridge.js`：Swift ↔ Web 类型化消息协议（开发规范 §3.4）
+- `dist/` 为构建产物，不入库
+
 ## CI
 
 每次 push 到 `main`（非文档改动）自动在 GitHub Actions macOS runner 上执行 `xcodebuild build test`，文档/原型改动不触发构建以节省额度。
