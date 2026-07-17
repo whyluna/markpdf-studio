@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 应用根视图：三栏布局（文件树 / 内容区 / 上下文面板）。
@@ -20,6 +21,21 @@ struct ContentView: View {
       middleContent
         .frame(minWidth: 480)
         .toolbar {
+          ToolbarItem(placement: .navigation) {
+            if showsEditor, let fileURL = editorStore.currentFileURL {
+              HStack(spacing: 6) {
+                Text(fileURL.lastPathComponent)
+                  .font(.headline)
+                  .foregroundStyle(.secondary)
+                if editorStore.hasUnsavedChanges {
+                  Circle()
+                    .fill(Color.orange)
+                    .frame(width: 6, height: 6)
+                    .help("有未落盘的改动")
+                }
+              }
+            }
+          }
           ToolbarItem(placement: .principal) {
             if showsEditor {
               Picker("编辑模式", selection: $editorStore.mode) {
@@ -40,6 +56,10 @@ struct ContentView: View {
     .onChange(of: workspaceStore.selection) { node in
       guard let node, node.kind == .markdown else { return }
       editorStore.loadFile(node.id)
+    }
+    // 退出前兜底落盘（FR-2.7）
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+      editorStore.flushPendingSave()
     }
   }
 
@@ -64,7 +84,7 @@ struct ContentView: View {
     }
   }
 
-  /// 中间栏是否为编辑器（决定工具栏是否显示模式切换）
+  /// 中间栏是否为编辑器（决定工具栏是否显示文件名与模式切换）
   private var showsEditor: Bool {
     guard let node = workspaceStore.selection else { return true }
     return node.kind != .pdf && node.kind != .image

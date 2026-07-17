@@ -20,6 +20,12 @@ struct MarkPDFApp: App {
         }
         .keyboardShortcut("o")
       }
+      CommandGroup(replacing: .saveItem) {
+        Button("保存") {
+          editorStore.flushPendingSave()
+        }
+        .keyboardShortcut("s")
+      }
     }
   }
 }

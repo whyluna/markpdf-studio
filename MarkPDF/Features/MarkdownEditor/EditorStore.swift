@@ -10,13 +10,26 @@ final class EditorStore: ObservableObject {
   @Published var mode: MarkdownEditorView.EditorMode = .wysiwyg
   /// 当前打开的磁盘文件（nil = 欢迎页草稿）
   @Published private(set) var currentFileURL: URL?
+  /// 有尚未落盘的改动（工具栏橙点指示；自动保存通常 0.5s 内清除）
+  @Published private(set) var hasUnsavedChanges = false
 
-  /// 打开磁盘上的 Markdown 文件（FR-1.1）
+  /// 最近一次与磁盘一致的文本（识别 setContent 回显，避免无意义写盘）
+  private var lastPersistedText: String = EditorStore.welcomeDocument
+  /// 防抖中的保存任务
+  private var pendingSave: DispatchWorkItem?
+
+  /// 自动保存防抖间隔（FR-2.7：停止输入 0.5s 后落盘）
+  private static let autosaveDelay: TimeInterval = 0.5
+
+  /// 打开磁盘上的 Markdown 文件（FR-1.1）；切换前先把旧文件的挂起改动写盘
   func loadFile(_ url: URL) {
     guard url != currentFileURL else { return }
+    flushPendingSave()
     do {
       let content = try String(contentsOf: url, encoding: .utf8)
       currentFileURL = url
+      lastPersistedText = content
+      hasUnsavedChanges = false
       text = content
       Logger.editor.info("已打开文件: \(url.lastPathComponent, privacy: .public)")
     } catch {
@@ -24,15 +37,62 @@ final class EditorStore: ObservableObject {
     }
   }
 
-  /// 内核内容变更入口：自动保存（FR-2.7）随下一提交接入
+  /// 内核内容变更入口：更新文本并按需调度自动保存（FR-2.7）
   func contentDidChange(_ newText: String) {
     text = newText
+    // setContent 回显（与磁盘一致）不算改动
+    guard newText != lastPersistedText else {
+      pendingSave?.cancel()
+      pendingSave = nil
+      hasUnsavedChanges = false
+      return
+    }
+    hasUnsavedChanges = true
+    scheduleAutosave()
+  }
+
+  /// 立即写入挂起的改动（切换文件 / ⌘S / 应用退出前调用）
+  func flushPendingSave() {
+    pendingSave?.cancel()
+    pendingSave = nil
+    saveNowIfNeeded()
+  }
+
+  // MARK: - 自动保存（FR-2.7）
+
+  private func scheduleAutosave() {
+    pendingSave?.cancel()
+    let item = DispatchWorkItem { [weak self] in
+      self?.pendingSave = nil
+      self?.saveNowIfNeeded()
+    }
+    pendingSave = item
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.autosaveDelay, execute: item)
+  }
+
+  /// 原子写盘：先写临时文件再替换，避免异常中断产生半截文件
+  private func saveNowIfNeeded() {
+    guard hasUnsavedChanges, let url = currentFileURL else { return }
+    do {
+      try text.write(to: url, atomically: true, encoding: .utf8)
+      lastPersistedText = text
+      hasUnsavedChanges = false
+      Logger.editor.debug("自动保存: \(url.lastPathComponent, privacy: .public)")
+    } catch {
+      Logger.editor.error("自动保存失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+    }
+  }
+
+  deinit {
+    pendingSave?.cancel()
   }
 
   static let welcomeDocument = """
     # 欢迎使用 MarkPDF Studio
 
     按 **⌘O** 打开一个文件夹作为工作区；在左侧文件树中点击 `.md` 文件即可编辑，PDF 与图片可直接预览。
+
+    编辑会**自动保存**：停止输入 0.5 秒后写回磁盘（原子写入）；文件名旁的橙点表示有未落盘改动。
 
     这是运行在 **WKWebView** 里的 CodeMirror 6 内核。光标进入某一行，它会显示源码；移开即渲染。
 
@@ -48,7 +108,7 @@ final class EditorStore: ObservableObject {
 
     - [x] 内核嵌入 App
     - [x] 文件树打开真实文档（FR-1.1）
-    - [ ] 自动保存（FR-2.7）
+    - [x] 自动保存：停止输入 0.5 秒后落盘（FR-2.7）
 
     > 明暗主题跟随系统外观自动切换。
     """
