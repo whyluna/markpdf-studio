@@ -28,6 +28,8 @@ struct MarkdownEditorView: NSViewRepresentable {
 
   /// 文档文本（绑定，供宿主读取/保存；外部改动请走 `Coordinator.loadDocument`）
   @Binding var text: String
+  /// 外部文档标识（打开的文件 URL）：变化时内核整体载入 `text`；nil 表示欢迎页草稿
+  let documentID: URL?
   let mode: EditorMode
   let theme: EditorTheme
   /// 内核内容变更回调（自动保存挂钩，FR-2.7）
@@ -35,11 +37,13 @@ struct MarkdownEditorView: NSViewRepresentable {
 
   init(
     text: Binding<String>,
+    documentID: URL? = nil,
     mode: EditorMode = .wysiwyg,
     theme: EditorTheme = .light,
     onContentChanged: ((String) -> Void)? = nil
   ) {
     _text = text
+    self.documentID = documentID
     self.mode = mode
     self.theme = theme
     self.onContentChanged = onContentChanged
@@ -58,11 +62,14 @@ struct MarkdownEditorView: NSViewRepresentable {
     let bridge = context.coordinator.bridge
     bridge.attach(to: webView)
     bridge.on("editor.ready") { [weak coordinator = context.coordinator] _, _ in
-      coordinator?.kernelDidReady()
+      // 桥接回调是非隔离闭包：跳到 MainActor 再触达 Coordinator（@MainActor）
+      Task { @MainActor in
+        coordinator?.kernelDidReady()
+      }
     }
     bridge.on("editor.contentChanged") { [weak self] payload, _ in
       guard let text = payload["text"] as? String else { return }
-      DispatchQueue.main.async {
+      Task { @MainActor in
         self?.onContentChanged?(text)
       }
     }
@@ -77,6 +84,11 @@ struct MarkdownEditorView: NSViewRepresentable {
 
   func updateNSView(_ webView: WKWebView, context: Context) {
     context.coordinator.parent = self
+    // 外部文档切换（打开/切换文件）时整体载入；text 与 documentID 同源（EditorStore 同步更新）
+    if context.coordinator.lastDocumentID != documentID {
+      context.coordinator.lastDocumentID = documentID
+      context.coordinator.loadDocument(text)
+    }
     context.coordinator.pushModeAndThemeIfNeeded()
   }
 }
@@ -92,6 +104,8 @@ extension MarkdownEditorView {
     private var isReady = false
     private var lastPushedMode: EditorMode?
     private var lastPushedTheme: EditorTheme?
+    /// 已载入内核的外部文档标识（去重，避免每次宿主刷新都重置内容）
+    var lastDocumentID: URL?
 
     init(_ parent: MarkdownEditorView) {
       self.parent = parent
@@ -101,6 +115,7 @@ extension MarkdownEditorView {
     func kernelDidReady() {
       isReady = true
       bridge.notify("editor.setContent", payload: ["text": parent.text])
+      lastDocumentID = parent.documentID
       lastPushedMode = nil
       lastPushedTheme = nil
       pushModeAndThemeIfNeeded()
