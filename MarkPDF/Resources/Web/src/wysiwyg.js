@@ -77,7 +77,7 @@ class HRWidget extends WidgetType {
   }
 }
 
-// 渲染态图片（FR-2.3）：光标不在行内时把 ![alt](src) 替换为真实图片
+// 渲染态图片（FR-2.3）：光标不在行内时把 ![alt](src) 替换为真实图片；双击进入源码编辑
 class ImageWidget extends WidgetType {
   constructor(src, alt) {
     super();
@@ -87,24 +87,35 @@ class ImageWidget extends WidgetType {
   eq(o) {
     return o.src === this.src && o.alt === this.alt;
   }
-  toDOM() {
+  toDOM(view) {
+    let el;
     if (!this.src) {
-      const span = document.createElement("span");
-      span.className = "cm-image-broken";
-      span.textContent = `🖼 ${this.alt || "图片"}（草稿暂不支持相对路径图片）`;
-      return span;
+      el = document.createElement("span");
+      el.className = "cm-image-broken";
+      el.textContent = `🖼 ${this.alt || "图片"}（草稿暂不支持相对路径图片）`;
+    } else {
+      el = document.createElement("img");
+      el.className = "cm-rendered-image";
+      el.src = this.src;
+      el.alt = this.alt;
+      el.onerror = () => {
+        const span = document.createElement("span");
+        span.className = "cm-image-broken";
+        span.textContent = `🖼 图片加载失败：${this.alt || this.src}`;
+        el.replaceWith(span);
+      };
     }
-    const img = document.createElement("img");
-    img.className = "cm-rendered-image";
-    img.src = this.src;
-    img.alt = this.alt;
-    img.onerror = () => {
-      const span = document.createElement("span");
-      span.className = "cm-image-broken";
-      span.textContent = `🖼 图片加载失败：${this.alt || this.src}`;
-      img.replaceWith(span);
-    };
-    return img;
+    // 双击 → 光标落到图片语法处，显露源码进入编辑（位置由 posAtDOM 实时解析，不怕上文编辑偏移）
+    el.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      const pos = view.posAtDOM(el);
+      view.dispatch({ selection: { anchor: pos } });
+      view.focus();
+    });
+    return el;
+  }
+  ignoreEvent() {
+    return false;
   }
 }
 
@@ -112,7 +123,7 @@ class ImageWidget extends WidgetType {
 class TableWidget extends WidgetType {
   constructor(model, source) {
     super();
-    this.model = model; // { header: [segs], rows: [[segs]], rowStarts: [pos] }
+    this.model = model; // { header: [segs], rows: [[segs]], rowOffsets: [int] }
     this.source = source; // 表格源码文本，用于 eq 去重
   }
   eq(o) {
@@ -162,11 +173,13 @@ class TableWidget extends WidgetType {
     wrap.appendChild(table);
 
     // 点击某行 → 光标落入对应源码行，表格显露源码进入编辑
+    // （行偏移 + posAtDOM 实时解析表格起点，上文编辑导致的位置偏移不会造成跳错行）
     wrap.addEventListener("mousedown", (e) => {
       e.preventDefault();
       const tr = e.target.closest("tr");
-      const idx = tr ? Number(tr.dataset.row) : this.model.rowStarts.length - 1;
-      const pos = this.model.rowStarts[Math.min(idx, this.model.rowStarts.length - 1)];
+      const idx = tr ? Number(tr.dataset.row) : this.model.rowOffsets.length - 1;
+      const base = view.posAtDOM(wrap);
+      const pos = base + this.model.rowOffsets[Math.min(idx, this.model.rowOffsets.length - 1)];
       view.dispatch({ selection: { anchor: pos } });
       view.focus();
     });
@@ -253,23 +266,26 @@ function resolveImageURL(src) {
   }
 }
 
-// 遍历 Table 节点，提取表头/数据行单元格与各行源码起始偏移；解析失败返回 null（降级源码样式）
+// 遍历 Table 节点，提取表头/数据行单元格与各行相对表格起点的偏移；解析失败返回 null（降级源码样式）
 function buildTableModel(state, tableNode) {
   const header = [];
   const rows = [];
-  const rowStarts = [];
+  const rowOffsets = [];
+  let widgetFrom = -1;
   for (let child = tableNode.firstChild; child; child = child.nextSibling) {
     if (child.name !== "TableHeader" && child.name !== "TableRow") continue;
+    const lineFrom = state.doc.lineAt(child.from).from;
+    if (widgetFrom < 0) widgetFrom = lineFrom;
     const cells = [];
     for (let cell = child.firstChild; cell; cell = cell.nextSibling) {
       if (cell.name === "TableCell") cells.push(cellSegments(state, cell));
     }
-    rowStarts.push(state.doc.lineAt(child.from).from);
+    rowOffsets.push(lineFrom - widgetFrom);
     if (child.name === "TableHeader") header.push(...cells);
     else rows.push(cells);
   }
   if (header.length === 0) return null;
-  return { header, rows, rowStarts };
+  return { header, rows, rowOffsets };
 }
 
 /* ---------- 装饰构建 ---------- */
