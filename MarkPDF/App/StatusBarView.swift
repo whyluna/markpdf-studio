@@ -5,21 +5,28 @@ import SwiftUI
 struct StatusBarView: View {
   @EnvironmentObject private var tabStore: TabStore
   @EnvironmentObject private var pdfStore: PDFReaderStore
+  @EnvironmentObject private var imageStore: ImagePreviewStore
 
-  private var isPDF: Bool {
-    tabStore.activeGroup.activeTab?.kind == .pdf
+  private var activeKind: FileNode.Kind? {
+    tabStore.activeGroup.activeTab?.kind
   }
 
   var body: some View {
     HStack(spacing: 14) {
-      if isPDF, let tab = tabStore.activeGroup.activeTab {
+      if let tab = tabStore.activeGroup.activeTab, activeKind == .pdf {
         Text("\(tab.title) · 第 \(pdfStore.currentPage) / \(pdfStore.pageCount) 页")
+      } else if let tab = tabStore.activeGroup.activeTab, activeKind == .image {
+        Text(tab.title)
       }
       Spacer()
-      if isPDF {
+      switch activeKind {
+      case .pdf:
         Text("PDF · 阅读")
-        zoomControls
-      } else {
+        zoomControls(scale: pdfStore.scale, onZoomIn: pdfStore.zoomIn, onZoomOut: pdfStore.zoomOut)
+      case .image:
+        Text("图片 · 查看")
+        zoomControls(scale: imageStore.scale, onZoomIn: imageStore.zoomIn, onZoomOut: imageStore.zoomOut)
+      default:
         Text("Markdown · \(tabStore.activeEditorStore?.mode.title ?? "所见即所得")")
       }
       Text("UTF-8")
@@ -35,16 +42,16 @@ struct StatusBarView: View {
   }
 
   /// 缩放控件（设计稿 #sb-zoom：− / 百分比 / +）
-  private var zoomControls: some View {
+  private func zoomControls(scale: CGFloat, onZoomIn: @escaping () -> Void, onZoomOut: @escaping () -> Void) -> some View {
     HStack(spacing: 6) {
-      Button(action: pdfStore.zoomOut) {
+      Button(action: onZoomOut) {
         Text("−")
           .frame(width: 20, height: 20)
           .contentShape(Rectangle())
       }
-      Text("\(Int((pdfStore.scale * 100).rounded()))%")
+      Text("\(Int((scale * 100).rounded()))%")
         .frame(minWidth: 44)
-      Button(action: pdfStore.zoomIn) {
+      Button(action: onZoomIn) {
         Text("+")
           .frame(width: 20, height: 20)
           .contentShape(Rectangle())
@@ -58,4 +65,5 @@ struct StatusBarView: View {
   StatusBarView()
     .environmentObject(TabStore())
     .environmentObject(PDFReaderStore())
+    .environmentObject(ImagePreviewStore())
 }

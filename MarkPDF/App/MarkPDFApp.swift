@@ -6,6 +6,22 @@ struct MarkPDFApp: App {
   @StateObject private var tabStore = TabStore()
   @StateObject private var pdfStore = PDFReaderStore()
   @StateObject private var pdfBookmarksStore = PDFBookmarksStore()
+  @StateObject private var imageStore = ImagePreviewStore()
+
+  /// 当前标签是否可缩放（PDF / 图片）
+  private var zoomable: Bool {
+    let kind = tabStore.activeGroup.activeTab?.kind
+    return kind == .pdf || kind == .image
+  }
+
+  /// 缩放命令路由：PDF → pdfStore，图片 → imageStore
+  private func zoomAction(_ action: (ZoomTarget) -> Void) {
+    switch tabStore.activeGroup.activeTab?.kind {
+    case .pdf: action(pdfStore)
+    case .image: action(imageStore)
+    default: break
+    }
+  }
 
   var body: some Scene {
     WindowGroup {
@@ -14,6 +30,7 @@ struct MarkPDFApp: App {
         .environmentObject(tabStore)
         .environmentObject(pdfStore)
         .environmentObject(pdfBookmarksStore)
+        .environmentObject(imageStore)
         .frame(minWidth: 1080, minHeight: 640)
     }
     .defaultSize(width: 1380, height: 900)
@@ -34,23 +51,23 @@ struct MarkPDFApp: App {
         }
         .keyboardShortcut("s")
       }
-      // PDF 缩放快捷键（FR-3.2）：⌘= 放大、⌘- 缩小、⌘0 实际大小
+      // 缩放快捷键（FR-3.2）：⌘= 放大、⌘- 缩小、⌘0 实际大小（PDF / 图片均可）
       CommandGroup(after: .toolbar) {
         Button("放大") {
-          pdfStore.zoomIn()
+          zoomAction { $0.zoomIn() }
         }
         .keyboardShortcut("=", modifiers: .command)
-        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf)
+        .disabled(!zoomable)
         Button("缩小") {
-          pdfStore.zoomOut()
+          zoomAction { $0.zoomOut() }
         }
         .keyboardShortcut("-", modifiers: .command)
-        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf)
+        .disabled(!zoomable)
         Button("实际大小") {
-          pdfStore.resetZoom()
+          zoomAction { $0.resetZoom() }
         }
         .keyboardShortcut("0", modifiers: .command)
-        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf)
+        .disabled(!zoomable)
       }
       // PDF 页内搜索（FR-3.4）：⌘F 查找栏、⌘G 下一个、⇧⌘G 上一个
       CommandGroup(after: .textEditing) {

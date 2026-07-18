@@ -1,6 +1,18 @@
 import PDFKit
 import SwiftUI
 
+/// 支持捏合缩放的 PDFView（FR-3.2）。
+/// 走响应链 `magnify(with:)` 通道：不占用手势识别器，避免与 PDFView 内部手势互斥
+/// （此前 NSMagnificationGestureRecognizer 方案时好时坏、忽而失效的根因）。
+final class ZoomablePDFView: PDFView {
+  /// 捏合事件回调（事件阶段 + 当次增量），由 Coordinator 接管
+  var onMagnify: ((_ phase: NSEvent.Phase, _ magnification: CGFloat) -> Void)?
+
+  override func magnify(with event: NSEvent) {
+    onMagnify?(event.phase, event.magnification)
+  }
+}
+
 /// PDF 阅读视图（FR-3.1/3.2）：系统 PDFKit 渲染，连续滚动；
 /// 缩放支持按钮/快捷键（Store 驱动）与触控板捏合，范围 50%–400%。
 /// 高亮 / 下划线等标注能力（FR-4.x）将在 M2 叠加在此视图之上。
@@ -9,18 +21,14 @@ struct PDFReaderView: NSViewRepresentable {
   @EnvironmentObject private var pdfStore: PDFReaderStore
 
   func makeNSView(context: Context) -> PDFView {
-    let pdfView = PDFView()
+    let pdfView = ZoomablePDFView()
     pdfView.displayMode = .singlePageContinuous
     pdfView.displayDirection = .vertical
     pdfView.autoScales = true
     pdfView.document = PDFDocument(url: url)
-
-    // 触控板捏合缩放（FR-3.2）
-    let pinch = NSMagnificationGestureRecognizer(
-      target: context.coordinator,
-      action: #selector(Coordinator.handlePinch(_:))
-    )
-    pdfView.addGestureRecognizer(pinch)
+    pdfView.onMagnify = { [weak coordinator = context.coordinator] phase, magnification in
+      coordinator?.handleMagnify(phase: phase, magnification: magnification)
+    }
 
     // 点击认领焦点：分栏双 PDF 时，缩放/搜索作用于最近点击的视图（FR-1.4）。
     // delaysPrimaryMouseButtonEvents=false：不拦截鼠标事件，否则 PDFView 收不到
@@ -75,7 +83,7 @@ struct PDFReaderView: NSViewRepresentable {
   }
 
   @MainActor
-  final class Coordinator {
+  final class Coordinator: NSObject {
     var parent: PDFReaderView
     weak var pdfView: PDFView?
     /// 捏合手势进行中（此时不回写 Store，避免逐帧触发 SwiftUI 重渲染）
@@ -86,6 +94,9 @@ struct PDFReaderView: NSViewRepresentable {
     private var pinchStartScale: CGFloat = 1
     /// 手势累计放大倍率
     private var pinchTotalMagnification: CGFloat = 1
+    /// 缩放锚点：视图中心对应的文档点（保持缩放围绕中心而非角落）
+    private var anchorPage: PDFPage?
+    private var anchorDocPoint: CGPoint?
 
     init(_ parent: PDFReaderView) {
       self.parent = parent
@@ -109,33 +120,56 @@ struct PDFReaderView: NSViewRepresentable {
       parent.pdfStore.scale = pdfView.scaleFactor
     }
 
-    @objc func handlePinch(_ recognizer: NSMagnificationGestureRecognizer) {
+    /// 捏合缩放（响应链 magnify 通道）：
+    /// 手势期间只做 GPU 图层缩放（流畅、无重排）；结束时一次性应用真实缩放并重排。
+    func handleMagnify(phase: NSEvent.Phase, magnification: CGFloat) {
       guard let pdfView else { return }
-      switch recognizer.state {
+      switch phase {
       case .began:
         isPinching = true
         pinchStartScale = pdfView.scaleFactor
         pinchTotalMagnification = 1
         pdfView.wantsLayer = true
+        // 记录缩放锚点：视图中心对应的文档点
+        anchorPage = pdfView.currentPage
+        anchorDocPoint = anchorPage.map {
+          pdfView.convert(CGPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY), to: $0)
+        }
         // 手势期间临时收起文本选区：PDFView 会围绕选区反复滚动（乱跳根因）
         savedSelection = pdfView.currentSelection
         if savedSelection != nil {
           pdfView.setCurrentSelection(nil, animate: false)
         }
       case .changed:
-        pinchTotalMagnification *= (1 + recognizer.magnification)
-        recognizer.magnification = 0
-        // 手势期间只做 GPU 图层缩放（流畅），不做昂贵的逐帧重排版；视觉比例同样夹取在 50%–400%
+        guard isPinching else { return }
+        pinchTotalMagnification *= (1 + magnification)
         let target = PDFReaderStore.clamped(pinchStartScale * pinchTotalMagnification)
         let ratio = target / pinchStartScale
-        pdfView.layer?.transform = CATransform3DMakeScale(ratio, ratio, 1)
+        // 围绕视图中心的图层变换（平移-缩放-平移），不会从角落扩张
+        let bounds = pdfView.bounds
+        var transform = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)
+        transform = CATransform3DScale(transform, ratio, ratio, 1)
+        transform = CATransform3DTranslate(transform, -bounds.midX, -bounds.midY, 0)
+        pdfView.layer?.transform = transform
       case .ended, .cancelled:
+        guard isPinching else { return }
         isPinching = false
         let target = PDFReaderStore.clamped(pinchStartScale * pinchTotalMagnification)
         // 同一 runloop 内先清图层变换再应用真实缩放，一次性重排，避免双重缩放帧
         pdfView.layer?.transform = CATransform3DIdentity
         if pdfView.autoScales { pdfView.autoScales = false }
         pdfView.scaleFactor = target
+        // 重新居中到锚点：目标点置于视图顶部 = 锚点 - 半视口（文档坐标，y 向上）
+        if let page = anchorPage, let anchor = anchorDocPoint {
+          let halfWidth = pdfView.bounds.width / 2 / target
+          let halfHeight = pdfView.bounds.height / 2 / target
+          pdfView.go(to: PDFDestination(
+            page: page,
+            at: CGPoint(x: anchor.x - halfWidth, y: anchor.y + halfHeight)
+          ))
+        }
+        anchorPage = nil
+        anchorDocPoint = nil
         if let selection = savedSelection {
           pdfView.setCurrentSelection(selection, animate: false)
           savedSelection = nil

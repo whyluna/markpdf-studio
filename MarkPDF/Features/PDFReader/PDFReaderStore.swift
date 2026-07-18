@@ -1,9 +1,17 @@
 import Foundation
 import PDFKit
 
+/// 可缩放视图状态协议（PDF / 图片缩放命令路由）
+@MainActor
+protocol ZoomTarget {
+  func zoomIn()
+  func zoomOut()
+  func resetZoom()
+}
+
 /// PDF 阅读状态（FR-3.1/3.2）：页码、缩放；Scene 级持有。
 @MainActor
-final class PDFReaderStore: ObservableObject {
+final class PDFReaderStore: ObservableObject, ZoomTarget {
   /// 当前页（1 起；0 = 无文档）
   @Published var currentPage = 0
   /// 总页数
