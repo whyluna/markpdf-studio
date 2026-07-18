@@ -15,6 +15,8 @@ final class PDFAnnotationStore: ObservableObject {
   @Published var paletteKind: AnnotationKind = .highlight
   /// 有未写回的标注改动
   @Published private(set) var hasUnsavedChanges = false
+  /// 标注结构版本号：增删改即 +1，驱动列表面板实时同步（FR-4.5）
+  @Published private(set) var revision = 0
 
   private let writer: AnnotationWriter
   private let defaults: UserDefaults
@@ -47,6 +49,7 @@ final class PDFAnnotationStore: ObservableObject {
     self.document = document
     currentFileURL = url
     hasUnsavedChanges = false
+    revision += 1
   }
 
   // MARK: - 标注变更
@@ -75,11 +78,68 @@ final class PDFAnnotationStore: ObservableObject {
     defaults.set(color.rawValue, forKey: Self.colorKey(for: kind))
   }
 
+  // MARK: - 列表快照（FR-4.5）
+
+  /// 全文档标注条目（同组标注合并；跳过 Popup/链接等非面板管理类型）
+  func annotationItems() -> [AnnotationItem] {
+    guard let document else { return [] }
+    var grouped: [String: [PDFAnnotation]] = [:]
+    var singles: [PDFAnnotation] = []
+    for pageIndex in 0..<document.pageCount {
+      guard let page = document.page(at: pageIndex) else { continue }
+      for annotation in page.annotations where AnnotationKind.of(annotation) != nil {
+        if let groupID = annotation.userName, !groupID.isEmpty {
+          grouped[groupID, default: []].append(annotation)
+        } else {
+          singles.append(annotation)
+        }
+      }
+    }
+    var items: [AnnotationItem] = []
+    for (groupID, annotations) in grouped {
+      if let item = makeItem(id: groupID, annotations: annotations) {
+        items.append(item)
+      }
+    }
+    for annotation in singles {
+      if let item = makeItem(id: "\(ObjectIdentifier(annotation))", annotations: [annotation]) {
+        items.append(item)
+      }
+    }
+    return items
+  }
+
+  private func makeItem(id: String, annotations: [PDFAnnotation]) -> AnnotationItem? {
+    guard let first = annotations.first,
+      let kind = AnnotationKind.of(first),
+      let page = first.page,
+      let document
+    else { return nil }
+    // 摘录：拼接各段覆盖文本，规整空白后截断
+    let excerpt = annotations
+      .compactMap { $0.page?.selection(for: $0.bounds)?.string }
+      .joined(separator: " ")
+      .components(separatedBy: .whitespacesAndNewlines)
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+    let name = (first.contents ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return AnnotationItem(
+      id: id,
+      annotations: annotations,
+      kind: kind,
+      color: first.color,
+      pageIndex: document.index(for: page),
+      excerpt: String(excerpt.prefix(80)),
+      name: name
+    )
+  }
+
   // MARK: - 写回调度（FR-4.6）
 
   /// 标注变更统一入口：标记脏并调度 500ms 防抖写回
   func markDirty() {
     hasUnsavedChanges = true
+    revision += 1
     debouncer.schedule { [weak self] in
       self?.writeBackNow()
     }

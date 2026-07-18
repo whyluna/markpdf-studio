@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 
 /// 标注类型（FR-4.1/4.3）
 enum AnnotationKind: String, CaseIterable, Identifiable {
@@ -65,5 +66,111 @@ enum AnnotationColor: String, CaseIterable, Identifiable {
     case .rectangle: .green
     case .arrow: .red
     }
+  }
+}
+
+extension AnnotationKind {
+  /// 从 PDF 标注子类型映射（兼容 "Highlight" 与 "/Highlight" 两种上报形态）。
+  /// 返回 nil 表示不在面板管理范围（Popup / 链接等）
+  static func of(_ annotation: PDFAnnotation) -> AnnotationKind? {
+    guard let raw = annotation.type else { return nil }
+    let name = raw.hasPrefix("/") ? String(raw.dropFirst()) : raw
+    switch name {
+    case "Highlight": return .highlight
+    case "Underline": return .underline
+    case "StrikeOut": return .strikeOut
+    case "FreeText": return .freeText
+    case "Ink": return .ink
+    case "Square": return .rectangle
+    case "Line": return .arrow
+    default: return nil
+    }
+  }
+}
+
+/// 标注列表条目（FR-4.5）：一次动作创建的同组标注合并为一项
+struct AnnotationItem: Identifiable {
+  /// 组 ID（无组单标注为对象标识）
+  let id: String
+  let annotations: [PDFAnnotation]
+  let kind: AnnotationKind
+  let color: NSColor
+  /// 0 起页码
+  let pageIndex: Int
+  /// 覆盖文本摘录（可能为空）
+  let excerpt: String
+  /// 用户命名（标注 contents；空 = 未命名）
+  let name: String
+
+  var pageLabel: Int { pageIndex + 1 }
+  /// 行主文案：改过名用名，否则用摘录
+  var displayText: String {
+    name.isEmpty ? excerpt : name
+  }
+}
+
+/// 标注列表排序（FR-4.5：按页 / 颜色 / 类型）
+enum AnnotationSort: String, CaseIterable, Identifiable {
+  case page
+  case color
+  case type
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .page: "按页码"
+    case .color: "按颜色"
+    case .type: "按类型"
+    }
+  }
+
+  func sort(_ items: [AnnotationItem]) -> [AnnotationItem] {
+    switch self {
+    case .page:
+      return items.sorted { a, b in
+        if a.pageIndex != b.pageIndex { return a.pageIndex < b.pageIndex }
+        // 页内按视觉顺序：页坐标 y 大者在上，再左到右
+        let ay = a.annotations.first?.bounds.maxY ?? 0
+        let by = b.annotations.first?.bounds.maxY ?? 0
+        if ay != by { return ay > by }
+        return (a.annotations.first?.bounds.minX ?? 0) < (b.annotations.first?.bounds.minX ?? 0)
+      }
+    case .color:
+      return items.sorted { a, b in
+        let ao = Self.colorOrder(a.color)
+        let bo = Self.colorOrder(b.color)
+        return ao != bo ? ao < bo : a.pageIndex < b.pageIndex
+      }
+    case .type:
+      return items.sorted { a, b in
+        let at = Self.typeOrder(a.kind)
+        let bt = Self.typeOrder(b.kind)
+        return at != bt ? at < bt : a.pageIndex < b.pageIndex
+      }
+    }
+  }
+
+  static func typeOrder(_ kind: AnnotationKind) -> Int {
+    AnnotationKind.allCases.firstIndex(of: kind) ?? .max
+  }
+
+  /// 颜色排序键：与四色板最近者的色板序号
+  static func colorOrder(_ color: NSColor) -> Int {
+    let rgb = color.usingColorSpace(.deviceRGB) ?? color
+    var best = Int.max
+    var bestDistance = CGFloat.greatestFiniteMagnitude
+    for (index, candidate) in AnnotationColor.allCases.enumerated() {
+      let c = candidate.nsColor
+      let dr = rgb.redComponent - c.redComponent
+      let dg = rgb.greenComponent - c.greenComponent
+      let db = rgb.blueComponent - c.blueComponent
+      let distance = dr * dr + dg * dg + db * db
+      if distance < bestDistance {
+        bestDistance = distance
+        best = index
+      }
+    }
+    return best
   }
 }

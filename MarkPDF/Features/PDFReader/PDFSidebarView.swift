@@ -1,12 +1,13 @@
 import PDFKit
 import SwiftUI
 
-/// PDF 侧栏（FR-3.3）：缩略图 / 书签（文档大纲 + 用户书签）/ 标注（M2 占位）。
+/// PDF 侧栏（FR-3.3/4.5）：缩略图 / 书签（文档大纲 + 用户书签）/ 标注列表。
 /// 分段控件对齐设计稿 `.seg`。
 struct PDFSidebarView: View {
   let url: URL
   @EnvironmentObject private var pdfStore: PDFReaderStore
   @EnvironmentObject private var bookmarksStore: PDFBookmarksStore
+  @EnvironmentObject private var annotationStore: PDFAnnotationStore
   @State private var segment = Segment.thumbnails
 
   private enum Segment: String, CaseIterable, Identifiable {
@@ -20,7 +21,12 @@ struct PDFSidebarView: View {
     VStack(spacing: 0) {
       Picker("面板", selection: $segment) {
         ForEach(Segment.allCases) { segment in
-          Text(segment.rawValue).tag(segment)
+          // 标注段显示计数（对齐设计稿 "标注 5"）
+          if segment == .annotations {
+            Text("标注 \(annotationStore.annotationItems().count)").tag(segment)
+          } else {
+            Text(segment.rawValue).tag(segment)
+          }
         }
       }
       .pickerStyle(.segmented)
@@ -33,7 +39,7 @@ struct PDFSidebarView: View {
       case .bookmarks:
         bookmarkContent
       case .annotations:
-        placeholder("标注能力将于 M2 提供")
+        AnnotationListView()
       }
     }
   }
@@ -96,13 +102,6 @@ struct PDFSidebarView: View {
       .padding(.horizontal, 6)
       .padding(.top, 6)
       .padding(.bottom, 4)
-  }
-
-  private func placeholder(_ text: String) -> some View {
-    Text(text)
-      .font(.callout)
-      .foregroundStyle(.secondary)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 
@@ -203,5 +202,6 @@ private struct PDFThumbnailRepresentable: NSViewRepresentable {
   PDFSidebarView(url: URL(fileURLWithPath: "/tmp/demo.pdf"))
     .environmentObject(PDFReaderStore())
     .environmentObject(PDFBookmarksStore())
+    .environmentObject(PDFAnnotationStore())
     .frame(width: 266, height: 480)
 }
