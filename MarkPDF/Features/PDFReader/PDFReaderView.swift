@@ -75,6 +75,10 @@ struct PDFReaderView: NSViewRepresentable {
   final class Coordinator {
     var parent: PDFReaderView
     weak var pdfView: PDFView?
+    /// 捏合手势进行中（此时不回写 Store，避免逐帧触发 SwiftUI 重渲染）
+    private var isPinching = false
+    /// 手势期间临时收起的文本选区（结束后恢复）
+    private var savedSelection: PDFSelection?
 
     init(_ parent: PDFReaderView) {
       self.parent = parent
@@ -94,17 +98,36 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     @objc func scaleChanged(_ note: Notification) {
-      guard let pdfView else { return }
+      guard let pdfView, !isPinching else { return }
       parent.pdfStore.scale = pdfView.scaleFactor
     }
 
     @objc func handlePinch(_ recognizer: NSMagnificationGestureRecognizer) {
-      guard let pdfView, recognizer.state == .changed else { return }
-      pdfView.autoScales = false
-      let newScale = PDFReaderStore.clamped(pdfView.scaleFactor * (1 + recognizer.magnification))
-      pdfView.scaleFactor = newScale
-      recognizer.magnification = 0
-      parent.pdfStore.scale = newScale
+      guard let pdfView else { return }
+      switch recognizer.state {
+      case .began:
+        isPinching = true
+        // 手势期间临时收起文本选区：PDFView 会围绕选区反复滚动（乱跳根因）
+        savedSelection = pdfView.currentSelection
+        if savedSelection != nil {
+          pdfView.setCurrentSelection(nil, animate: false)
+        }
+      case .changed:
+        if pdfView.autoScales { pdfView.autoScales = false }
+        let newScale = PDFReaderStore.clamped(pdfView.scaleFactor * (1 + recognizer.magnification))
+        pdfView.scaleFactor = newScale
+        recognizer.magnification = 0
+      case .ended, .cancelled:
+        isPinching = false
+        if let selection = savedSelection {
+          pdfView.setCurrentSelection(selection, animate: false)
+          savedSelection = nil
+        }
+        // 手势结束才回写 Store（卡顿根因：逐帧 @Published 触发 SwiftUI 重渲染）
+        parent.pdfStore.scale = pdfView.scaleFactor
+      default:
+        break
+      }
     }
 
     @objc func claimFocus(_ sender: Any) {
