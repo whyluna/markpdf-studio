@@ -1,6 +1,6 @@
 // MarkPDF Markdown 编辑器内核入口（FR-2.1 / FR-2.2 / FR-2.7）
 import { EditorState, Compartment } from "@codemirror/state";
-import { EditorView, keymap, placeholder } from "@codemirror/view";
+import { EditorView, keymap, placeholder, drawSelection } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { search, searchKeymap } from "@codemirror/search";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -101,6 +101,8 @@ const view = new EditorView({
     doc: DEMO_DOC,
     extensions: [
       history(),
+      // 自绘光标/选区：替代 WebKit 原生光标（原生按 line-height 1.8 的行框绘制，显得过长）
+      drawSelection(),
       search({ top: true }),
       keymap.of([...searchKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
       markdown({ base: markdownLanguage, codeLanguages }),
@@ -181,6 +183,42 @@ Bridge.onMessage("editor.scrollToLine", (p) => {
     effects: EditorView.scrollIntoView(pos, { y: "start" }),
   });
   view.focus();
+});
+
+/* ---------- ⌘+点击链接跳转（FR-2.3 链接交互） ---------- */
+
+// 按住 ⌘ 时链接显示手型与下划线
+window.addEventListener("keydown", (e) => {
+  if (e.metaKey) view.dom.classList.add("cm-mod-down");
+});
+window.addEventListener("keyup", (e) => {
+  if (!e.metaKey) view.dom.classList.remove("cm-mod-down");
+});
+window.addEventListener("blur", () => view.dom.classList.remove("cm-mod-down"));
+
+// 从语法树提取覆盖 pos 的 Link 节点的 URL
+function findLinkURLAt(pos) {
+  let url = null;
+  syntaxTree(view.state).iterate({
+    enter(node) {
+      if (url || node.name !== "Link" || node.from > pos || node.to < pos) return;
+      for (let c = node.node.firstChild; c; c = c.nextSibling) {
+        if (c.name === "URL") url = view.state.doc.sliceString(c.from, c.to);
+      }
+      return false;
+    },
+  });
+  return url;
+}
+
+view.dom.addEventListener("click", (e) => {
+  if (!e.metaKey) return;
+  const linkEl = e.target.closest(".cm-link");
+  if (!linkEl) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const url = findLinkURLAt(view.posAtDOM(linkEl));
+  if (url) Bridge.notify("editor.openLink", { url });
 });
 
 Bridge.notify("editor.ready", { version: "0.1.0" });

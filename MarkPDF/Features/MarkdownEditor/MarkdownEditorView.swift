@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WebKit
 import os
@@ -92,6 +93,17 @@ struct MarkdownEditorView: NSViewRepresentable {
     bridge.on(.outline) { [weak coordinator = context.coordinator] payload, _ in
       Task { @MainActor in
         coordinator?.outlineDidChange(payload)
+      }
+    }
+    // ⌘+点击链接：只允许 http/https 用默认浏览器打开（拦截 javascript:/file: 等协议）
+    bridge.on(.openLink) { payload, _ in
+      guard let urlString = payload["url"] as? String,
+        let url = URL(string: urlString),
+        let scheme = url.scheme?.lowercased(),
+        scheme == "http" || scheme == "https"
+      else { return }
+      Task { @MainActor in
+        NSWorkspace.shared.open(url)
       }
     }
 

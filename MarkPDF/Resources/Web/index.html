@@ -54,6 +54,8 @@ body{display:flex;flex-direction:column}
 }
 [data-theme="dark"] .cm-inline-code{color:#ff7a9e}
 .cm-link{color:var(--accent);border-bottom:1px dashed var(--accent)}
+/* 按住 ⌘：链接变为可点击形态 */
+.cm-mod-down .cm-link{cursor:pointer;text-decoration:underline;border-bottom-color:transparent}
 .cm-image{color:var(--accent)}
 .cm-quote-line{
   border-left:3px solid var(--accent);background:var(--code-bg);
