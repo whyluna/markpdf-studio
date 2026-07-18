@@ -19,6 +19,7 @@ final class ZoomablePDFView: PDFView {
 struct PDFReaderView: NSViewRepresentable {
   let url: URL
   @EnvironmentObject private var pdfStore: PDFReaderStore
+  @EnvironmentObject private var annotationStore: PDFAnnotationStore
 
   func makeNSView(context: Context) -> PDFView {
     let pdfView = ZoomablePDFView()
@@ -56,15 +57,26 @@ struct PDFReaderView: NSViewRepresentable {
     context.coordinator.pdfView = pdfView
     pdfStore.pdfView = pdfView
     context.coordinator.syncPageState()
+    // 划词浮动工具条（FR-4.1）与标注写回关联（FR-4.6）
+    context.coordinator.toolbarController = AnnotationToolbarController(
+      pdfView: pdfView,
+      store: annotationStore
+    )
+    if let document = pdfView.document {
+      annotationStore.attach(document: document, url: url)
+    }
     return pdfView
   }
 
   func updateNSView(_ pdfView: PDFView, context: Context) {
     if pdfView.document?.documentURL != url {
       pdfView.document = PDFDocument(url: url)
-      // 新文档回到自适应宽度
+      // 新文档回到自适应宽度；切换标注写回关联
       pdfView.autoScales = true
       context.coordinator.syncPageState()
+      if let document = pdfView.document {
+        annotationStore.attach(document: document, url: url)
+      }
       return
     }
     // 外部驱动的目标缩放（按钮/快捷键）；手动缩放时脱离自适应
@@ -86,6 +98,8 @@ struct PDFReaderView: NSViewRepresentable {
   final class Coordinator: NSObject {
     var parent: PDFReaderView
     weak var pdfView: PDFView?
+    /// 划词浮动工具条控制器（FR-4.1）
+    var toolbarController: AnnotationToolbarController?
     /// 捏合手势进行中（此时不回写 Store，避免逐帧触发 SwiftUI 重渲染）
     private var isPinching = false
     /// 手势期间临时收起的文本选区（结束后恢复）
