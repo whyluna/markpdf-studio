@@ -49,9 +49,16 @@ struct ContentView: View {
           }
         }
     } detail: {
-      // 右侧面板：大纲 / 缩略图 / 标注（待实现）
-      ContentPlaceholder(title: "面板", subtitle: "大纲 · 缩略图 · 标注")
+      // 右侧面板：md 上下文 = 大纲（FR-2.6）；pdf 上下文 = 缩略图/书签/标注（阶段 6）
+      if showsEditor {
+        OutlinePanelView(items: editorStore.outline) { heading in
+          editorStore.scrollTo(line: heading.line)
+        }
         .frame(minWidth: 266)
+      } else {
+        ContentPlaceholder(title: "面板", subtitle: "缩略图 · 书签 · 标注")
+          .frame(minWidth: 266)
+      }
     }
     // 退出前兜底落盘（FR-2.7）
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
@@ -73,8 +80,15 @@ struct ContentView: View {
         documentID: editorStore.currentFileURL,
         mode: editorStore.mode,
         theme: editorTheme,
+        scrollToLine: editorStore.pendingScrollLine,
         onContentChanged: { newText in
           editorStore.contentDidChange(newText)
+        },
+        onOutlineChanged: { items in
+          editorStore.outline = items
+        },
+        onScrollHandled: {
+          editorStore.didHandleScroll()
         }
       )
     }

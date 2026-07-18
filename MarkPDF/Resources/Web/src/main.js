@@ -3,7 +3,7 @@ import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxHighlighting, HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage } from "@codemirror/language";
+import { syntaxHighlighting, HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage, syntaxTree } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
 // 自定义高亮：代码块 token 配色走 CSS 变量（随明暗主题切换）；
@@ -120,7 +120,26 @@ function scheduleContentNotify() {
   clearTimeout(notifyTimer);
   notifyTimer = setTimeout(() => {
     Bridge.notify("editor.contentChanged", { text: view.state.doc.toString() });
+    Bridge.notify("editor.outline", { items: collectOutline() });
   }, 300);
+}
+
+/* ---------- 大纲提取（FR-2.6）：ATX / Setext 标题 → { level, text, line } ---------- */
+
+function collectOutline() {
+  const items = [];
+  syntaxTree(view.state).iterate({
+    enter(node) {
+      const m = /^(?:ATXHeading([1-6])|SetextHeading([12]))$/.exec(node.name);
+      if (!m) return;
+      const level = m[1] ? Number(m[1]) : Number(m[2]);
+      const line = view.state.doc.lineAt(node.from);
+      const text = line.text.replace(/^#{1,6}\s*/, "").trim();
+      if (text) items.push({ level, text, line: line.number });
+      return false;
+    },
+  });
+  return items;
 }
 
 /* ---------- native → web 消息注册 ---------- */
@@ -146,6 +165,17 @@ Bridge.onMessage("editor.setTheme", (p) => {
 
 Bridge.onMessage("editor.insertAtCursor", (p) => {
   view.dispatch(view.state.replaceSelection(p.text ?? ""));
+});
+
+// 大纲跳转（FR-2.6）：滚动到指定行并落光标
+Bridge.onMessage("editor.scrollToLine", (p) => {
+  const line = Math.max(1, Math.min(p.line ?? 1, view.state.doc.lines));
+  const pos = view.state.doc.line(line).from;
+  view.dispatch({
+    selection: { anchor: pos },
+    effects: EditorView.scrollIntoView(pos, { y: "start" }),
+  });
+  view.focus();
 });
 
 Bridge.notify("editor.ready", { version: "0.1.0" });

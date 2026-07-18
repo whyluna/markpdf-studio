@@ -40,13 +40,13 @@ final class WebBridge: NSObject {
   }
 
   /// 注册 web → native 的消息处理器
-  func on(_ type: String, handler: @escaping Handler) {
-    handlers[type] = handler
+  func on(_ type: BridgeMessageType, handler: @escaping Handler) {
+    handlers[type.rawValue] = handler
   }
 
   /// native → web 单向通知
-  func notify(_ type: String, payload: [String: Any] = [:]) {
-    send(["type": type, "payload": payload])
+  func notify(_ type: BridgeMessageType, payload: [String: Any] = [:]) {
+    send(["type": type.rawValue, "payload": payload])
   }
 
   /// 应答 web 侧带 id 的请求
@@ -56,7 +56,7 @@ final class WebBridge: NSObject {
 
   /// native → web 请求-响应（3s 超时）
   func request(
-    _ type: String,
+    _ type: BridgeMessageType,
     payload: [String: Any] = [:],
     completion: @escaping (Result<[String: Any], Error>) -> Void
   ) {
@@ -66,13 +66,13 @@ final class WebBridge: NSObject {
     let timeout = DispatchWorkItem { [weak self] in
       guard let self, let callback = self.pending.removeValue(forKey: id) else { return }
       self.pendingTimeouts.removeValue(forKey: id)
-      Logger.editor.error("\(BridgeError.timeout(type).localizedDescription)")
-      callback(.failure(BridgeError.timeout(type)))
+      Logger.editor.error("\(BridgeError.timeout(type.rawValue).localizedDescription)")
+      callback(.failure(BridgeError.timeout(type.rawValue)))
     }
     pendingTimeouts[id] = timeout
     DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timeout)
 
-    send(["id": id, "type": type, "payload": payload])
+    send(["id": id, "type": type.rawValue, "payload": payload])
   }
 
   // MARK: - Private

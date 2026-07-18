@@ -32,21 +32,33 @@ struct MarkdownEditorView: NSViewRepresentable {
   let documentID: URL?
   let mode: EditorMode
   let theme: EditorTheme
+  /// 请求内核滚动到指定行（FR-2.6 大纲跳转）；消费后经 `onScrollHandled` 清零
+  let scrollToLine: Int?
   /// 内核内容变更回调（自动保存挂钩，FR-2.7）
   var onContentChanged: ((String) -> Void)?
+  /// 大纲变更回调（FR-2.6）
+  var onOutlineChanged: (([Heading]) -> Void)?
+  /// 滚动请求已消费回调
+  var onScrollHandled: (() -> Void)?
 
   init(
     text: Binding<String>,
     documentID: URL? = nil,
     mode: EditorMode = .wysiwyg,
     theme: EditorTheme = .light,
-    onContentChanged: ((String) -> Void)? = nil
+    scrollToLine: Int? = nil,
+    onContentChanged: ((String) -> Void)? = nil,
+    onOutlineChanged: (([Heading]) -> Void)? = nil,
+    onScrollHandled: (() -> Void)? = nil
   ) {
     _text = text
     self.documentID = documentID
     self.mode = mode
     self.theme = theme
+    self.scrollToLine = scrollToLine
     self.onContentChanged = onContentChanged
+    self.onOutlineChanged = onOutlineChanged
+    self.onScrollHandled = onScrollHandled
   }
 
   func makeCoordinator() -> Coordinator {
@@ -63,16 +75,21 @@ struct MarkdownEditorView: NSViewRepresentable {
 
     let bridge = context.coordinator.bridge
     bridge.attach(to: webView)
-    bridge.on("editor.ready") { [weak coordinator = context.coordinator] _, _ in
+    bridge.on(.ready) { [weak coordinator = context.coordinator] _, _ in
       // 桥接回调是非隔离闭包：跳到 MainActor 再触达 Coordinator（@MainActor）
       Task { @MainActor in
         coordinator?.kernelDidReady()
       }
     }
-    bridge.on("editor.contentChanged") { [weak coordinator = context.coordinator] payload, _ in
+    bridge.on(.contentChanged) { [weak coordinator = context.coordinator] payload, _ in
       guard let text = payload["text"] as? String else { return }
       Task { @MainActor in
         coordinator?.contentDidChange(text)
+      }
+    }
+    bridge.on(.outline) { [weak coordinator = context.coordinator] payload, _ in
+      Task { @MainActor in
+        coordinator?.outlineDidChange(payload)
       }
     }
 
@@ -95,6 +112,13 @@ struct MarkdownEditorView: NSViewRepresentable {
       context.coordinator.loadDocument(text)
     }
     context.coordinator.pushModeAndThemeIfNeeded()
+    // 大纲跳转请求（FR-2.6）：消费后异步清零（避免在视图更新途中改 @Published）
+    if let line = scrollToLine {
+      context.coordinator.scrollTo(line: line)
+      DispatchQueue.main.async {
+        self.onScrollHandled?()
+      }
+    }
   }
 }
 
@@ -119,7 +143,7 @@ extension MarkdownEditorView {
     /// 内核加载完成：注入初始内容与当前模式/主题
     func kernelDidReady() {
       isReady = true
-      bridge.notify("editor.setContent", payload: ["text": parent.text])
+      bridge.notify(.setContent, payload: ["text": parent.text])
       lastDocumentID = parent.documentID
       lastPushedMode = nil
       lastPushedTheme = nil
@@ -130,11 +154,11 @@ extension MarkdownEditorView {
     func pushModeAndThemeIfNeeded() {
       guard isReady else { return }
       if lastPushedMode != parent.mode {
-        bridge.notify("editor.setMode", payload: ["mode": parent.mode.rawValue])
+        bridge.notify(.setMode, payload: ["mode": parent.mode.rawValue])
         lastPushedMode = parent.mode
       }
       if lastPushedTheme != parent.theme {
-        bridge.notify("editor.setTheme", payload: ["theme": parent.theme.rawValue])
+        bridge.notify(.setTheme, payload: ["theme": parent.theme.rawValue])
         lastPushedTheme = parent.theme
       }
     }
@@ -144,15 +168,33 @@ extension MarkdownEditorView {
       parent.onContentChanged?(text)
     }
 
+    /// 内核大纲变更（FR-2.6）：解析后转发宿主
+    func outlineDidChange(_ payload: [String: Any]) {
+      let items = (payload["items"] as? [[String: Any]] ?? []).compactMap { dict -> Heading? in
+        guard let level = dict["level"] as? Int,
+          let text = dict["text"] as? String,
+          let line = dict["line"] as? Int
+        else { return nil }
+        return Heading(level: level, text: text, line: line)
+      }
+      parent.onOutlineChanged?(items)
+    }
+
+    /// 大纲跳转（FR-2.6）：通知内核滚动到指定行
+    func scrollTo(line: Int) {
+      guard isReady else { return }
+      bridge.notify(.scrollToLine, payload: ["line": line])
+    }
+
     /// 外部载入新文档（打开文件时使用）；整体替换内容，不打断内核撤销栈之外的编辑
     func loadDocument(_ text: String) {
       guard isReady else { return }
-      bridge.notify("editor.setContent", payload: ["text": text])
+      bridge.notify(.setContent, payload: ["text": text])
     }
 
     /// 从内核取回最新文本（保存快捷键等场景）
     func fetchContent(completion: @escaping (String) -> Void) {
-      bridge.request("editor.getContent") { result in
+      bridge.request(.getContent) { result in
         if case .success(let payload) = result, let text = payload["text"] as? String {
           completion(text)
         }

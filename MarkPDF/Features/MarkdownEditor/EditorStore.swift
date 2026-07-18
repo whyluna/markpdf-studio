@@ -12,6 +12,10 @@ final class EditorStore: ObservableObject {
   @Published private(set) var currentFileURL: URL?
   /// 有尚未落盘的改动（工具栏橙点指示；自动保存通常 0.5s 内清除）
   @Published private(set) var hasUnsavedChanges = false
+  /// 文档大纲（FR-2.6；内核随内容变更推送）
+  @Published var outline: [Heading] = []
+  /// 请求内核滚动到指定行（大纲跳转）；由 MarkdownEditorView 消费后清零
+  @Published private(set) var pendingScrollLine: Int?
 
   /// 最近一次与磁盘一致的文本（识别 setContent 回显，避免无意义写盘）
   private var lastPersistedText: String = EditorStore.welcomeDocument
@@ -35,6 +39,16 @@ final class EditorStore: ObservableObject {
     } catch {
       Logger.editor.error("读取文件失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
     }
+  }
+
+  /// 大纲跳转请求（FR-2.6）：由 MarkdownEditorView 消费
+  func scrollTo(line: Int) {
+    pendingScrollLine = line
+  }
+
+  /// 内核已消费滚动请求
+  func didHandleScroll() {
+    pendingScrollLine = nil
   }
 
   /// 打开的文件被重命名/移动：跟随更新标识（FR-1.2）
