@@ -2,16 +2,11 @@ import PDFKit
 import SwiftUI
 
 /// PDF 阅读视图（FR-3.1/3.2）：系统 PDFKit 渲染，连续滚动；
-/// 缩放支持按钮/快捷键（绑定驱动）与触控板捏合，范围 50%–400%。
+/// 缩放支持按钮/快捷键（Store 驱动）与触控板捏合，范围 50%–400%。
 /// 高亮 / 下划线等标注能力（FR-4.x）将在 M2 叠加在此视图之上。
 struct PDFReaderView: NSViewRepresentable {
   let url: URL
-  /// 当前页（1 起，输出）
-  @Binding var currentPage: Int
-  /// 总页数（输出）
-  @Binding var pageCount: Int
-  /// 缩放倍率（双向：外部按钮驱动 / 内部捏合与自适应回写）
-  @Binding var scale: CGFloat
+  @EnvironmentObject private var pdfStore: PDFReaderStore
 
   func makeNSView(context: Context) -> PDFView {
     let pdfView = PDFView()
@@ -41,6 +36,7 @@ struct PDFReaderView: NSViewRepresentable {
       object: pdfView
     )
     context.coordinator.pdfView = pdfView
+    pdfStore.pdfView = pdfView
     context.coordinator.syncPageState()
     return pdfView
   }
@@ -54,9 +50,9 @@ struct PDFReaderView: NSViewRepresentable {
       return
     }
     // 外部驱动的目标缩放（按钮/快捷键）；手动缩放时脱离自适应
-    if abs(pdfView.scaleFactor - scale) > 0.001 {
+    if abs(pdfView.scaleFactor - pdfStore.scale) > 0.001 {
       pdfView.autoScales = false
-      pdfView.scaleFactor = PDFReaderStore.clamped(scale)
+      pdfView.scaleFactor = PDFReaderStore.clamped(pdfStore.scale)
     }
   }
 
@@ -77,12 +73,12 @@ struct PDFReaderView: NSViewRepresentable {
       self.parent = parent
     }
 
-    /// 同步页码/总页数到绑定
+    /// 同步页码/总页数到 Store
     func syncPageState() {
       guard let pdfView, let doc = pdfView.document else { return }
-      parent.pageCount = doc.pageCount
+      parent.pdfStore.pageCount = doc.pageCount
       if let page = pdfView.currentPage {
-        parent.currentPage = doc.index(for: page) + 1
+        parent.pdfStore.currentPage = doc.index(for: page) + 1
       }
     }
 
@@ -92,7 +88,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc func scaleChanged(_ note: Notification) {
       guard let pdfView else { return }
-      parent.scale = pdfView.scaleFactor
+      parent.pdfStore.scale = pdfView.scaleFactor
     }
 
     @objc func handlePinch(_ recognizer: NSMagnificationGestureRecognizer) {
@@ -101,17 +97,13 @@ struct PDFReaderView: NSViewRepresentable {
       let newScale = PDFReaderStore.clamped(pdfView.scaleFactor * (1 + recognizer.magnification))
       pdfView.scaleFactor = newScale
       recognizer.magnification = 0
-      parent.scale = newScale
+      parent.pdfStore.scale = newScale
     }
   }
 }
 
 #Preview {
-  PDFReaderView(
-    url: URL(fileURLWithPath: "/tmp/demo.pdf"),
-    currentPage: .constant(1),
-    pageCount: .constant(1),
-    scale: .constant(1.0)
-  )
-  .frame(width: 640, height: 480)
+  PDFReaderView(url: URL(fileURLWithPath: "/tmp/demo.pdf"))
+    .environmentObject(PDFReaderStore())
+    .frame(width: 640, height: 480)
 }

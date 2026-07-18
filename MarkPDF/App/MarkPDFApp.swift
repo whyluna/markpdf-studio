@@ -5,6 +5,7 @@ struct MarkPDFApp: App {
   @StateObject private var workspaceStore = WorkspaceStore()
   @StateObject private var editorStore = EditorStore()
   @StateObject private var pdfStore = PDFReaderStore()
+  @StateObject private var pdfBookmarksStore = PDFBookmarksStore()
 
   var body: some Scene {
     WindowGroup {
@@ -12,6 +13,7 @@ struct MarkPDFApp: App {
         .environmentObject(workspaceStore)
         .environmentObject(editorStore)
         .environmentObject(pdfStore)
+        .environmentObject(pdfBookmarksStore)
         .frame(minWidth: 1080, minHeight: 640)
     }
     .defaultSize(width: 1380, height: 900)

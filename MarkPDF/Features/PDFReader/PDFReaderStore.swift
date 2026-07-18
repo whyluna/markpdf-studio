@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 
 /// PDF 阅读状态（FR-3.1/3.2）：页码、缩放；Scene 级持有。
 @MainActor
@@ -9,6 +10,8 @@ final class PDFReaderStore: ObservableObject {
   @Published var pageCount = 0
   /// 缩放倍率（1.0 = 100%）
   @Published var scale: CGFloat = 1.0
+  /// 当前 PDFView 实例（弱引用，供缩略图/大纲/书签跳转共享；非发布属性）
+  weak var pdfView: PDFView?
 
   static let minScale: CGFloat = 0.5
   static let maxScale: CGFloat = 4.0
@@ -29,5 +32,19 @@ final class PDFReaderStore: ObservableObject {
 
   func resetZoom() {
     scale = 1.0
+  }
+
+  /// 跳转到指定页（FR-3.3；1 起）
+  func goTo(page: Int) {
+    guard let pdfView, let doc = pdfView.document,
+      page >= 1, page <= doc.pageCount,
+      let target = doc.page(at: page - 1)
+    else { return }
+    pdfView.go(to: target)
+  }
+
+  /// 跳转到文档大纲目标位置（FR-3.3）
+  func go(to destination: PDFDestination) {
+    pdfView?.go(to: destination)
   }
 }

@@ -67,15 +67,15 @@ struct ContentView: View {
           }
         }
     } detail: {
-      // 右侧面板：md 上下文 = 大纲（FR-2.6）；pdf 上下文 = 缩略图/书签/标注（阶段 6）
-      if showsEditor {
+      // 右侧面板：md 上下文 = 大纲（FR-2.6）；pdf 上下文 = 缩略图/书签/标注（FR-3.3）
+      if let node = workspaceStore.selection, node.kind == .pdf {
+        PDFSidebarView(url: node.id)
+          .frame(minWidth: 266)
+      } else {
         OutlinePanelView(items: editorStore.outline) { heading in
           editorStore.scrollTo(line: heading.line)
         }
         .frame(minWidth: 266)
-      } else {
-        ContentPlaceholder(title: "面板", subtitle: "缩略图 · 书签 · 标注")
-          .frame(minWidth: 266)
       }
     }
   }
@@ -110,12 +110,7 @@ struct ContentView: View {
   @ViewBuilder
   private var middleContent: some View {
     if let node = workspaceStore.selection, node.kind == .pdf {
-      PDFReaderView(
-        url: node.id,
-        currentPage: $pdfStore.currentPage,
-        pageCount: $pdfStore.pageCount,
-        scale: $pdfStore.scale
-      )
+      PDFReaderView(url: node.id)
     } else if let node = workspaceStore.selection, node.kind == .image {
       ImagePreviewView(url: node.id)
     } else {
