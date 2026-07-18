@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct MarkPDFApp: App {
   @StateObject private var workspaceStore = WorkspaceStore()
-  @StateObject private var editorStore = EditorStore()
+  @StateObject private var tabStore = TabStore()
   @StateObject private var pdfStore = PDFReaderStore()
   @StateObject private var pdfBookmarksStore = PDFBookmarksStore()
 
@@ -11,7 +11,7 @@ struct MarkPDFApp: App {
     WindowGroup {
       ContentView()
         .environmentObject(workspaceStore)
-        .environmentObject(editorStore)
+        .environmentObject(tabStore)
         .environmentObject(pdfStore)
         .environmentObject(pdfBookmarksStore)
         .frame(minWidth: 1080, minHeight: 640)
@@ -30,7 +30,7 @@ struct MarkPDFApp: App {
       }
       CommandGroup(replacing: .saveItem) {
         Button("保存") {
-          editorStore.flushPendingSave()
+          tabStore.activeEditorStore?.flushPendingSave()
         }
         .keyboardShortcut("s")
       }
@@ -40,17 +40,17 @@ struct MarkPDFApp: App {
           pdfStore.zoomIn()
         }
         .keyboardShortcut("=", modifiers: .command)
-        .disabled(workspaceStore.selection?.kind != .pdf)
+        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf)
         Button("缩小") {
           pdfStore.zoomOut()
         }
         .keyboardShortcut("-", modifiers: .command)
-        .disabled(workspaceStore.selection?.kind != .pdf)
+        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf)
         Button("实际大小") {
           pdfStore.resetZoom()
         }
         .keyboardShortcut("0", modifiers: .command)
-        .disabled(workspaceStore.selection?.kind != .pdf)
+        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf)
       }
       // PDF 页内搜索（FR-3.4）：⌘F 查找栏、⌘G 下一个、⇧⌘G 上一个
       CommandGroup(after: .textEditing) {
@@ -58,7 +58,7 @@ struct MarkPDFApp: App {
           pdfStore.isFindBarVisible = true
         }
         .keyboardShortcut("f", modifiers: .command)
-        .disabled(workspaceStore.selection?.kind != .pdf)
+        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf)
         Button("查找下一个") {
           pdfStore.findNext()
         }

@@ -22,6 +22,13 @@ struct PDFReaderView: NSViewRepresentable {
     )
     pdfView.addGestureRecognizer(pinch)
 
+    // 点击认领焦点：分栏双 PDF 时，缩放/搜索作用于最近点击的视图（FR-1.4）
+    let click = NSClickGestureRecognizer(
+      target: context.coordinator,
+      action: #selector(Coordinator.claimFocus(_:))
+    )
+    pdfView.addGestureRecognizer(click)
+
     let center = NotificationCenter.default
     center.addObserver(
       context.coordinator,
@@ -98,6 +105,10 @@ struct PDFReaderView: NSViewRepresentable {
       pdfView.scaleFactor = newScale
       recognizer.magnification = 0
       parent.pdfStore.scale = newScale
+    }
+
+    @objc func claimFocus(_ sender: Any) {
+      parent.pdfStore.pdfView = pdfView
     }
   }
 }

@@ -1,0 +1,87 @@
+import SwiftUI
+
+/// 标签组面板（FR-1.4）：标签栏 + 激活标签内容区。
+/// 点击内容区激活该组（分栏时窗口工具栏/面板跟随）。
+struct TabGroupPane: View {
+  @ObservedObject var group: TabGroup
+  @EnvironmentObject private var tabStore: TabStore
+
+  var body: some View {
+    VStack(spacing: 0) {
+      TabBarView(group: group)
+      content
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+          tabStore.activeGroupID = group.id
+        }
+    }
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let tab = group.activeTab {
+      switch tab.kind {
+      case .markdown:
+        MarkdownTabView(store: group.editorStore(for: tab))
+      case .pdf:
+        if let url = tab.url {
+          PDFReaderView(url: url)
+        }
+      case .image:
+        if let url = tab.url {
+          ImagePreviewView(url: url)
+        }
+      default:
+        EmptyTabPlaceholder()
+      }
+    } else {
+      EmptyTabPlaceholder()
+    }
+  }
+}
+
+/// 空组占位（分栏后等待拖入标签）
+private struct EmptyTabPlaceholder: View {
+  var body: some View {
+    VStack(spacing: 8) {
+      Image(systemName: "rectangle.leadinghalf.filled")
+        .font(.title2)
+        .foregroundStyle(.secondary)
+      Text("将标签拖到此处")
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+}
+
+/// Markdown 标签内容：把标签自己的 EditorStore 接入内核视图
+struct MarkdownTabView: View {
+  @ObservedObject var store: EditorStore
+  @Environment(\.colorScheme) private var colorScheme
+
+  var body: some View {
+    MarkdownEditorView(
+      text: $store.text,
+      documentID: store.currentFileURL,
+      mode: store.mode,
+      theme: colorScheme == .dark ? .dark : .light,
+      scrollToLine: store.pendingScrollLine,
+      onContentChanged: { newText in
+        store.contentDidChange(newText)
+      },
+      onOutlineChanged: { items in
+        store.outline = items
+      },
+      onScrollHandled: {
+        store.didHandleScroll()
+      }
+    )
+  }
+}
+
+#Preview {
+  TabGroupPane(group: TabGroup())
+    .environmentObject(TabStore())
+}

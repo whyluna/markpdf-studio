@@ -1,26 +1,21 @@
 import AppKit
 import SwiftUI
 
-/// 应用根视图：三栏布局（文件树 / 内容区 / 上下文面板）。
-/// 中间栏按文件树选择分发：Markdown → 编辑器；PDF → 阅读器；图片 → 预览。
+/// 应用根视图：三栏布局（文件树 / 标签内容区 / 上下文面板）+ 底部状态栏。
+/// 中间栏为标签组（FR-1.4）：单栏或左右分栏，每组含标签栏与激活标签内容。
 struct ContentView: View {
   @EnvironmentObject private var workspaceStore: WorkspaceStore
-  @EnvironmentObject private var editorStore: EditorStore
+  @EnvironmentObject private var tabStore: TabStore
   @EnvironmentObject private var pdfStore: PDFReaderStore
-  @Environment(\.colorScheme) private var colorScheme
-
-  private var editorTheme: MarkdownEditorView.EditorTheme {
-    colorScheme == .dark ? .dark : .light
-  }
 
   var body: some View {
     VStack(spacing: 0) {
       splitView
       StatusBarView()
     }
-    // 退出前兜底落盘（FR-2.7）
+    // 退出前兜底落盘（FR-2.7）：全部标签
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-      editorStore.flushPendingSave()
+      tabStore.flushAll()
     }
     // 快速打开面板（FR-6.1 ⌘P）
     .overlay {
@@ -30,22 +25,24 @@ struct ContentView: View {
     }
   }
 
+  // MARK: - 三栏布局
+
   private var splitView: some View {
     NavigationSplitView {
       // FR-1.1 工作区文件树
       FileTreeView()
         .frame(minWidth: 238)
     } content: {
-      middleContent
+      tabArea
         .frame(minWidth: 480)
         .toolbar {
           ToolbarItem(placement: .navigation) {
-            if showsEditor, let fileURL = editorStore.currentFileURL {
+            if let store = tabStore.activeEditorStore, let fileURL = store.currentFileURL {
               HStack(spacing: 6) {
                 Text(fileURL.lastPathComponent)
                   .font(.headline)
                   .foregroundStyle(.secondary)
-                if editorStore.hasUnsavedChanges {
+                if store.hasUnsavedChanges {
                   Circle()
                     .fill(Color.orange)
                     .frame(width: 6, height: 6)
@@ -55,8 +52,11 @@ struct ContentView: View {
             }
           }
           ToolbarItem(placement: .principal) {
-            if showsEditor {
-              Picker("编辑模式", selection: $editorStore.mode) {
+            if let store = tabStore.activeEditorStore {
+              Picker("编辑模式", selection: Binding(
+                get: { store.mode },
+                set: { store.mode = $0 }
+              )) {
                 ForEach(MarkdownEditorView.EditorMode.allCases) { mode in
                   Text(mode.title).tag(mode)
                 }
@@ -65,18 +65,49 @@ struct ContentView: View {
               .frame(width: 260)
             }
           }
+          ToolbarItem(placement: .primaryAction) {
+            // 分栏切换（FR-1.4；设计稿 #btnSplit）
+            Button {
+              tabStore.toggleSplit()
+            } label: {
+              Image(systemName: tabStore.isSplit ? "rectangle.split2x1.fill" : "rectangle.split2x1")
+            }
+            .help(tabStore.isSplit ? "合并为单栏" : "左右分栏")
+          }
         }
     } detail: {
-      // 右侧面板：md 上下文 = 大纲（FR-2.6）；pdf 上下文 = 缩略图/书签/标注（FR-3.3）
-      if let node = workspaceStore.selection, node.kind == .pdf {
-        PDFSidebarView(url: node.id)
-          .frame(minWidth: 266)
-      } else {
-        OutlinePanelView(items: editorStore.outline) { heading in
-          editorStore.scrollTo(line: heading.line)
-        }
+      detailPanel
+    }
+  }
+
+  /// 右侧面板：pdf 标签 = 缩略图/书签/标注（FR-3.3）；其余 = 大纲（FR-2.6）
+  @ViewBuilder
+  private var detailPanel: some View {
+    if let tab = tabStore.activeGroup.activeTab, tab.kind == .pdf, let url = tab.url {
+      PDFSidebarView(url: url)
         .frame(minWidth: 266)
+    } else {
+      OutlinePanelView(items: tabStore.activeEditorStore?.outline ?? []) { heading in
+        tabStore.activeEditorStore?.scrollTo(line: heading.line)
       }
+      .frame(minWidth: 266)
+    }
+  }
+
+  // MARK: - 标签内容区
+
+  private var tabArea: some View {
+    HStack(spacing: 0) {
+      if tabStore.isSplit {
+        HSplitView {
+          TabGroupPane(group: tabStore.groups[0])
+          TabGroupPane(group: tabStore.groups[1])
+        }
+      } else {
+        TabGroupPane(group: tabStore.groups[0])
+      }
+      // 右边缘落点：拖标签到窗口右缘创建/移入右组（FR-1.4 拖拽至边缘分栏）
+      EdgeTabDropZone()
     }
   }
 
@@ -93,9 +124,7 @@ struct ContentView: View {
         rootPath: workspaceStore.root?.id.path ?? "",
         onSelect: { node in
           workspaceStore.selection = node
-          if node.kind == .markdown {
-            editorStore.loadFile(node.id)
-          }
+          tabStore.open(node)
           workspaceStore.isQuickOpenPresented = false
         },
         onDismiss: {
@@ -105,63 +134,37 @@ struct ContentView: View {
       .padding(.top, 80)
     }
   }
-
-  /// 中间栏内容：按选中文件类型分发
-  @ViewBuilder
-  private var middleContent: some View {
-    if let node = workspaceStore.selection, node.kind == .pdf {
-      VStack(spacing: 0) {
-        if pdfStore.isFindBarVisible {
-          PDFFindBarView()
-        }
-        PDFReaderView(url: node.id)
-      }
-    } else if let node = workspaceStore.selection, node.kind == .image {
-      ImagePreviewView(url: node.id)
-    } else {
-      // 无选择 / Markdown / 目录：显示编辑器
-      MarkdownEditorView(
-        text: $editorStore.text,
-        documentID: editorStore.currentFileURL,
-        mode: editorStore.mode,
-        theme: editorTheme,
-        scrollToLine: editorStore.pendingScrollLine,
-        onContentChanged: { newText in
-          editorStore.contentDidChange(newText)
-        },
-        onOutlineChanged: { items in
-          editorStore.outline = items
-        },
-        onScrollHandled: {
-          editorStore.didHandleScroll()
-        }
-      )
-    }
-  }
-
-  /// 中间栏是否为编辑器（决定工具栏是否显示文件名与模式切换）
-  private var showsEditor: Bool {
-    guard let node = workspaceStore.selection else { return true }
-    return node.kind != .pdf && node.kind != .image
-  }
 }
 
-private struct ContentPlaceholder: View {
-  let title: String
-  let subtitle: String
+/// 窗口右缘的标签落点：拖标签到此处创建/移入最右侧组
+private struct EdgeTabDropZone: View {
+  @EnvironmentObject private var tabStore: TabStore
+  @State private var isTargeted = false
 
   var body: some View {
-    VStack(spacing: 8) {
-      Text(title).font(.title2).bold()
-      Text(subtitle).font(.callout).foregroundStyle(.secondary)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    Color.clear
+      .frame(width: 28)
+      .background(
+        RoundedRectangle(cornerRadius: 4)
+          .fill(isTargeted ? Color.accentColor.opacity(0.2) : Color.clear)
+          .padding(4)
+      )
+      .onDrop(of: [.text], isTargeted: $isTargeted) { _ in
+        guard let dragging = tabStore.draggingTab,
+          let source = tabStore.groups.first(where: { $0.id == dragging.from })
+        else { return false }
+        let target = tabStore.isSplit ? tabStore.groups.last : nil
+        tabStore.moveTab(dragging.tab, from: source, to: target)
+        tabStore.draggingTab = nil
+        return true
+      }
   }
 }
 
 #Preview {
   ContentView()
     .environmentObject(WorkspaceStore())
-    .environmentObject(EditorStore())
+    .environmentObject(TabStore())
     .environmentObject(PDFReaderStore())
+    .environmentObject(PDFBookmarksStore())
 }

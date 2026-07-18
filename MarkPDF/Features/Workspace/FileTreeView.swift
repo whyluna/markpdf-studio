@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 /// FR-1.2：右键菜单（新建/重命名/删除/Finder 显示）、行内命名、拖拽移动、Cmd+Z 撤销。
 struct FileTreeView: View {
   @EnvironmentObject private var store: WorkspaceStore
-  @EnvironmentObject private var editorStore: EditorStore
+  @EnvironmentObject private var tabStore: TabStore
   @Environment(\.undoManager) private var undoManager
 
   /// 行内命名状态：新建后为默认名节点命名，或对既有节点重命名
@@ -18,7 +18,7 @@ struct FileTreeView: View {
     var draft: String
   }
 
-  /// 选中绑定：在事件阶段直接触发文件加载。
+  /// 选中绑定：在事件阶段直接于当前标签组打开文件（FR-1.4）。
   /// 不用 onChange + 异步——那会在视图更新途中改 @Published，
   /// 触发 "Publishing changes from within view updates" 未定义行为。
   private var selection: Binding<FileNode?> {
@@ -26,8 +26,8 @@ struct FileTreeView: View {
       get: { store.selection },
       set: { node in
         store.selection = node
-        if let node, node.kind == .markdown {
-          editorStore.loadFile(node.id)
+        if let node, node.kind != .folder {
+          tabStore.open(node)
         }
       }
     )
@@ -191,7 +191,7 @@ struct FileTreeView: View {
       name += "." + ext
     }
     if let newURL = store.rename(state.node, to: name, undo: undoManager) {
-      editorStore.fileDidMove(from: state.node.id, to: newURL)
+      tabStore.fileDidMove(from: state.node.id, to: newURL)
     }
   }
 
@@ -201,7 +201,7 @@ struct FileTreeView: View {
 
   private func trash(_ node: FileNode) {
     store.trash(node)
-    editorStore.fileWasTrashed(node.id)
+    tabStore.fileWasTrashed(node.id)
   }
 
   private func handleDrop(_ providers: [NSItemProvider], toFolder folder: FileNode) -> Bool {
@@ -211,7 +211,7 @@ struct FileTreeView: View {
       DispatchQueue.main.async {
         guard let dragged = store.node(for: url) else { return }
         if let newURL = store.move(dragged, toFolder: folder.id, undo: undoManager) {
-          editorStore.fileDidMove(from: url, to: newURL)
+          tabStore.fileDidMove(from: url, to: newURL)
         }
       }
     }
@@ -239,5 +239,5 @@ struct FileTreeView: View {
 #Preview {
   FileTreeView()
     .environmentObject(WorkspaceStore())
-    .environmentObject(EditorStore())
+    .environmentObject(TabStore())
 }
