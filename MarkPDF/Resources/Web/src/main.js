@@ -211,15 +211,20 @@ function findLinkURLAt(pos) {
   return url;
 }
 
-view.dom.addEventListener("click", (e) => {
-  if (!e.metaKey) return;
-  const linkEl = e.target.closest(".cm-link");
-  if (!linkEl) return;
-  e.preventDefault();
-  e.stopPropagation();
-  const url = findLinkURLAt(view.posAtDOM(linkEl));
-  if (url) Bridge.notify("editor.openLink", { url });
-});
+// capture 阶段拦截 ⌘+mousedown：先于 CM 的落光标逻辑，链接不展开直接跳转
+view.dom.addEventListener(
+  "mousedown",
+  (e) => {
+    if (!e.metaKey) return;
+    const linkEl = e.target.closest(".cm-link");
+    if (!linkEl) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const url = findLinkURLAt(view.posAtDOM(linkEl));
+    if (url) Bridge.notify("editor.openLink", { url });
+  },
+  true
+);
 
 Bridge.notify("editor.ready", { version: "0.1.0" });
 
