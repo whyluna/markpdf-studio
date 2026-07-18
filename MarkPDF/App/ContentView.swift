@@ -6,6 +6,7 @@ import SwiftUI
 struct ContentView: View {
   @EnvironmentObject private var workspaceStore: WorkspaceStore
   @EnvironmentObject private var editorStore: EditorStore
+  @EnvironmentObject private var pdfStore: PDFReaderStore
   @Environment(\.colorScheme) private var colorScheme
 
   private var editorTheme: MarkdownEditorView.EditorTheme {
@@ -13,6 +14,23 @@ struct ContentView: View {
   }
 
   var body: some View {
+    VStack(spacing: 0) {
+      splitView
+      StatusBarView()
+    }
+    // 退出前兜底落盘（FR-2.7）
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+      editorStore.flushPendingSave()
+    }
+    // 快速打开面板（FR-6.1 ⌘P）
+    .overlay {
+      if workspaceStore.isQuickOpenPresented {
+        quickOpenOverlay
+      }
+    }
+  }
+
+  private var splitView: some View {
     NavigationSplitView {
       // FR-1.1 工作区文件树
       FileTreeView()
@@ -60,16 +78,6 @@ struct ContentView: View {
           .frame(minWidth: 266)
       }
     }
-    // 退出前兜底落盘（FR-2.7）
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-      editorStore.flushPendingSave()
-    }
-    // 快速打开面板（FR-6.1 ⌘P）
-    .overlay {
-      if workspaceStore.isQuickOpenPresented {
-        quickOpenOverlay
-      }
-    }
   }
 
   /// 快速打开浮层：顶部居中，点击遮罩关闭
@@ -102,7 +110,12 @@ struct ContentView: View {
   @ViewBuilder
   private var middleContent: some View {
     if let node = workspaceStore.selection, node.kind == .pdf {
-      PDFReaderView(url: node.id)
+      PDFReaderView(
+        url: node.id,
+        currentPage: $pdfStore.currentPage,
+        pageCount: $pdfStore.pageCount,
+        scale: $pdfStore.scale
+      )
     } else if let node = workspaceStore.selection, node.kind == .image {
       ImagePreviewView(url: node.id)
     } else {
@@ -150,4 +163,5 @@ private struct ContentPlaceholder: View {
   ContentView()
     .environmentObject(WorkspaceStore())
     .environmentObject(EditorStore())
+    .environmentObject(PDFReaderStore())
 }
