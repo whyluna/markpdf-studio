@@ -1,6 +1,6 @@
 import AppKit
 
-/// 标注类型（FR-4.1/4.2/4.3）
+/// 标注类型（FR-4.1/4.3）
 enum AnnotationKind: String, CaseIterable, Identifiable {
   /// 高亮
   case highlight
@@ -10,8 +10,6 @@ enum AnnotationKind: String, CaseIterable, Identifiable {
   case strikeOut
   /// 波浪线
   case squiggly
-  /// 便签
-  case note
   /// 文本框
   case freeText
   /// 手绘
@@ -29,7 +27,6 @@ enum AnnotationKind: String, CaseIterable, Identifiable {
     case .underline: "下划线"
     case .strikeOut: "删除线"
     case .squiggly: "波浪线"
-    case .note: "便签"
     case .freeText: "文本框"
     case .ink: "手绘"
     case .rectangle: "矩形"
@@ -63,7 +60,6 @@ enum AnnotationColor: String, CaseIterable, Identifiable {
     case .underline: .blue
     case .strikeOut: .red
     case .squiggly: .green
-    case .note: .yellow
     case .freeText: .blue
     case .ink: .red
     case .rectangle: .green
