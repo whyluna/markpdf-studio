@@ -33,11 +33,20 @@ struct ImagePreviewView: NSViewRepresentable {
 
     context.coordinator.scrollView = scrollView
     context.coordinator.fitToView()
-    NotificationCenter.default.addObserver(
+    let center = NotificationCenter.default
+    center.addObserver(
       context.coordinator,
       selector: #selector(Coordinator.liveMagnifyEnded(_:)),
       name: NSScrollView.didEndLiveMagnifyNotification,
       object: scrollView
+    )
+    // 内容小于视口时居中（AppKit 默认对齐左下角）：随边界变化动态调整 contentInsets
+    scrollView.contentView.postsBoundsChangedNotifications = true
+    center.addObserver(
+      context.coordinator,
+      selector: #selector(Coordinator.updateInsets),
+      name: NSView.boundsDidChangeNotification,
+      object: scrollView.contentView
     )
     return scrollView
   }
@@ -86,6 +95,7 @@ struct ImagePreviewView: NSViewRepresentable {
         let scale = ImagePreviewStore.clamped(fit)
         scrollView.magnification = scale
         self.parent.imageStore.scale = scale
+        self.updateInsets()
       }
     }
 
@@ -100,6 +110,23 @@ struct ImagePreviewView: NSViewRepresentable {
     @objc func liveMagnifyEnded(_ note: Notification) {
       guard let scrollView else { return }
       parent.imageStore.scale = scrollView.magnification
+      updateInsets()
+    }
+
+    /// 内容小于视口时四边补白居中（大于视口时补白为 0）
+    @objc func updateInsets() {
+      guard let scrollView, let image = (scrollView.documentView as? NSImageView)?.image else { return }
+      let clip = scrollView.contentView.bounds.size
+      let scaled = NSSize(
+        width: image.size.width * scrollView.magnification,
+        height: image.size.height * scrollView.magnification
+      )
+      let horizontal = max(0, (clip.width - scaled.width) / 2)
+      let vertical = max(0, (clip.height - scaled.height) / 2)
+      let insets = NSEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+      let current = scrollView.contentInsets
+      guard abs(current.top - insets.top) > 0.5 || abs(current.left - insets.left) > 0.5 else { return }
+      scrollView.contentInsets = insets
     }
   }
 }
