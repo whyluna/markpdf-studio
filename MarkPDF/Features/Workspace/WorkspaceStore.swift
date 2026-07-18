@@ -12,10 +12,18 @@ final class WorkspaceStore: ObservableObject {
   @Published var selection: FileNode?
   /// 正在扫描（大文件夹时供 UI 显示进度）
   @Published private(set) var isLoading = false
+  /// 最近一次文件操作错误（视图据此弹 alert）
+  @Published var lastError: String?
 
+  /// 文件操作服务（FR-1.2；可注入 mock 测试）
+  private let ops: FileOperations
   /// 递归深度上限，防御符号链接环 / 异常目录
   private static let maxDepth = 12
   private var scanTask: Task<Void, Never>?
+
+  init(ops: FileOperations = LiveFileOperations()) {
+    self.ops = ops
+  }
 
   /// 弹出系统面板选择工作区文件夹
   func openFolderPanel() {
@@ -37,6 +45,146 @@ final class WorkspaceStore: ObservableObject {
     selection = nil
     isLoading = true
     Logger.workspace.info("打开工作区: \(url.path, privacy: .public)")
+    scan(url)
+  }
+
+  /// 重扫当前工作区（文件操作 / 外部变更后调用）；默认保留选中，可指定改选新 URL
+  func refresh(selecting selectURL: URL? = nil) {
+    guard let root else { return }
+    let keepURL = selectURL ?? selection?.id
+    scanTask?.cancel()
+    scan(root.id) { [weak self] in
+      guard let keepURL, let tree = self?.root else { return }
+      self?.selection = tree.find(keepURL)
+    }
+  }
+
+  /// 按 URL 查找当前树中的节点（拖拽落点解析）
+  func node(for url: URL) -> FileNode? {
+    root?.find(url)
+  }
+
+  // MARK: - 文件操作（FR-1.2）
+
+  /// 新建 Markdown 文件（唯一默认名，随后由视图进入行内命名）；返回新文件 URL
+  @discardableResult
+  func createMarkdown(in folder: URL, undo: UndoManager?) -> URL? {
+    let url = ops.uniqueFileURL(in: folder, baseName: "未命名", ext: "md")
+    do {
+      try ops.createFile(at: url)
+      refresh(selecting: url)
+      registerCreateUndo(url, undo: undo)
+      return url
+    } catch {
+      lastError = error.localizedDescription
+      return nil
+    }
+  }
+
+  /// 新建文件夹（唯一默认名）；返回新文件夹 URL
+  @discardableResult
+  func createFolder(in folder: URL, undo: UndoManager?) -> URL? {
+    let url = ops.uniqueFolderURL(in: folder, baseName: "未命名文件夹")
+    do {
+      try ops.createFolder(at: url)
+      refresh(selecting: url)
+      registerCreateUndo(url, undo: undo)
+      return url
+    } catch {
+      lastError = error.localizedDescription
+      return nil
+    }
+  }
+
+  /// 重命名；返回新 URL（失败为 nil）。撤销/重做随调用链自动注册
+  @discardableResult
+  func rename(_ node: FileNode, to newName: String, undo: UndoManager?) -> URL? {
+    do {
+      let newURL = try ops.rename(at: node.id, to: newName)
+      if newURL != node.id {
+        refresh(selecting: newURL)
+        undo?.registerUndo(withTarget: self) { target in
+          target.rename(FileNode(id: newURL, name: newURL.lastPathComponent, kind: node.kind), to: node.name, undo: undo)
+        }
+        undo?.setActionName("重命名")
+      }
+      return newURL
+    } catch {
+      lastError = error.localizedDescription
+      return nil
+    }
+  }
+
+  /// 移动到目标文件夹；返回新 URL（失败为 nil）
+  @discardableResult
+  func move(_ node: FileNode, toFolder folder: URL, undo: UndoManager?) -> URL? {
+    // 防御：文件夹不能移入自身或其后代
+    if node.isFolder {
+      let nodePath = node.id.path
+      if folder.path == nodePath || folder.path.hasPrefix(nodePath + "/") {
+        lastError = "不能移动到自身或其子文件夹内"
+        return nil
+      }
+    }
+    do {
+      let newURL = try ops.move(at: node.id, toFolder: folder)
+      if newURL != node.id {
+        refresh(selecting: newURL)
+        undo?.registerUndo(withTarget: self) { target in
+          target.move(
+            FileNode(id: newURL, name: node.name, kind: node.kind),
+            toFolder: node.id.deletingLastPathComponent(),
+            undo: undo
+          )
+        }
+        undo?.setActionName("移动")
+      }
+      return newURL
+    } catch {
+      lastError = error.localizedDescription
+      return nil
+    }
+  }
+
+  /// 移入系统废纸篓（可从废纸篓恢复；不注册 Cmd+Z，对齐 PRD 验收口径）
+  func trash(_ node: FileNode) {
+    do {
+      try ops.trash(at: node.id)
+      if selection == node { selection = nil }
+      refresh()
+    } catch {
+      lastError = error.localizedDescription
+    }
+  }
+
+  // MARK: - 撤销辅助
+
+  private func registerCreateUndo(_ url: URL, undo: UndoManager?) {
+    undo?.registerUndo(withTarget: self) { target in
+      target.trashCreated(url, undo: undo)
+    }
+    undo?.setActionName("新建")
+  }
+
+  /// 「新建」的撤销 = 入废纸篓；并注册重做
+  private func trashCreated(_ url: URL, undo: UndoManager?) {
+    try? ops.trash(at: url)
+    refresh()
+    undo?.registerUndo(withTarget: self) { target in
+      target.recreate(url, undo: undo)
+    }
+  }
+
+  private func recreate(_ url: URL, undo: UndoManager?) {
+    try? ops.createFile(at: url)
+    refresh(selecting: url)
+    undo?.registerUndo(withTarget: self) { target in
+      target.trashCreated(url, undo: undo)
+    }
+  }
+
+  private func scan(_ url: URL, completion: (() -> Void)? = nil) {
+    isLoading = true
     scanTask = Task.detached(priority: .userInitiated) { [weak self] in
       let tree = Self.scan(url: url, depth: 0)
       // 转强引用（let）：消除“并发代码捕获 var self”的 Swift 6 预警
@@ -44,6 +192,7 @@ final class WorkspaceStore: ObservableObject {
       await MainActor.run {
         self.root = tree
         self.isLoading = false
+        completion?()
       }
     }
   }

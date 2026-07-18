@@ -37,6 +37,18 @@ final class EditorStore: ObservableObject {
     }
   }
 
+  /// 打开的文件被重命名/移动：跟随更新标识（FR-1.2）
+  func fileDidMove(from oldURL: URL, to newURL: URL) {
+    guard currentFileURL == oldURL else { return }
+    currentFileURL = newURL
+  }
+
+  /// 打开的文件被移入废纸篓：转为草稿态、停止自动保存（内容保留在编辑器与废纸篓）
+  func fileWasTrashed(_ url: URL) {
+    guard currentFileURL == url else { return }
+    currentFileURL = nil
+  }
+
   /// 内核内容变更入口：更新文本并按需调度自动保存（FR-2.7）
   func contentDidChange(_ newText: String) {
     text = newText

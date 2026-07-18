@@ -62,4 +62,10 @@ struct FileNode: Identifiable, Hashable {
   func hash(into hasher: inout Hasher) {
     hasher.combine(id)
   }
+
+  /// 按 URL 递归查找节点（FR-1.2 拖拽落点解析 / 刷新后恢复选中）
+  func find(_ url: URL) -> FileNode? {
+    if id == url { return self }
+    return children?.lazy.compactMap { $0.find(url) }.first
+  }
 }
