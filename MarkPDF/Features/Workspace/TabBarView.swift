@@ -50,7 +50,8 @@ struct TabBarView: View {
     }
     .padding(.horizontal, 8)
     .padding(.top, 6)
-    .background(Color(nsColor: .underPageBackgroundColor))
+    // 与窗口工具栏同一 bar 材质，避免两种灰色与阴影叠出不协调感
+    .background(.bar)
     .overlay(alignment: .bottom) {
       Divider()
     }

@@ -18,19 +18,12 @@ struct FileTreeView: View {
     var draft: String
   }
 
-  /// 选中绑定：在事件阶段直接于当前标签组打开文件（FR-1.4）。
-  /// 不用 onChange + 异步——那会在视图更新途中改 @Published，
-  /// 触发 "Publishing changes from within view updates" 未定义行为。
-  private var selection: Binding<FileNode?> {
-    Binding(
-      get: { store.selection },
-      set: { node in
-        store.selection = node
-        if let node, node.kind != .folder {
-          tabStore.open(node)
-        }
-      }
-    )
+  /// 打开文件（行点击手势触发，事件阶段发布状态，合法无警告）。
+  /// 注意：不要用 List(selection:) 绑定驱动——macOS 上该绑定在视图更新途中写回，
+  /// 追加发布会被 "Publishing changes from within view updates" 吞掉（文件打不开）。
+  private func open(_ node: FileNode) {
+    store.selection = node
+    tabStore.open(node)
   }
 
   var body: some View {
@@ -72,10 +65,9 @@ struct FileTreeView: View {
           .padding()
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
-        List(selection: selection) {
+        List {
           OutlineGroup(root.children ?? [], children: \.children) { node in
             rowContent(node)
-              .tag(node)
           }
         }
         .listStyle(.sidebar)
@@ -91,6 +83,15 @@ struct FileTreeView: View {
       Label(node.name, systemImage: node.iconName)
         .lineLimit(1)
         .truncationMode(.middle)
+        // 选中高亮（手动管理，替代 List selection）
+        .foregroundStyle(store.selection == node ? Color.accentColor : .primary)
+        .listRowBackground(
+          store.selection == node ? Color.accentColor.opacity(0.15) : Color.clear
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+          if !node.isFolder { open(node) }
+        }
         .contextMenu { nodeMenu(node) }
         .onDrag { NSItemProvider(object: node.id as NSURL) }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in

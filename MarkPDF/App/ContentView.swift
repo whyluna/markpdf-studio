@@ -36,21 +36,6 @@ struct ContentView: View {
       tabArea
         .frame(minWidth: 480)
         .toolbar {
-          ToolbarItem(placement: .navigation) {
-            if let store = tabStore.activeEditorStore, let fileURL = store.currentFileURL {
-              HStack(spacing: 6) {
-                Text(fileURL.lastPathComponent)
-                  .font(.headline)
-                  .foregroundStyle(.secondary)
-                if store.hasUnsavedChanges {
-                  Circle()
-                    .fill(Color.orange)
-                    .frame(width: 6, height: 6)
-                    .help("有未落盘的改动")
-                }
-              }
-            }
-          }
           ToolbarItem(placement: .principal) {
             if let store = tabStore.activeEditorStore {
               Picker("编辑模式", selection: Binding(
@@ -70,7 +55,7 @@ struct ContentView: View {
             Button {
               tabStore.toggleSplit()
             } label: {
-              Image(systemName: tabStore.isSplit ? "rectangle.split2x1.fill" : "rectangle.split2x1")
+              Image(systemName: tabStore.isSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
             }
             .help(tabStore.isSplit ? "合并为单栏" : "左右分栏")
           }
