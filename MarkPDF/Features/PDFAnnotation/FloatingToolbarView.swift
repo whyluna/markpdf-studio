@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// 划词浮动工具条（FR-4.1）：高亮 / 下划线 / 删除线 / 波浪线。
+/// 划词浮动工具条（FR-4.1）：高亮 / 下划线 / 删除线。
 /// 视觉对齐设计稿 .tbtn：28px 按钮、胶囊底、分隔线。
+/// 观察 Store：色板（FR-4.4）改动后按钮上的用色预览点实时同步。
 struct FloatingToolbarView: View {
-  /// 当前颜色（预览点）
-  let colorsByKind: [AnnotationKind: AnnotationColor]
+  @ObservedObject var store: PDFAnnotationStore
   let onApply: (AnnotationKind) -> Void
   @State private var hoveredKind: AnnotationKind?
 
@@ -25,7 +25,7 @@ struct FloatingToolbarView: View {
               .font(.system(size: 13))
               .foregroundStyle(.primary)
             Circle()
-              .fill(colorsByKind[tool.kind]?.nsColor.swiftUI ?? .clear)
+              .fill(store.colorsByKind[tool.kind]?.nsColor.swiftUI ?? .clear)
               .frame(width: 5, height: 5)
               .offset(x: 2, y: 2)
           }
@@ -64,14 +64,6 @@ private extension NSColor {
 }
 
 #Preview {
-  FloatingToolbarView(
-    colorsByKind: [
-      .highlight: .yellow,
-      .underline: .blue,
-      .strikeOut: .red,
-      .squiggly: .green,
-    ],
-    onApply: { _ in }
-  )
-  .padding(20)
+  FloatingToolbarView(store: PDFAnnotationStore(), onApply: { _ in })
+    .padding(20)
 }

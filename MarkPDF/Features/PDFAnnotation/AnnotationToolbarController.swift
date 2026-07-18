@@ -1,3 +1,4 @@
+import Combine
 import os
 import PDFKit
 import SwiftUI
@@ -12,13 +13,15 @@ final class AnnotationToolbarController: NSObject {
   private let store: PDFAnnotationStore
   private var hostingView: NSHostingView<FloatingToolbarView>?
   private var mouseUpMonitor: Any?
+  private var keyMonitor: Any?
+  private var toolCancellable: AnyCancellable?
 
   init(pdfView: PDFView, store: PDFAnnotationStore) {
     self.pdfView = pdfView
     self.store = store
     super.init()
 
-    let toolbar = FloatingToolbarView(colorsByKind: store.colorsByKind) { [weak self] kind in
+    let toolbar = FloatingToolbarView(store: store) { [weak self] kind in
       self?.apply(kind: kind)
     }
     let hosting = NSHostingView(rootView: toolbar)
@@ -41,6 +44,19 @@ final class AnnotationToolbarController: NSObject {
     let click = NSClickGestureRecognizer(target: self, action: #selector(handleClick(_:)))
     click.delaysPrimaryMouseButtonEvents = false
     pdfView.addGestureRecognizer(click)
+    // Esc 退出激活的标注工具（FR-4.4）；不吞事件，查找栏等照常响应
+    keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      if event.keyCode == 53, self?.store.activeTool != nil {
+        self?.store.activeTool = nil
+      }
+      return event
+    }
+    // 工具激活时收起浮动工具条（进入划词即标模式）
+    toolCancellable = store.$activeTool.sink { [weak self] tool in
+      if tool != nil {
+        self?.hide()
+      }
+    }
   }
 
   deinit {
@@ -48,6 +64,10 @@ final class AnnotationToolbarController: NSObject {
     if let mouseUpMonitor {
       NSEvent.removeMonitor(mouseUpMonitor)
     }
+    if let keyMonitor {
+      NSEvent.removeMonitor(keyMonitor)
+    }
+    toolCancellable?.cancel()
   }
 
   // MARK: - 弹出与隐藏
@@ -62,6 +82,11 @@ final class AnnotationToolbarController: NSObject {
   private func revealIfSelection() {
     guard let pdfView, let selection = pdfView.currentSelection, !selection.pages.isEmpty else {
       hide()
+      return
+    }
+    // 工具栏标注工具激活中（FR-4.4）：划词即标，不再弹出浮动工具条
+    if let tool = store.activeTool {
+      apply(kind: tool)
       return
     }
     show(above: selection)

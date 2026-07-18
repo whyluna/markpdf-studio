@@ -37,7 +37,10 @@ struct ContentView: View {
         .frame(minWidth: 480)
         .toolbar {
           ToolbarItem(placement: .principal) {
-            if let store = tabStore.activeEditorStore {
+            if tabStore.activeGroup.activeTab?.kind == .pdf {
+              // PDF 标注工具组（FR-4.4，对齐设计稿 #pdfTools）
+              PDFToolsView()
+            } else if let store = tabStore.activeEditorStore {
               Picker("编辑模式", selection: Binding(
                 get: { store.mode },
                 set: { store.mode = $0 }

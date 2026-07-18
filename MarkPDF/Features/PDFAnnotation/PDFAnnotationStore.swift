@@ -9,22 +9,36 @@ final class PDFAnnotationStore: ObservableObject {
   @Published private(set) var currentFileURL: URL?
   /// 当前选中的标注工具（nil = 仅阅读/选择文本）
   @Published var activeTool: AnnotationKind?
-  /// 各标注类型最近用色（FR-4.4；初始为各类型默认色，变更后持久化）
+  /// 各标注类型最近用色（FR-4.4；初始为各类型默认色，变更后持久化到 UserDefaults）
   @Published var colorsByKind: [AnnotationKind: AnnotationColor]
+  /// 色板当前作用的标注类型（FR-4.4：选中工具时跟随切换）
+  @Published var paletteKind: AnnotationKind = .highlight
   /// 有未写回的标注改动
   @Published private(set) var hasUnsavedChanges = false
 
   private let writer: AnnotationWriter
+  private let defaults: UserDefaults
   private let debouncer = Debouncer(interval: 0.5)
   private weak var document: PDFDocument?
 
-  init(writer: AnnotationWriter = LiveAnnotationWriter()) {
+  init(writer: AnnotationWriter = LiveAnnotationWriter(), defaults: UserDefaults = .standard) {
     self.writer = writer
+    self.defaults = defaults
     var colors: [AnnotationKind: AnnotationColor] = [:]
     for kind in AnnotationKind.allCases {
-      colors[kind] = AnnotationColor.default(for: kind)
+      if let raw = defaults.string(forKey: Self.colorKey(for: kind)),
+        let saved = AnnotationColor(rawValue: raw)
+      {
+        colors[kind] = saved
+      } else {
+        colors[kind] = AnnotationColor.default(for: kind)
+      }
     }
     colorsByKind = colors
+  }
+
+  private static func colorKey(for kind: AnnotationKind) -> String {
+    "annotationColor.\(kind.rawValue)"
   }
 
   /// 关联当前文档（打开/切换 PDF 时调用）
@@ -55,9 +69,10 @@ final class PDFAnnotationStore: ObservableObject {
     markDirty()
   }
 
-  /// 记录某类型最近用色（FR-4.4 记忆）
+  /// 记录某类型最近用色并持久化（FR-4.4 记忆）
   func remember(color: AnnotationColor, for kind: AnnotationKind) {
     colorsByKind[kind] = color
+    defaults.set(color.rawValue, forKey: Self.colorKey(for: kind))
   }
 
   // MARK: - 写回调度（FR-4.6）
