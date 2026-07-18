@@ -53,10 +53,6 @@ struct ContentView: View {
       ContentPlaceholder(title: "面板", subtitle: "大纲 · 缩略图 · 标注")
         .frame(minWidth: 266)
     }
-    .onChange(of: workspaceStore.selection) { node in
-      guard let node, node.kind == .markdown else { return }
-      editorStore.loadFile(node.id)
-    }
     // 退出前兜底落盘（FR-2.7）
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
       editorStore.flushPendingSave()

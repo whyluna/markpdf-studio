@@ -55,6 +55,8 @@ struct MarkdownEditorView: NSViewRepresentable {
 
   func makeNSView(context: Context) -> WKWebView {
     let configuration = WKWebViewConfiguration()
+    // 内核为本地静态资源，无需持久化缓存；非持久数据存储避免旧 bundle 缓存干扰开发迭代
+    configuration.websiteDataStore = .nonPersistent()
     let webView = WKWebView(frame: .zero, configuration: configuration)
     // 背景交给内核 CSS（明暗主题），避免白闪
     webView.setValue(false, forKey: "drawsBackground")
@@ -67,10 +69,10 @@ struct MarkdownEditorView: NSViewRepresentable {
         coordinator?.kernelDidReady()
       }
     }
-    bridge.on("editor.contentChanged") { [weak self] payload, _ in
+    bridge.on("editor.contentChanged") { [weak coordinator = context.coordinator] payload, _ in
       guard let text = payload["text"] as? String else { return }
       Task { @MainActor in
-        self?.onContentChanged?(text)
+        coordinator?.contentDidChange(text)
       }
     }
 
@@ -78,7 +80,10 @@ struct MarkdownEditorView: NSViewRepresentable {
       Logger.editor.fault("缺少内核页面 index.html（先执行 npm run build，并确认 Web/dist 已加入 target）")
       return webView
     }
-    webView.loadFileURL(pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
+    // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）
+    var appPage = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)
+    appPage?.query = "app=1"
+    webView.loadFileURL(appPage?.url ?? pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
     return webView
   }
 
@@ -132,6 +137,11 @@ extension MarkdownEditorView {
         bridge.notify("editor.setTheme", payload: ["theme": parent.theme.rawValue])
         lastPushedTheme = parent.theme
       }
+    }
+
+    /// 内核内容变更：转发给宿主回调（自动保存挂钩，FR-2.7）
+    func contentDidChange(_ text: String) {
+      parent.onContentChanged?(text)
     }
 
     /// 外部载入新文档（打开文件时使用）；整体替换内容，不打断内核撤销栈之外的编辑

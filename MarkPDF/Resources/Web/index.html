@@ -40,10 +40,11 @@ body{display:flex;flex-direction:column}
 #editor{flex:1;overflow:hidden}
 
 /* ---------- 所见即所得装饰样式 ---------- */
-.cm-h1{font-size:27px;font-weight:700;border-bottom:1px solid var(--border);padding-bottom:8px;margin:4px 0}
-.cm-h2{font-size:20px;font-weight:650;margin:18px 0 2px}
-.cm-h3{font-size:17px;font-weight:600;margin:12px 0 2px}
-.cm-h4,.cm-h5,.cm-h6{font-size:15.5px;font-weight:600;margin:8px 0 2px}
+/* CM6 行元素禁止垂直 margin（不计入 offsetHeight，会造成坐标映射累积漂移），垂直间距一律用 padding */
+.cm-h1{font-size:27px;font-weight:700;border-bottom:1px solid var(--border);padding:4px 0 8px}
+.cm-h2{font-size:20px;font-weight:650;padding:18px 0 2px}
+.cm-h3{font-size:17px;font-weight:600;padding:12px 0 2px}
+.cm-h4,.cm-h5,.cm-h6{font-size:15.5px;font-weight:600;padding:8px 0 2px}
 .cm-strong{font-weight:650}
 .cm-em{font-style:italic}
 .cm-strike{text-decoration:line-through;color:var(--text2)}
@@ -58,18 +59,36 @@ body{display:flex;flex-direction:column}
   border-left:3px solid var(--accent);background:var(--code-bg);
   color:var(--text2);padding-left:14px;
 }
-.cm-codeblock-line{font-family:var(--mono);font-size:13px;line-height:1.65;background:var(--code-bg)}
-.cm-fence-badge{
-  display:block;text-align:right;font-family:var(--mono);font-size:11px;
-  color:var(--text3);background:var(--code-bg);padding:4px 10px 2px;
+/* 代码块：圆角盒子（对齐设计稿 .codeblock）。行元素禁用垂直 margin，间距走 padding */
+.cm-codeblock-line{
+  font-family:var(--mono);font-size:13px;line-height:1.65;background:var(--code-bg);
+  border-left:1px solid var(--border);border-right:1px solid var(--border);
+  padding-left:16px;padding-right:16px;
 }
-.cm-fence-end{display:block;height:3px;background:var(--code-bg)}
+/* 首行底边框即顶栏分隔线（贯通盒子宽度，编辑态下 fence 行同样成立） */
+.cm-codeblock-first{
+  border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+  border-radius:10px 10px 0 0;padding-top:8px;
+}
+.cm-codeblock-last{border-bottom:1px solid var(--border);border-radius:0 0 10px 10px;padding-bottom:8px}
+/* 语言徽标顶栏：左对齐小字（对齐设计稿 cb-h） */
+.cm-fence-badge{
+  display:block;text-align:left;font-family:var(--mono);font-size:11.5px;
+  line-height:1.4;color:var(--text3);padding-bottom:6px;
+}
+.cm-fence-end{display:block;height:6px}
 .cm-task-checkbox{
   width:15px;height:15px;margin-right:7px;accent-color:var(--accent);
   vertical-align:-2px;cursor:pointer;
 }
-.cm-hr{display:block;width:100%;border-top:1px solid var(--border);height:0;margin-top:4px}
+.cm-hr{display:block;width:100%;border-top:1px solid var(--border);height:0;padding-top:4px}
 .cm-table-line{font-family:var(--mono);font-size:13.5px}
+/* 渲染态表格（对齐设计稿 .mdwrap table；Widget 根元素用 padding 代替垂直 margin） */
+.cm-table-widget{padding:8px 0;overflow-x:auto;cursor:default}
+.cm-table-widget table{width:100%;border-collapse:collapse;font-size:14px}
+.cm-table-widget th,.cm-table-widget td{border:1px solid var(--border);padding:8px 12px;text-align:left}
+.cm-table-widget th{background:var(--code-bg);font-weight:600}
+.cm-table-widget tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--code-bg) 45%,transparent)}
 </style>
 </head>
 <body>

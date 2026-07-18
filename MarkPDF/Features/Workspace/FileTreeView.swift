@@ -3,6 +3,22 @@ import SwiftUI
 /// 工作区文件树侧栏（FR-1.1）：工作区头部 + 可展开树 + 空状态引导。
 struct FileTreeView: View {
   @EnvironmentObject private var store: WorkspaceStore
+  @EnvironmentObject private var editorStore: EditorStore
+
+  /// 选中绑定：在事件阶段直接触发文件加载。
+  /// 不用 onChange + 异步——那会在视图更新途中改 @Published，
+  /// 触发 "Publishing changes from within view updates" 未定义行为。
+  private var selection: Binding<FileNode?> {
+    Binding(
+      get: { store.selection },
+      set: { node in
+        store.selection = node
+        if let node, node.kind == .markdown {
+          editorStore.loadFile(node.id)
+        }
+      }
+    )
+  }
 
   var body: some View {
     Group {
@@ -32,7 +48,7 @@ struct FileTreeView: View {
           .padding()
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
-        List(selection: $store.selection) {
+        List(selection: selection) {
           OutlineGroup(root.children ?? [], children: \.children) { node in
             Label(node.name, systemImage: node.iconName)
               .lineLimit(1)
@@ -86,4 +102,5 @@ struct FileTreeView: View {
 #Preview {
   FileTreeView()
     .environmentObject(WorkspaceStore())
+    .environmentObject(EditorStore())
 }

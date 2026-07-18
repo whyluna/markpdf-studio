@@ -90,7 +90,13 @@ final class WebBridge: NSObject {
     DispatchQueue.main.async { [weak self] in
       self?.webView?.evaluateJavaScript("window.bridge.receive(\(json))") { _, error in
         if let error {
-          Logger.editor.error("bridge 发送失败: \(error.localizedDescription)")
+          // WKError userInfo 里有 JS 异常详情（message/行号），比 localizedDescription 有用得多
+          let info = (error as NSError).userInfo
+          let msg = info["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+          let line = info["WKJavaScriptExceptionLineNumber"] as? Int ?? 0
+          let column = info["WKJavaScriptExceptionColumnNumber"] as? Int ?? 0
+          let typeName = envelope["type"] as? String ?? "?"
+          Logger.editor.error("bridge 发送失败[\(typeName)]: \(msg, privacy: .public) (line \(line):\(column))")
         }
       }
     }

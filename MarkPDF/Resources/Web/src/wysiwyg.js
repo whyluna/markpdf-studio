@@ -1,8 +1,8 @@
 // 所见即所得装饰层（FR-2.1）
 // 原理：解析 lezer markdown 语法树，对「光标不在场」的语法标记施加隐藏/替换装饰，
 // 对块级结构施加行样式；光标进入对应行/块时撤销装饰，显露源码（Typora 式手感）。
-import { EditorView, ViewPlugin, Decoration, WidgetType } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import { EditorView, Decoration, WidgetType } from "@codemirror/view";
+import { RangeSetBuilder, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 
 /* ---------- 小部件 ---------- */
@@ -76,6 +76,75 @@ class HRWidget extends WidgetType {
   }
 }
 
+// 渲染态表格（FR-2.3）：光标在表格外时整体替换为 HTML 表格；点击进入源码编辑
+class TableWidget extends WidgetType {
+  constructor(model, source) {
+    super();
+    this.model = model; // { header: [segs], rows: [[segs]], rowStarts: [pos] }
+    this.source = source; // 表格源码文本，用于 eq 去重
+  }
+  eq(o) {
+    return o.source === this.source;
+  }
+  toDOM(view) {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-table-widget";
+    const table = document.createElement("table");
+
+    const appendSegs = (cellEl, segs) => {
+      for (const seg of segs) {
+        const el = document.createElement("span");
+        el.textContent = seg.text;
+        if (seg.marks.includes("b")) el.style.fontWeight = "650";
+        if (seg.marks.includes("i")) el.style.fontStyle = "italic";
+        if (seg.marks.includes("s")) el.style.textDecoration = "line-through";
+        if (seg.marks.includes("c")) el.className = "cm-inline-code";
+        if (seg.marks.includes("a")) el.className = "cm-link";
+        cellEl.appendChild(el);
+      }
+    };
+
+    const thead = document.createElement("thead");
+    const htr = document.createElement("tr");
+    htr.dataset.row = 0;
+    for (const segs of this.model.header) {
+      const th = document.createElement("th");
+      appendSegs(th, segs);
+      htr.appendChild(th);
+    }
+    thead.appendChild(htr);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    this.model.rows.forEach((row, i) => {
+      const tr = document.createElement("tr");
+      tr.dataset.row = i + 1;
+      for (const segs of row) {
+        const td = document.createElement("td");
+        appendSegs(td, segs);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+
+    // 点击某行 → 光标落入对应源码行，表格显露源码进入编辑
+    wrap.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const tr = e.target.closest("tr");
+      const idx = tr ? Number(tr.dataset.row) : this.model.rowStarts.length - 1;
+      const pos = this.model.rowStarts[Math.min(idx, this.model.rowStarts.length - 1)];
+      view.dispatch({ selection: { anchor: pos } });
+      view.focus();
+    });
+    return wrap;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
 /* ---------- 工具 ---------- */
 
 // 选区是否触及 [from, to]
@@ -103,10 +172,63 @@ const headingClass = {
   SetextHeading2: "cm-h2",
 };
 
+/* ---------- 表格模型解析 ---------- */
+
+// 单元格内联内容 → 带样式片段（marks: b=粗 i=斜 s=删 c=行内代码 a=链接）
+function cellSegments(state, cell) {
+  const segs = [];
+  const emit = (f, t, marks) => {
+    if (f < t) segs.push({ text: state.doc.sliceString(f, t), marks });
+  };
+  const SKIP = new Set(["EmphasisMark", "CodeMark", "StrikethroughMark", "LinkMark", "URL"]);
+  const walk = (node, marks) => {
+    if (SKIP.has(node.name)) return;
+    let m = marks;
+    if (node.name === "StrongEmphasis") m += "b";
+    else if (node.name === "Emphasis") m += "i";
+    else if (node.name === "Strikethrough") m += "s";
+    else if (node.name === "InlineCode") m += "c";
+    else if (node.name === "Link") m += "a";
+    let pos = node.from;
+    for (let c = node.firstChild; c; c = c.nextSibling) {
+      emit(pos, c.from, m); // 命名节点之间的间隙是纯文本
+      walk(c, m);
+      pos = c.to;
+    }
+    emit(pos, node.to, m);
+  };
+  let pos = cell.from;
+  for (let c = cell.firstChild; c; c = c.nextSibling) {
+    emit(pos, c.from, "");
+    walk(c, "");
+    pos = c.to;
+  }
+  emit(pos, cell.to, "");
+  return segs;
+}
+
+// 遍历 Table 节点，提取表头/数据行单元格与各行源码起始偏移；解析失败返回 null（降级源码样式）
+function buildTableModel(state, tableNode) {
+  const header = [];
+  const rows = [];
+  const rowStarts = [];
+  for (let child = tableNode.firstChild; child; child = child.nextSibling) {
+    if (child.name !== "TableHeader" && child.name !== "TableRow") continue;
+    const cells = [];
+    for (let cell = child.firstChild; cell; cell = cell.nextSibling) {
+      if (cell.name === "TableCell") cells.push(cellSegments(state, cell));
+    }
+    rowStarts.push(state.doc.lineAt(child.from).from);
+    if (child.name === "TableHeader") header.push(...cells);
+    else rows.push(cells);
+  }
+  if (header.length === 0) return null;
+  return { header, rows, rowStarts };
+}
+
 /* ---------- 装饰构建 ---------- */
 
-function buildDecorations(view, alwaysRender) {
-  const state = view.state;
+function buildDecorations(state, alwaysRender) {
   const decos = [];
   const addMark = (from, to, cls) => {
     if (from < to) decos.push({ from, to, deco: Decoration.mark({ class: cls }) });
@@ -196,7 +318,11 @@ function buildDecorations(view, alwaysRender) {
           const firstLine = state.doc.lineAt(from);
           const lastLine = state.doc.lineAt(Math.max(from, to - 1));
           for (let n = firstLine.number; n <= lastLine.number; n++) {
-            addLine(state.doc.line(n).from, "cm-codeblock-line");
+            // 首/末行附加类：盒子圆角与上下内边距（编辑态 fence 行可见时也是完整盒子）
+            let cls = "cm-codeblock-line";
+            if (n === firstLine.number) cls += " cm-codeblock-first";
+            if (n === lastLine.number) cls += " cm-codeblock-last";
+            addLine(state.doc.line(n).from, cls);
           }
           if (!isRangeActive(from, to) && lastLine.number > firstLine.number) {
             // 取语言标识
@@ -211,10 +337,22 @@ function buildDecorations(view, alwaysRender) {
         }
 
         case "Table": {
-          // v0.1：等宽 + 源码可见；表格所见即所得（Typora 式）排期 FR-2.3 后续迭代
           const first = state.doc.lineAt(from).number;
           const last = state.doc.lineAt(to).number;
-          for (let n = first; n <= last; n++) addLine(state.doc.line(n).from, "cm-table-line");
+          // 光标在表格内，或嵌套于引用/列表等块内 → 等宽源码（编辑态/降级）
+          const nested = !!node.node.parent && node.node.parent.name !== "Document";
+          const model = !isRangeActive(from, to) && !nested ? buildTableModel(state, node.node) : null;
+          if (model) {
+            // 离块即渲染：整体替换为 HTML 表格（块级 Widget，范围按行边界对齐）
+            const source = state.doc.sliceString(from, to);
+            decos.push({
+              from: state.doc.line(first).from,
+              to: state.doc.line(last).to,
+              deco: Decoration.replace({ widget: new TableWidget(model, source), block: true }),
+            });
+          } else {
+            for (let n = first; n <= last; n++) addLine(state.doc.line(n).from, "cm-table-line");
+          }
           return false;
         }
 
@@ -246,26 +384,24 @@ function buildDecorations(view, alwaysRender) {
 }
 
 /**
- * 所见即所得插件
+ * 所见即所得装饰
  * @param {boolean} alwaysRender true=阅读模式：全部渲染、永不显露源码
+ *
+ * 注意：块级装饰（表格 Widget 的 block replace）不允许经由 ViewPlugin 提供
+ * （CM6 抛 "Block decorations may not be specified via plugins"），
+ * 必须通过 StateField + EditorView.decorations.from 走状态侧通道。
  */
 export function wysiwyg(alwaysRender) {
-  return ViewPlugin.fromClass(
-    class {
-      constructor(view) {
-        this.decorations = buildDecorations(view, alwaysRender);
-      }
-      update(u) {
-        if (
-          u.docChanged ||
-          u.selectionSet ||
-          u.viewportChanged ||
-          syntaxTree(u.state) !== syntaxTree(u.startState)
-        ) {
-          this.decorations = buildDecorations(u.view, alwaysRender);
-        }
-      }
+  return StateField.define({
+    create(state) {
+      return buildDecorations(state, alwaysRender);
     },
-    { decorations: (v) => v.decorations }
-  );
+    update(deco, tr) {
+      if (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
+        return buildDecorations(tr.state, alwaysRender);
+      }
+      return deco;
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
 }

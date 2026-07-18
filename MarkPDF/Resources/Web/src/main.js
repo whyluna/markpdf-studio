@@ -3,7 +3,7 @@ import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxHighlighting, HighlightStyle, LanguageDescription, StreamLanguage } from "@codemirror/language";
+import { syntaxHighlighting, HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
 // 自定义高亮：代码块 token 配色走 CSS 变量（随明暗主题切换）；
@@ -38,13 +38,15 @@ const codeLanguages = [
   LanguageDescription.of({ name: "typescript", alias: ["ts", "tsx"], support: javascript({ typescript: true }) }),
   LanguageDescription.of({ name: "json", support: json() }),
   LanguageDescription.of({ name: "yaml", alias: ["yml"], support: yaml() }),
-  LanguageDescription.of({ name: "bash", alias: ["sh", "shell", "zsh"], support: StreamLanguage.define(shell) }),
+  // 注意：support 必须是 LanguageSupport（lang-markdown 取 support.language.parser），
+  // StreamLanguage 需显式包裹，否则解析该语言代码块时崩溃
+  LanguageDescription.of({ name: "bash", alias: ["sh", "shell", "zsh"], support: new LanguageSupport(StreamLanguage.define(shell)) }),
   LanguageDescription.of({ name: "c", support: cpp() }),
   LanguageDescription.of({ name: "cpp", alias: ["c++"], support: cpp() }),
   LanguageDescription.of({ name: "java", support: java() }),
   LanguageDescription.of({ name: "rust", alias: ["rs"], support: rust() }),
-  LanguageDescription.of({ name: "go", alias: ["golang"], support: StreamLanguage.define(go) }),
-  LanguageDescription.of({ name: "swift", support: StreamLanguage.define(swift) }),
+  LanguageDescription.of({ name: "go", alias: ["golang"], support: new LanguageSupport(StreamLanguage.define(go)) }),
+  LanguageDescription.of({ name: "swift", support: new LanguageSupport(StreamLanguage.define(swift)) }),
   LanguageDescription.of({ name: "sql", support: sql() }),
   LanguageDescription.of({ name: "html", support: html() }),
   LanguageDescription.of({ name: "css", support: css() }),
@@ -101,6 +103,7 @@ const view = new EditorView({
       markdown({ base: markdownLanguage, codeLanguages }),
       syntaxHighlighting(mdHighlight),
       baseTheme,
+      EditorView.lineWrapping,
       placeholder("开始输入 Markdown…"),
       modeConf.of(modeExtension("wysiwyg")),
       EditorView.updateListener.of((u) => {
@@ -146,3 +149,6 @@ Bridge.onMessage("editor.insertAtCursor", (p) => {
 });
 
 Bridge.notify("editor.ready", { version: "0.1.0" });
+
+// 调试句柄：供 native 探针/浏览器控制台诊断坐标映射（不影响功能）
+window.__cmView = view;

@@ -6,5 +6,8 @@
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<!-- WKWebView 必需：WebContent 进程需与 Networking 进程通信，缺少会导致 Web 进程无法启动（页面空白） -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 </dict>
 </plist>
