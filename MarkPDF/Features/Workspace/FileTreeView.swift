@@ -65,40 +65,75 @@ struct FileTreeView: View {
           .padding()
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
-        List {
-          OutlineGroup(root.children ?? [], children: \.children) { node in
-            rowContent(node)
+        // 自绘递归树：文件夹行整行点击展开/收起，文件行任意位置点击打开
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 0) {
+            treeRows(root.children ?? [], depth: 0)
           }
+          .padding(.vertical, 4)
         }
-        .listStyle(.sidebar)
       }
     }
   }
 
   @ViewBuilder
-  private func rowContent(_ node: FileNode) -> some View {
-    if naming?.node == node {
-      namingField
-    } else {
-      Label(node.name, systemImage: node.iconName)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        // 整行可点：Label 撑满行宽后再接管点击
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // 选中高亮（手动管理，替代 List selection）
-        .foregroundStyle(store.selection == node ? Color.accentColor : .primary)
-        .listRowBackground(
-          store.selection == node ? Color.accentColor.opacity(0.15) : Color.clear
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
-          if !node.isFolder { open(node) }
+  private func treeRows(_ nodes: [FileNode], depth: Int) -> some View {
+    ForEach(nodes) { node in
+      VStack(alignment: .leading, spacing: 0) {
+        rowContent(node, depth: depth)
+        if node.isFolder, !store.collapsedFolders.contains(node.id) {
+          // AnyView 擦除类型：递归 some View 无法自我推断
+          AnyView(treeRows(node.children ?? [], depth: depth + 1))
         }
-        .contextMenu { nodeMenu(node) }
-        .onDrag { NSItemProvider(object: node.id as NSURL) }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-          node.isFolder ? handleDrop(providers, toFolder: node) : false
-        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func rowContent(_ node: FileNode, depth: Int) -> some View {
+    HStack(spacing: 4) {
+      // 文件夹雪佛龙（点击行任意位置均可展开/收起）
+      if node.isFolder {
+        Image(systemName: "chevron.right")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(.secondary)
+          .rotationEffect(.degrees(store.collapsedFolders.contains(node.id) ? 0 : 90))
+          .frame(width: 12)
+      } else {
+        Spacer()
+          .frame(width: 12)
+      }
+      if naming?.node == node {
+        namingField
+      } else {
+        Label(node.name, systemImage: node.iconName)
+          .lineLimit(1)
+          .truncationMode(.middle)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(.leading, 8 + CGFloat(depth) * 14)
+    .padding(.trailing, 8)
+    .padding(.vertical, 4.5)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .foregroundStyle(store.selection == node ? Color.accentColor : .primary)
+    .background(
+      RoundedRectangle(cornerRadius: 6)
+        .fill(store.selection == node ? Color.accentColor.opacity(0.15) : Color.clear)
+    )
+    .contentShape(Rectangle())
+    .onTapGesture {
+      guard naming?.node != node else { return }
+      if node.isFolder {
+        store.toggleFolderCollapsed(node.id)
+      } else {
+        open(node)
+      }
+    }
+    .contextMenu { nodeMenu(node) }
+    .onDrag { NSItemProvider(object: node.id as NSURL) }
+    .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+      node.isFolder ? handleDrop(providers, toFolder: node) : false
     }
   }
 

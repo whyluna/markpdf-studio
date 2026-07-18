@@ -16,6 +16,17 @@ final class WorkspaceStore: ObservableObject {
   @Published var lastError: String?
   /// 快速打开面板（FR-6.1 ⌘P）是否展示
   @Published var isQuickOpenPresented = false
+  /// 折叠的文件夹（FR-1.1 树展开态；默认全部展开，点击文件夹行切换，重扫后按 URL 保留）
+  @Published var collapsedFolders: Set<URL> = []
+
+  /// 点击文件夹行：切换展开/收起
+  func toggleFolderCollapsed(_ url: URL) {
+    if collapsedFolders.contains(url) {
+      collapsedFolders.remove(url)
+    } else {
+      collapsedFolders.insert(url)
+    }
+  }
 
   /// 文件操作服务（FR-1.2；可注入 mock 测试）
   private let ops: FileOperations
