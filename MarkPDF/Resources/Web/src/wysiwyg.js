@@ -4,6 +4,7 @@
 import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { RangeSetBuilder, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
+import { docContext } from "./doccontext.js";
 
 /* ---------- 小部件 ---------- */
 
@@ -73,6 +74,37 @@ class HRWidget extends WidgetType {
     const el = document.createElement("span");
     el.className = "cm-hr";
     return el;
+  }
+}
+
+// 渲染态图片（FR-2.3）：光标不在行内时把 ![alt](src) 替换为真实图片
+class ImageWidget extends WidgetType {
+  constructor(src, alt) {
+    super();
+    this.src = src; // 已解析为 markpdf-file:// 绝对地址
+    this.alt = alt;
+  }
+  eq(o) {
+    return o.src === this.src && o.alt === this.alt;
+  }
+  toDOM() {
+    if (!this.src) {
+      const span = document.createElement("span");
+      span.className = "cm-image-broken";
+      span.textContent = `🖼 ${this.alt || "图片"}（草稿暂不支持相对路径图片）`;
+      return span;
+    }
+    const img = document.createElement("img");
+    img.className = "cm-rendered-image";
+    img.src = this.src;
+    img.alt = this.alt;
+    img.onerror = () => {
+      const span = document.createElement("span");
+      span.className = "cm-image-broken";
+      span.textContent = `🖼 图片加载失败：${this.alt || this.src}`;
+      img.replaceWith(span);
+    };
+    return img;
   }
 }
 
@@ -207,6 +239,20 @@ function cellSegments(state, cell) {
   return segs;
 }
 
+// 图片 src 解析（FR-2.3）：相对路径按文档目录解析为 markpdf-file:// 绝对地址
+// （WKWebView 沙盒无法直接读工作区文件，走自定义协议由 native 供给）；
+// http(s)/data:/blob: 原样返回；无基准目录（草稿）返回 null 触发降级提示
+function resolveImageURL(src) {
+  if (/^(https?:|data:|blob:)/i.test(src)) return src;
+  if (!docContext.baseURL) return null;
+  try {
+    const abs = new URL(src, docContext.baseURL);
+    return "markpdf-file://" + abs.host + abs.pathname;
+  } catch {
+    return null;
+  }
+}
+
 // 遍历 Table 节点，提取表头/数据行单元格与各行源码起始偏移；解析失败返回 null（降级源码样式）
 function buildTableModel(state, tableNode) {
   const header = [];
@@ -287,10 +333,32 @@ function buildDecorations(state, alwaysRender) {
           addMark(from, to, "cm-inline-code");
           return;
 
-        case "Link":
-        case "Image": {
+        case "Link": {
           // 隐藏 [ ] ( ) 与 URL，仅保留带样式的链接文字
-          addMark(from, to, name === "Link" ? "cm-link" : "cm-image");
+          addMark(from, to, "cm-link");
+          for (let c = node.node.firstChild; c; c = c.nextSibling) {
+            if ((c.name === "LinkMark" || c.name === "URL") && !isLineActive(c.from)) {
+              addHide(c.from, c.to);
+            }
+          }
+          return false;
+        }
+
+        case "Image": {
+          // 光标不在行内 → 替换为真实图片（FR-2.3）；在场或无 src → 退化隐藏标记
+          if (!isLineActive(from)) {
+            let src = "";
+            for (let c = node.node.firstChild; c; c = c.nextSibling) {
+              if (c.name === "URL") src = state.doc.sliceString(c.from, c.to);
+            }
+            if (src) {
+              const raw = state.doc.sliceString(from, to);
+              const alt = (/^!\[([^\]]*)\]/.exec(raw) || [])[1] ?? "";
+              addWidgetReplace(from, to, new ImageWidget(resolveImageURL(src), alt));
+              return false;
+            }
+          }
+          addMark(from, to, "cm-image");
           for (let c = node.node.firstChild; c; c = c.nextSibling) {
             if ((c.name === "LinkMark" || c.name === "URL") && !isLineActive(c.from)) {
               addHide(c.from, c.to);

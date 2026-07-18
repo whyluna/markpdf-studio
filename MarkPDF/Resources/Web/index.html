@@ -82,6 +82,14 @@ body{display:flex;flex-direction:column}
   vertical-align:-2px;cursor:pointer;
 }
 .cm-hr{display:block;width:100%;border-top:1px solid var(--border);height:0;padding-top:4px}
+/* 查找面板（⌘F）与命中高亮 */
+.cm-panels{background:var(--chrome, #f6f6f8);color:var(--text);border-bottom:1px solid var(--border)}
+.cm-panels input,.cm-panels button{font-family:var(--editor-font);font-size:12.5px}
+.cm-searchMatch{background:rgba(255,212,59,.45);border-radius:2px}
+.cm-searchMatch-selected{background:rgba(255,150,50,.55)}
+/* 渲染图片（FR-2.3） */
+.cm-rendered-image{max-width:100%;border-radius:6px;display:block;padding:4px 0}
+.cm-image-broken{color:var(--text3);font-size:13px;padding:4px 0}
 .cm-table-line{font-family:var(--mono);font-size:13.5px}
 /* 渲染态表格（对齐设计稿 .mdwrap table；Widget 根元素用 padding 代替垂直 margin） */
 .cm-table-widget{padding:8px 0;overflow-x:auto;cursor:default}

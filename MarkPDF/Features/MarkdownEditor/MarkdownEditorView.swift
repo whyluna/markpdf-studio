@@ -69,6 +69,8 @@ struct MarkdownEditorView: NSViewRepresentable {
     let configuration = WKWebViewConfiguration()
     // 内核为本地静态资源，无需持久化缓存；非持久数据存储避免旧 bundle 缓存干扰开发迭代
     configuration.websiteDataStore = .nonPersistent()
+    // 图片内联显示（FR-2.3）：markpdf-file:// 协议由 native 读盘供给工作区图片
+    configuration.setURLSchemeHandler(context.coordinator.schemeHandler, forURLScheme: LocalFileSchemeHandler.scheme)
     let webView = WKWebView(frame: .zero, configuration: configuration)
     // 背景交给内核 CSS（明暗主题），避免白闪
     webView.setValue(false, forKey: "drawsBackground")
@@ -129,6 +131,8 @@ extension MarkdownEditorView {
   final class Coordinator {
     var parent: MarkdownEditorView
     let bridge = WebBridge()
+    /// markpdf-file 协议处理器（FR-2.3 图片供给）
+    let schemeHandler = LocalFileSchemeHandler()
 
     private var isReady = false
     private var lastPushedMode: EditorMode?
@@ -143,11 +147,20 @@ extension MarkdownEditorView {
     /// 内核加载完成：注入初始内容与当前模式/主题
     func kernelDidReady() {
       isReady = true
-      bridge.notify(.setContent, payload: ["text": parent.text])
+      bridge.notify(.setContent, payload: contentPayload(parent.text))
       lastDocumentID = parent.documentID
       lastPushedMode = nil
       lastPushedTheme = nil
       pushModeAndThemeIfNeeded()
+    }
+
+    /// setContent 载荷：文本 + 文档基准目录（图片相对路径解析，FR-2.3）
+    private func contentPayload(_ text: String) -> [String: Any] {
+      var payload: [String: Any] = ["text": text]
+      if let baseURL = parent.documentID?.deletingLastPathComponent().absoluteString {
+        payload["baseURL"] = baseURL
+      }
+      return payload
     }
 
     /// 将宿主的模式/主题同步给内核（去重，避免无效 JS 调用）
@@ -189,7 +202,7 @@ extension MarkdownEditorView {
     /// 外部载入新文档（打开文件时使用）；整体替换内容，不打断内核撤销栈之外的编辑
     func loadDocument(_ text: String) {
       guard isReady else { return }
-      bridge.notify(.setContent, payload: ["text": text])
+      bridge.notify(.setContent, payload: contentPayload(text))
     }
 
     /// 从内核取回最新文本（保存快捷键等场景）

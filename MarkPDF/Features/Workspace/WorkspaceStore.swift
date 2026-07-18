@@ -221,7 +221,7 @@ final class WorkspaceStore: ObservableObject {
     }
   }
 
-  /// 递归扫描：跳过隐藏文件；过滤不受支持的类型；无可见内容的目录不展示。
+  /// 递归扫描：跳过隐藏文件；过滤不受支持的文件；目录一律保留。
   /// 排序规则：文件夹在前，同类按本地化文件名排序（访达一致）。
   private static func scan(url: URL, depth: Int) -> FileNode {
     let fileManager = FileManager.default
@@ -240,14 +240,9 @@ final class WorkspaceStore: ObservableObject {
         children = urls
           .map { scan(url: $0, depth: depth + 1) }
           .filter { node in
-            switch node.kind {
-            case .other:
-              return false
-            case .folder:
-              return !(node.children?.isEmpty ?? true)
-            default:
-              return true
-            }
+            // 仅过滤不受支持的文件；目录一律保留（空目录也可见，
+            // 否则新建的文件夹会从树中"消失"，表现为新建没反应）
+            node.kind != .other
           }
           .sorted { lhs, rhs in
             if lhs.isFolder != rhs.isFolder { return lhs.isFolder }

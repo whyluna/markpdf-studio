@@ -83,6 +83,8 @@ struct FileTreeView: View {
       Label(node.name, systemImage: node.iconName)
         .lineLimit(1)
         .truncationMode(.middle)
+        // 整行可点：Label 撑满行宽后再接管点击
+        .frame(maxWidth: .infinity, alignment: .leading)
         // 选中高亮（手动管理，替代 List selection）
         .foregroundStyle(store.selection == node ? Color.accentColor : .primary)
         .listRowBackground(

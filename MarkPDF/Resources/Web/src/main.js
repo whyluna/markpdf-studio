@@ -2,6 +2,7 @@
 import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { search, searchKeymap } from "@codemirror/search";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage, syntaxTree } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
@@ -54,6 +55,7 @@ const codeLanguages = [
 import { wysiwyg } from "./wysiwyg.js";
 import * as Bridge from "./bridge.js";
 import { DEMO_DOC } from "./demo.js";
+import { docContext } from "./doccontext.js";
 
 /* ---------- 模式（FR-2.2） ---------- */
 
@@ -99,7 +101,8 @@ const view = new EditorView({
     doc: DEMO_DOC,
     extensions: [
       history(),
-      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+      search({ top: true }),
+      keymap.of([...searchKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
       markdown({ base: markdownLanguage, codeLanguages }),
       syntaxHighlighting(mdHighlight),
       baseTheme,
@@ -145,6 +148,8 @@ function collectOutline() {
 /* ---------- native → web 消息注册 ---------- */
 
 Bridge.onMessage("editor.setContent", (p) => {
+  // 记录文档基准目录（md 文件所在目录），供图片相对路径解析（FR-2.3）
+  docContext.baseURL = p.baseURL ?? null;
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: p.text ?? "" },
   });
