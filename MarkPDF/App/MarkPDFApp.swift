@@ -52,6 +52,24 @@ struct MarkPDFApp: App {
         .keyboardShortcut("0", modifiers: .command)
         .disabled(workspaceStore.selection?.kind != .pdf)
       }
+      // PDF 页内搜索（FR-3.4）：⌘F 查找栏、⌘G 下一个、⇧⌘G 上一个
+      CommandGroup(after: .textEditing) {
+        Button("在文档中查找…") {
+          pdfStore.isFindBarVisible = true
+        }
+        .keyboardShortcut("f", modifiers: .command)
+        .disabled(workspaceStore.selection?.kind != .pdf)
+        Button("查找下一个") {
+          pdfStore.findNext()
+        }
+        .keyboardShortcut("g", modifiers: .command)
+        .disabled(!pdfStore.isFindBarVisible)
+        Button("查找上一个") {
+          pdfStore.findPrevious()
+        }
+        .keyboardShortcut("g", modifiers: [.command, .shift])
+        .disabled(!pdfStore.isFindBarVisible)
+      }
     }
   }
 }

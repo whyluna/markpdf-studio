@@ -110,7 +110,12 @@ struct ContentView: View {
   @ViewBuilder
   private var middleContent: some View {
     if let node = workspaceStore.selection, node.kind == .pdf {
-      PDFReaderView(url: node.id)
+      VStack(spacing: 0) {
+        if pdfStore.isFindBarVisible {
+          PDFFindBarView()
+        }
+        PDFReaderView(url: node.id)
+      }
     } else if let node = workspaceStore.selection, node.kind == .image {
       ImagePreviewView(url: node.id)
     } else {

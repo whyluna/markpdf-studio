@@ -47,4 +47,73 @@ final class PDFReaderStore: ObservableObject {
   func go(to destination: PDFDestination) {
     pdfView?.go(to: destination)
   }
+
+  // MARK: - 页内搜索（FR-3.4）
+
+  /// 查找栏是否可见
+  @Published var isFindBarVisible = false
+  /// 搜索词（变更后 300ms 防抖执行搜索）
+  @Published var findQuery = "" {
+    didSet {
+      findDebouncer.schedule { [weak self] in
+        self?.performFind()
+      }
+    }
+  }
+  /// 全部命中
+  @Published private(set) var findMatches: [PDFSelection] = []
+  /// 当前命中下标
+  @Published private(set) var currentMatchIndex = 0
+
+  private let findDebouncer = Debouncer(interval: 0.3)
+
+  /// 计数文本：`k / n`；无查询为空，无结果显示提示
+  var matchCountText: String {
+    if findQuery.isEmpty { return "" }
+    if findMatches.isEmpty { return "无结果" }
+    return "\(currentMatchIndex + 1) / \(findMatches.count)"
+  }
+
+  func performFind() {
+    guard let doc = pdfView?.document, !findQuery.isEmpty else {
+      findMatches = []
+      pdfView?.highlightedSelections = nil
+      return
+    }
+    findMatches = doc.findString(findQuery, withOptions: [.caseInsensitive])
+    currentMatchIndex = 0
+    pdfView?.highlightedSelections = findMatches
+    goToCurrentMatch()
+  }
+
+  func findNext() {
+    guard !findMatches.isEmpty else { return }
+    currentMatchIndex = (currentMatchIndex + 1) % findMatches.count
+    goToCurrentMatch()
+  }
+
+  func findPrevious() {
+    guard !findMatches.isEmpty else { return }
+    currentMatchIndex = (currentMatchIndex - 1 + findMatches.count) % findMatches.count
+    goToCurrentMatch()
+  }
+
+  func closeFindBar() {
+    isFindBarVisible = false
+    findDebouncer.cancel()
+    findQuery = ""
+    findMatches = []
+    currentMatchIndex = 0
+    pdfView?.highlightedSelections = nil
+    pdfView?.setCurrentSelection(nil, animate: false)
+  }
+
+  private func goToCurrentMatch() {
+    guard findMatches.indices.contains(currentMatchIndex) else { return }
+    let selection = findMatches[currentMatchIndex]
+    pdfView?.setCurrentSelection(selection, animate: true)
+    if let page = selection.pages.first {
+      pdfView?.go(to: page)
+    }
+  }
 }
