@@ -64,6 +64,38 @@ struct ContentView: View {
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
       editorStore.flushPendingSave()
     }
+    // 快速打开面板（FR-6.1 ⌘P）
+    .overlay {
+      if workspaceStore.isQuickOpenPresented {
+        quickOpenOverlay
+      }
+    }
+  }
+
+  /// 快速打开浮层：顶部居中，点击遮罩关闭
+  private var quickOpenOverlay: some View {
+    ZStack(alignment: .top) {
+      Color.black.opacity(0.15)
+        .ignoresSafeArea()
+        .onTapGesture {
+          workspaceStore.isQuickOpenPresented = false
+        }
+      QuickOpenView(
+        files: workspaceStore.allFiles,
+        rootPath: workspaceStore.root?.id.path ?? "",
+        onSelect: { node in
+          workspaceStore.selection = node
+          if node.kind == .markdown {
+            editorStore.loadFile(node.id)
+          }
+          workspaceStore.isQuickOpenPresented = false
+        },
+        onDismiss: {
+          workspaceStore.isQuickOpenPresented = false
+        }
+      )
+      .padding(.top, 80)
+    }
   }
 
   /// 中间栏内容：按选中文件类型分发

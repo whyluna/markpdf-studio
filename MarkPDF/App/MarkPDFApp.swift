@@ -19,6 +19,10 @@ struct MarkPDFApp: App {
           workspaceStore.openFolderPanel()
         }
         .keyboardShortcut("o")
+        Button("快速打开…") {
+          workspaceStore.isQuickOpenPresented = true
+        }
+        .keyboardShortcut("p")
       }
       CommandGroup(replacing: .saveItem) {
         Button("保存") {

@@ -14,6 +14,8 @@ final class WorkspaceStore: ObservableObject {
   @Published private(set) var isLoading = false
   /// 最近一次文件操作错误（视图据此弹 alert）
   @Published var lastError: String?
+  /// 快速打开面板（FR-6.1 ⌘P）是否展示
+  @Published var isQuickOpenPresented = false
 
   /// 文件操作服务（FR-1.2；可注入 mock 测试）
   private let ops: FileOperations
@@ -69,6 +71,21 @@ final class WorkspaceStore: ObservableObject {
   /// 按 URL 查找当前树中的节点（拖拽落点解析）
   func node(for url: URL) -> FileNode? {
     root?.find(url)
+  }
+
+  /// 扁平化文件列表（FR-6.1 快速打开候选；仅文件，深度优先）
+  var allFiles: [FileNode] {
+    guard let root else { return [] }
+    var result: [FileNode] = []
+    func walk(_ node: FileNode) {
+      if node.isFolder {
+        node.children?.forEach(walk)
+      } else {
+        result.append(node)
+      }
+    }
+    walk(root)
+    return result
   }
 
   // MARK: - 文件操作（FR-1.2）
