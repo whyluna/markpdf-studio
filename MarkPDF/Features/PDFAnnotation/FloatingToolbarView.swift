@@ -6,12 +6,12 @@ struct FloatingToolbarView: View {
   /// 当前颜色（预览点）
   let colorsByKind: [AnnotationKind: AnnotationColor]
   let onApply: (AnnotationKind) -> Void
+  @State private var hoveredKind: AnnotationKind?
 
   private static let tools: [(kind: AnnotationKind, icon: String)] = [
     (.highlight, "highlighter"),
     (.underline, "underline"),
     (.strikeOut, "strikethrough"),
-    (.squiggly, "waveform.path"),
   ]
 
   var body: some View {
@@ -30,9 +30,16 @@ struct FloatingToolbarView: View {
               .offset(x: 2, y: 2)
           }
           .frame(width: 28, height: 28)
+          .background(
+            hoveredKind == tool.kind ? Color.primary.opacity(0.08) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6)
+          )
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+          hoveredKind = hovering ? tool.kind : nil
+        }
         .help(tool.kind.title)
         if tool.kind != Self.tools.last?.kind {
           Divider()
@@ -42,6 +49,7 @@ struct FloatingToolbarView: View {
     }
     .padding(.horizontal, 6)
     .padding(.vertical, 4)
+    .contentShape(Rectangle())
     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     .overlay(
       RoundedRectangle(cornerRadius: 8)

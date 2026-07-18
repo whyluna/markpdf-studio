@@ -8,8 +8,30 @@ final class ZoomablePDFView: PDFView {
   /// 捏合事件回调（事件阶段 + 当次增量），由 Coordinator 接管
   var onMagnify: ((_ phase: NSEvent.Phase, _ magnification: CGFloat) -> Void)?
 
+  /// 手型光标区域（视图坐标）：命中时显示手型并屏蔽 PDFKit 的文本 I 形光标
+  /// （用于浮动按钮——PDFView 会按文字命中把光标抢设为 I 形，必须在 PDFKit 管线内拦截）
+  var handCursorRects: [CGRect] = []
+
   override func magnify(with event: NSEvent) {
     onMagnify?(event.phase, event.magnification)
+  }
+
+  override func cursorUpdate(with event: NSEvent) {
+    let point = convert(event.locationInWindow, from: nil)
+    if handCursorRects.contains(where: { $0.contains(point) }) {
+      NSCursor.pointingHand.set()
+      return
+    }
+    super.cursorUpdate(with: event)
+  }
+
+  override func mouseMoved(with event: NSEvent) {
+    let point = convert(event.locationInWindow, from: nil)
+    if handCursorRects.contains(where: { $0.contains(point) }) {
+      NSCursor.pointingHand.set()
+      return
+    }
+    super.mouseMoved(with: event)
   }
 }
 
