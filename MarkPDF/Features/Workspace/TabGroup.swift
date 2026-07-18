@@ -111,6 +111,10 @@ final class TabGroup: ObservableObject, Identifiable {
     for index in tabs.indices where tabs[index].url == oldURL {
       tabs[index] = EditorTab(url: newURL, kind: tabs[index].kind)
     }
+    // 激活标签的 id 也随路径迁移（否则 activeTab 解析不到，内容区变空白）
+    if activeTabID == oldURL.path {
+      activeTabID = newURL.path
+    }
   }
 
   /// 文件被移入废纸篓（FR-1.2 联动）：对应编辑状态转草稿

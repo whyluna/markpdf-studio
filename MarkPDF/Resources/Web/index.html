@@ -87,9 +87,9 @@ body{display:flex;flex-direction:column}
 .cm-panels input,.cm-panels button{font-family:var(--editor-font);font-size:12.5px}
 .cm-searchMatch{background:rgba(255,212,59,.45);border-radius:2px}
 .cm-searchMatch-selected{background:rgba(255,150,50,.55)}
-/* 渲染图片（FR-2.3） */
-.cm-rendered-image{max-width:100%;border-radius:6px;display:block;padding:4px 0}
-.cm-image-broken{color:var(--text3);font-size:13px;padding:4px 0}
+/* 渲染图片（FR-2.3）：不留内边距，紧凑排布 */
+.cm-rendered-image{max-width:100%;border-radius:6px;display:block;padding:0}
+.cm-image-broken{color:var(--text3);font-size:13px;padding:0}
 .cm-table-line{font-family:var(--mono);font-size:13.5px}
 /* 渲染态表格（对齐设计稿 .mdwrap table；Widget 根元素用 padding 代替垂直 margin） */
 .cm-table-widget{padding:8px 0;overflow-x:auto;cursor:default}

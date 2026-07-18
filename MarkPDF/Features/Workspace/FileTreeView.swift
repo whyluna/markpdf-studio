@@ -102,7 +102,7 @@ struct FileTreeView: View {
     }
   }
 
-  /// 行内命名输入框：Enter 提交，Esc 取消
+  /// 行内命名输入框：Enter 提交，Esc 取消，点击别处（焦点丢失）也提交
   private var namingField: some View {
     TextField("名称", text: namingDraft)
       .textFieldStyle(.plain)
@@ -111,6 +111,10 @@ struct FileTreeView: View {
       .onAppear { namingFocused = true }
       .onSubmit(commitNaming)
       .onExitCommand(perform: cancelNaming)
+      .onChange(of: namingFocused) { focused in
+        // 焦点离开即提交（对齐 Finder 重命名手感）；cancel 时 naming 已清空，guard 拦截
+        if !focused { commitNaming() }
+      }
   }
 
   private var namingDraft: Binding<String> {
