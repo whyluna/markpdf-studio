@@ -17,12 +17,15 @@ final class WorkspaceStore: ObservableObject {
 
   /// 文件操作服务（FR-1.2；可注入 mock 测试）
   private let ops: FileOperations
+  /// 目录监听服务（FR-1.3）：外部变更时自动重扫
+  private let watcher: FileWatcher
   /// 递归深度上限，防御符号链接环 / 异常目录
   private static let maxDepth = 12
   private var scanTask: Task<Void, Never>?
 
-  init(ops: FileOperations = LiveFileOperations()) {
+  init(ops: FileOperations = LiveFileOperations(), watcher: FileWatcher = LiveFileWatcher()) {
     self.ops = ops
+    self.watcher = watcher
   }
 
   /// 弹出系统面板选择工作区文件夹
@@ -39,16 +42,20 @@ final class WorkspaceStore: ObservableObject {
     openFolder(url)
   }
 
-  /// 打开文件夹并后台扫描（避免大目录卡住 UI）
+  /// 打开文件夹并后台扫描（避免大目录卡住 UI）；同时启动外部变更监听（FR-1.3）
   func openFolder(_ url: URL) {
     scanTask?.cancel()
     selection = nil
     isLoading = true
     Logger.workspace.info("打开工作区: \(url.path, privacy: .public)")
-    scan(url)
+    scan(url, showLoading: true)
+    watcher.startWatching(url: url) { [weak self] in
+      self?.refresh()
+    }
   }
 
-  /// 重扫当前工作区（文件操作 / 外部变更后调用）；默认保留选中，可指定改选新 URL
+  /// 重扫当前工作区（文件操作 / 外部变更后调用）；默认保留选中，可指定改选新 URL。
+  /// 静默执行（不闪 loading），扫描完成即更新。
   func refresh(selecting selectURL: URL? = nil) {
     guard let root else { return }
     let keepURL = selectURL ?? selection?.id
@@ -183,8 +190,8 @@ final class WorkspaceStore: ObservableObject {
     }
   }
 
-  private func scan(_ url: URL, completion: (() -> Void)? = nil) {
-    isLoading = true
+  private func scan(_ url: URL, showLoading: Bool = false, completion: (() -> Void)? = nil) {
+    if showLoading { isLoading = true }
     scanTask = Task.detached(priority: .userInitiated) { [weak self] in
       let tree = Self.scan(url: url, depth: 0)
       // 转强引用（let）：消除“并发代码捕获 var self”的 Swift 6 预警
