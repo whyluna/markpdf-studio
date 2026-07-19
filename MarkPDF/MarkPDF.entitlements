@@ -6,6 +6,9 @@
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<!-- 工作区状态持久化（FR-1.6）：重启后经 security-scoped bookmark 恢复工作区授权 -->
+	<key>com.apple.security.files.bookmarks.app-scope</key>
+	<true/>
 	<!-- WKWebView 必需：WebContent 进程需与 Networking 进程通信，缺少会导致 Web 进程无法启动（页面空白） -->
 	<key>com.apple.security.network.client</key>
 	<true/>

@@ -23,11 +23,13 @@ final class Debouncer {
     item = nil
   }
 
-  /// 立即执行挂起的动作（若有），不再等待间隔（退出/拆除前的兜底落盘）
+  /// 立即执行挂起的动作（若有），不再等待间隔（退出/拆除前的兜底落盘）。
+  /// 注意顺序：先 perform 再 cancel——已取消的 work item perform 是空操作；
+  /// 不 cancel 则队列里排着的同一 item 稍后会二次执行
   func fire() {
     guard let item else { return }
     self.item = nil
-    item.cancel()
     item.perform()
+    item.cancel()
   }
 }

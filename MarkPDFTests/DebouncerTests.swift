@@ -29,4 +29,25 @@ final class DebouncerTests: XCTestCase {
     wait(for: [expectation], timeout: 1)
     XCTAssertFalse(called)
   }
+
+  /// fire：立即同步执行挂起动作，且队列中的同一任务稍后不二次执行
+  func testFireExecutesImmediatelyAndOnlyOnce() {
+    let debouncer = Debouncer(interval: 0.05)
+    var calls = 0
+    debouncer.schedule { calls += 1 }
+    debouncer.fire()
+    XCTAssertEqual(calls, 1)
+    let expectation = expectation(description: "等待超过防抖间隔")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+      expectation.fulfill()
+    }
+    wait(for: [expectation], timeout: 1)
+    XCTAssertEqual(calls, 1)
+  }
+
+  /// 无挂起动作时 fire 为空操作
+  func testFireWithoutPendingIsNoOp() {
+    let debouncer = Debouncer(interval: 0.05)
+    debouncer.fire()
+  }
 }

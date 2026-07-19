@@ -113,6 +113,7 @@ const view = new EditorView({
       modeConf.of(modeExtension("wysiwyg")),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) scheduleContentNotify();
+        if (u.selectionSet || u.docChanged) scheduleCursorNotify();
       }),
     ],
   }),
@@ -127,6 +128,17 @@ function scheduleContentNotify() {
     Bridge.notify("editor.contentChanged", { text: view.state.doc.toString() });
     Bridge.notify("editor.outline", { items: collectOutline() });
   }, 300);
+}
+
+/* ---------- 光标行上报（防抖 500ms，FR-1.6 编辑位置记忆） ---------- */
+
+let cursorTimer = null;
+function scheduleCursorNotify() {
+  clearTimeout(cursorTimer);
+  cursorTimer = setTimeout(() => {
+    const line = view.state.doc.lineAt(view.state.selection.main.head).number;
+    Bridge.notify("editor.cursor", { line });
+  }, 500);
 }
 
 /* ---------- 大纲提取（FR-2.6）：ATX / Setext 标题 → { level, text, line } ---------- */
@@ -155,6 +167,8 @@ Bridge.onMessage("editor.setContent", (p) => {
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: p.text ?? "" },
   });
+  // FR-1.6：载入即恢复上次编辑位置（不抢焦点）
+  if (typeof p.initialLine === "number") scrollToLine(p.initialLine, false);
 });
 
 Bridge.onMessage("editor.getContent", (_p, id) => {
@@ -175,15 +189,16 @@ Bridge.onMessage("editor.insertAtCursor", (p) => {
 });
 
 // 大纲跳转（FR-2.6）：滚动到指定行并落光标
-Bridge.onMessage("editor.scrollToLine", (p) => {
-  const line = Math.max(1, Math.min(p.line ?? 1, view.state.doc.lines));
-  const pos = view.state.doc.line(line).from;
+function scrollToLine(line, focus = true) {
+  const clamped = Math.max(1, Math.min(line ?? 1, view.state.doc.lines));
+  const pos = view.state.doc.line(clamped).from;
   view.dispatch({
     selection: { anchor: pos },
     effects: EditorView.scrollIntoView(pos, { y: "start" }),
   });
-  view.focus();
-});
+  if (focus) view.focus();
+}
+Bridge.onMessage("editor.scrollToLine", (p) => scrollToLine(p.line));
 
 /* ---------- ⌘+点击链接跳转（FR-2.3 链接交互） ---------- */
 

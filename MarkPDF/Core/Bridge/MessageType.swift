@@ -16,4 +16,5 @@ enum BridgeMessageType: String {
   case contentChanged = "editor.contentChanged"
   case outline = "editor.outline"
   case openLink = "editor.openLink"
+  case cursor = "editor.cursor"
 }

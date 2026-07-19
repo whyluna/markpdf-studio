@@ -9,22 +9,39 @@ struct ContentView: View {
   @EnvironmentObject private var pdfStore: PDFReaderStore
   @EnvironmentObject private var annotationStore: PDFAnnotationStore
   @EnvironmentObject private var recentsStore: RecentFilesStore
+  @EnvironmentObject private var stateStore: WorkspaceStateStore
 
   var body: some View {
     VStack(spacing: 0) {
       splitView
       StatusBarView()
     }
-    // 退出前兜底落盘（FR-2.7）：全部标签 + PDF 标注写回（FR-4.6 防抖窗口内退出不丢）
+    // 退出前兜底落盘（FR-2.7）：全部标签 + PDF 标注写回（FR-4.6 防抖窗口内退出不丢）+ 工作区快照（FR-1.6）
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
       tabStore.flushAll()
       annotationStore.flushPendingWrites()
+      stateStore.flush()
     }
-    // 最近打开记录接线（FR-1.5）：文件打开 → 按当前工作区根路径记录
+    // 启动恢复现场（FR-1.6）与状态记录接线（FR-1.5/1.6）
     .onAppear {
+      stateStore.restoreTabs(into: tabStore)
+      stateStore.restoreWorkspace(into: workspaceStore)
       tabStore.onOpenFile = { url in
         guard let root = workspaceStore.root?.id else { return }
         recentsStore.record(url, forRoot: root)
+      }
+      tabStore.onStructureChange = { [weak tabStore] in
+        guard let tabStore else { return }
+        stateStore.tabsDidChange(groups: tabStore.groups, activeGroupID: tabStore.activeGroupID)
+      }
+      tabStore.onEditorCursorLine = { url, line in
+        stateStore.recordCursor(url: url, line: line)
+      }
+      workspaceStore.onStateChange = { [weak workspaceStore] in
+        stateStore.workspaceDidChange(
+          root: workspaceStore?.root?.id,
+          collapsedFolders: workspaceStore?.collapsedFolders ?? []
+        )
       }
     }
     // 快速打开面板（FR-6.1 ⌘P）
@@ -195,4 +212,5 @@ private struct EdgeTabDropZone: View {
     .environmentObject(TabStore())
     .environmentObject(PDFReaderStore())
     .environmentObject(PDFBookmarksStore())
+    .environmentObject(WorkspaceStateStore())
 }

@@ -3,18 +3,44 @@ import Foundation
 /// 标签页总控（FR-1.4）：1~2 个标签组（单栏/左右分栏）、激活组、跨组移动。
 @MainActor
 final class TabStore: ObservableObject {
-  @Published private(set) var groups: [TabGroup]
-  @Published var activeGroupID: TabGroup.ID
+  @Published private(set) var groups: [TabGroup] {
+    didSet { onStructureChange?() }
+  }
+  @Published var activeGroupID: TabGroup.ID {
+    didSet { onStructureChange?() }
+  }
   /// 拖拽中的标签（应用内拖拽共享状态）
   var draggingTab: (tab: EditorTab, from: TabGroup.ID)?
   /// 文件被打开的回调（FR-1.5 最近打开记录；由 App 层接线，与工作区根路径关联）
   var onOpenFile: ((URL) -> Void)?
+  /// 标签结构变化回调（FR-1.6 快照保存；由 App 层接线）
+  var onStructureChange: (() -> Void)?
+  /// 光标行上报（FR-1.6；经 TabGroup 转发到 App 层）
+  var onEditorCursorLine: ((URL, Int) -> Void)?
 
   init() {
     let group = TabGroup()
     groups = [group]
     activeGroupID = group.id
+    wireGroup(group)
     group.openDraft()
+  }
+
+  /// 组回调接线：结构变化与光标上报转发到 Store 级闭包
+  private func wireGroup(_ group: TabGroup) {
+    group.onStructureChange = { [weak self] in
+      self?.onStructureChange?()
+    }
+    group.onEditorCursorLine = { [weak self] url, line in
+      self?.onEditorCursorLine?(url, line)
+    }
+  }
+
+  /// 新建已接线的组
+  private func makeGroup() -> TabGroup {
+    let group = TabGroup()
+    wireGroup(group)
+    return group
   }
 
   var isSplit: Bool { groups.count > 1 }
@@ -49,7 +75,7 @@ final class TabStore: ObservableObject {
       groups = [groups[0]]
       activeGroupID = groups[0].id
     } else {
-      let right = TabGroup()
+      let right = makeGroup()
       groups.append(right)
     }
   }
@@ -57,7 +83,7 @@ final class TabStore: ObservableObject {
   /// 把标签移到另一组（目标组不存在则先创建）
   func moveTab(_ tab: EditorTab, from source: TabGroup, to target: TabGroup?) {
     let targetGroup = target ?? {
-      let group = TabGroup()
+      let group = makeGroup()
       groups.append(group)
       return group
     }()
@@ -94,5 +120,32 @@ final class TabStore: ObservableObject {
     for group in groups {
       group.flushAll()
     }
+  }
+
+  // MARK: - 状态恢复（FR-1.6）
+
+  /// 从快照重建标签组与激活状态（启动恢复现场）。
+  /// 空快照保留启动默认的草稿标签；直接操作 TabGroup，不触发打开记录/快照回写之外的副作用。
+  func restore(tabStates: [[WorkspaceStateStore.TabState]], activeTabPaths: [String?], activeGroupIndex: Int) {
+    let restored: [TabGroup] = tabStates.map { states in
+      let group = makeGroup()
+      for state in states {
+        let url = state.path.map { URL(fileURLWithPath: $0) }
+        let kind = FileNode.Kind(rawValue: state.kind) ?? .markdown
+        group.tabs.append(EditorTab(url: url, kind: kind))
+      }
+      return group
+    }
+    // 空组（如退出时残留的空白分栏）不恢复；全空则保留默认草稿
+    let nonEmpty = restored.filter { !$0.tabs.isEmpty }
+    guard !nonEmpty.isEmpty else { return }
+    groups = nonEmpty
+    for (index, group) in groups.enumerated() {
+      // 文件标签 id 即路径；草稿不可指认（id 为 UUID），回退到组尾标签
+      let activePath = index < activeTabPaths.count ? activeTabPaths[index] : nil
+      group.activeTabID = activePath ?? group.tabs.last?.id
+    }
+    let safeIndex = min(max(activeGroupIndex, 0), groups.count - 1)
+    activeGroupID = groups[safeIndex].id
   }
 }

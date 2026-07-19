@@ -60,6 +60,7 @@ private struct EmptyTabPlaceholder: View {
 struct MarkdownTabView: View {
   @ObservedObject var store: EditorStore
   @Environment(\.colorScheme) private var colorScheme
+  @EnvironmentObject private var stateStore: WorkspaceStateStore
 
   var body: some View {
     MarkdownEditorView(
@@ -68,6 +69,8 @@ struct MarkdownTabView: View {
       mode: store.mode,
       theme: colorScheme == .dark ? .dark : .light,
       scrollToLine: store.pendingScrollLine,
+      // FR-1.6：载入即恢复上次编辑行；光标变化经内核防抖上报回存
+      initialLine: store.currentFileURL.flatMap { stateStore.cursorLine(for: $0) },
       onContentChanged: { newText in
         store.contentDidChange(newText)
       },
@@ -76,6 +79,9 @@ struct MarkdownTabView: View {
       },
       onScrollHandled: {
         store.didHandleScroll()
+      },
+      onCursorMoved: { line in
+        store.cursorDidMove(to: line)
       }
     )
   }
@@ -84,4 +90,5 @@ struct MarkdownTabView: View {
 #Preview {
   TabGroupPane(group: TabGroup())
     .environmentObject(TabStore())
+    .environmentObject(WorkspaceStateStore())
 }

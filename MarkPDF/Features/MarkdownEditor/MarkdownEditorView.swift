@@ -35,12 +35,16 @@ struct MarkdownEditorView: NSViewRepresentable {
   let theme: EditorTheme
   /// 请求内核滚动到指定行（FR-2.6 大纲跳转）；消费后经 `onScrollHandled` 清零
   let scrollToLine: Int?
+  /// 载入文档时恢复的上次编辑行（FR-1.6 编辑位置记忆）；nil 不跳转
+  let initialLine: Int?
   /// 内核内容变更回调（自动保存挂钩，FR-2.7）
   var onContentChanged: ((String) -> Void)?
   /// 大纲变更回调（FR-2.6）
   var onOutlineChanged: (([Heading]) -> Void)?
   /// 滚动请求已消费回调
   var onScrollHandled: (() -> Void)?
+  /// 光标行变化回调（FR-1.6；内核 500ms 防抖上报）
+  var onCursorMoved: ((Int) -> Void)?
 
   init(
     text: Binding<String>,
@@ -48,18 +52,22 @@ struct MarkdownEditorView: NSViewRepresentable {
     mode: EditorMode = .wysiwyg,
     theme: EditorTheme = .light,
     scrollToLine: Int? = nil,
+    initialLine: Int? = nil,
     onContentChanged: ((String) -> Void)? = nil,
     onOutlineChanged: (([Heading]) -> Void)? = nil,
-    onScrollHandled: (() -> Void)? = nil
+    onScrollHandled: (() -> Void)? = nil,
+    onCursorMoved: ((Int) -> Void)? = nil
   ) {
     _text = text
     self.documentID = documentID
     self.mode = mode
     self.theme = theme
     self.scrollToLine = scrollToLine
+    self.initialLine = initialLine
     self.onContentChanged = onContentChanged
     self.onOutlineChanged = onOutlineChanged
     self.onScrollHandled = onScrollHandled
+    self.onCursorMoved = onCursorMoved
   }
 
   func makeCoordinator() -> Coordinator {
@@ -93,6 +101,12 @@ struct MarkdownEditorView: NSViewRepresentable {
     bridge.on(.outline) { [weak coordinator = context.coordinator] payload, _ in
       Task { @MainActor in
         coordinator?.outlineDidChange(payload)
+      }
+    }
+    bridge.on(.cursor) { [weak coordinator = context.coordinator] payload, _ in
+      guard let line = payload["line"] as? Int else { return }
+      Task { @MainActor in
+        coordinator?.parent.onCursorMoved?(line)
       }
     }
     // ⌘+点击链接：只允许 http/https 用默认浏览器打开（拦截 javascript:/file: 等协议）
@@ -166,11 +180,14 @@ extension MarkdownEditorView {
       pushModeAndThemeIfNeeded()
     }
 
-    /// setContent 载荷：文本 + 文档基准目录（图片相对路径解析，FR-2.3）
+    /// setContent 载荷：文本 + 文档基准目录（图片相对路径解析，FR-2.3）+ 恢复编辑行（FR-1.6）
     private func contentPayload(_ text: String) -> [String: Any] {
       var payload: [String: Any] = ["text": text]
       if let baseURL = parent.documentID?.deletingLastPathComponent().absoluteString {
         payload["baseURL"] = baseURL
+      }
+      if let initialLine = parent.initialLine {
+        payload["initialLine"] = initialLine
       }
       return payload
     }

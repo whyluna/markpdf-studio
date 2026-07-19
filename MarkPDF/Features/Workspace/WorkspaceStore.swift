@@ -7,7 +7,9 @@ import os
 /// 与 EditorStore 一致：主线程使用（开发规范 §3.2）。
 final class WorkspaceStore: ObservableObject {
   /// 已打开的工作区根节点（nil = 尚未打开）
-  @Published private(set) var root: FileNode?
+  @Published private(set) var root: FileNode? {
+    didSet { onStateChange?() }
+  }
   /// 文件树当前选中节点（ContentView 据此分发中间栏内容）
   @Published var selection: FileNode?
   /// 正在扫描（大文件夹时供 UI 显示进度）
@@ -17,7 +19,11 @@ final class WorkspaceStore: ObservableObject {
   /// 快速打开面板（FR-6.1 ⌘P）是否展示
   @Published var isQuickOpenPresented = false
   /// 折叠的文件夹（FR-1.1 树展开态；默认全部展开，点击文件夹行切换，重扫后按 URL 保留）
-  @Published var collapsedFolders: Set<URL> = []
+  @Published var collapsedFolders: Set<URL> = [] {
+    didSet { onStateChange?() }
+  }
+  /// 工作区状态变化回调（FR-1.6 快照保存；根节点切换与折叠态变化时触发）
+  var onStateChange: (() -> Void)?
 
   /// 点击文件夹行：切换展开/收起
   func toggleFolderCollapsed(_ url: URL) {

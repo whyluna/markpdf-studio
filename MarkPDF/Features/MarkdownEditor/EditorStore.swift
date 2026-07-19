@@ -51,6 +51,15 @@ final class EditorStore: ObservableObject {
     pendingScrollLine = nil
   }
 
+  /// 光标行变化回调（FR-1.6 编辑位置记忆；参数为文件 URL 与 1 起行号）
+  var onCursorLineChange: ((URL, Int) -> Void)?
+
+  /// 内核光标上报入口（防抖已由内核完成）
+  func cursorDidMove(to line: Int) {
+    guard let url = currentFileURL else { return }
+    onCursorLineChange?(url, line)
+  }
+
   /// 打开的文件被重命名/移动：跟随更新标识（FR-1.2）
   func fileDidMove(from oldURL: URL, to newURL: URL) {
     guard currentFileURL == oldURL else { return }

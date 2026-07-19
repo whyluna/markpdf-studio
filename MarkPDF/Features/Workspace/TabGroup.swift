@@ -6,11 +6,19 @@ import Foundation
 final class TabGroup: ObservableObject, Identifiable {
   let id = UUID()
   /// 已打开的标签（有序）
-  @Published var tabs: [EditorTab] = []
+  @Published var tabs: [EditorTab] = [] {
+    didSet { onStructureChange?() }
+  }
   /// 激活标签
-  @Published var activeTabID: EditorTab.ID?
+  @Published var activeTabID: EditorTab.ID? {
+    didSet { onStructureChange?() }
+  }
   /// md 标签各自的编辑状态
   @Published private(set) var editorStores: [EditorTab.ID: EditorStore] = [:]
+  /// 结构变化回调（FR-1.6 快照；由 TabStore 接线转发）
+  var onStructureChange: (() -> Void)?
+  /// 光标行上报转发（FR-1.6；由 TabStore 接线）
+  var onEditorCursorLine: ((URL, Int) -> Void)?
 
   var activeTab: EditorTab? {
     tabs.first { $0.id == activeTabID }
@@ -26,6 +34,9 @@ final class TabGroup: ObservableObject, Identifiable {
   func editorStore(for tab: EditorTab) -> EditorStore {
     if let store = editorStores[tab.id] { return store }
     let store = EditorStore()
+    store.onCursorLineChange = { [weak self] url, line in
+      self?.onEditorCursorLine?(url, line)
+    }
     editorStores[tab.id] = store
     if let url = tab.url {
       store.loadFile(url)
