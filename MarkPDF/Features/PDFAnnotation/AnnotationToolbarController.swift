@@ -57,6 +57,15 @@ final class AnnotationToolbarController: NSObject {
         self?.hide()
       }
     }
+    // 批注图标点击在 mouseDown 层拦截（FR-4.3）：PDFKit 收不到事件，
+    // 原生 Popup 弹窗（深蓝框）不会触发；手势识别器路径时灵时不灵故弃用
+    (pdfView as? ZoomablePDFView)?.onCommentMarkerMouseDown = { [weak self] point in
+      self?.handleMarkerMouseDown(at: point) ?? false
+    }
+    // 批注图标上的光标：拦截 PDFView 原生的"抓抓手"，改为手指
+    (pdfView as? ZoomablePDFView)?.onPointingHandQuery = { [weak self] point in
+      self?.markerAt(viewPoint: point) != nil
+    }
   }
 
   deinit {
@@ -136,6 +145,13 @@ final class AnnotationToolbarController: NSObject {
 
   private func apply(kind: AnnotationKind) {
     guard let pdfView, let selection = pdfView.currentSelection else { return }
+    // 批注（FR-4.3）：页边插框 + 虚线连接内容块
+    if kind == .freeText {
+      createComment(anchoredTo: selection)
+      pdfView.clearSelection()
+      hide()
+      return
+    }
     let color = store.colorsByKind[kind]?.nsColor ?? .yellow
     let subtype: PDFAnnotationSubtype
     switch kind {
@@ -211,16 +227,31 @@ final class AnnotationToolbarController: NSObject {
       let document = pdfView.document
     else { return }
     let pagePoint = pdfView.convert(point, to: page)
-    guard let annotation = page.annotation(at: pagePoint) else { return }
+    guard var annotation = page.annotation(at: pagePoint) else { return }
+    // 点中 Popup 伴侣窗口时按标记本体处理
+    if let popup = annotation as? PDFAnnotationPopup,
+      let parent = page.annotations.first(where: { $0.popup === popup })
+    {
+      annotation = parent
+    }
+    // 批注标记的点击已在 mouseDown 层处理并吞掉事件——这里再处理会双开 popover（闪两次动画）
+    if annotation.isCommentMarker { return }
     // 整体：同组 ID 的标注一起框选、一起删除
-    hitAnnotations = groupAnnotations(matching: annotation, in: document)
+    let group = groupAnnotations(matching: annotation, in: document)
+    // 点中批注的高亮/虚线 → 同样打开编辑框（FR-4.3）
+    if let marker = group.first(where: { $0.isCommentMarker || AnnotationKind.of($0) == .freeText }) {
+      edit(comment: marker)
+      return
+    }
+    hitAnnotations = group
     showDashedBorders(around: hitAnnotations)
     showDeleteButton(at: point)
   }
 
-  /// 按组 ID 收集同组标注（无组 ID 的单标注返回自身）
+  /// 按组 ID 收集同组标注（无组 ID 的单标注返回自身；作者名 userName 不算组 ID）
   private func groupAnnotations(matching annotation: PDFAnnotation, in document: PDFDocument) -> [PDFAnnotation] {
-    guard let groupID = annotation.userName, !groupID.isEmpty else { return [annotation] }
+    guard isAnnotationGroupID(annotation.userName) else { return [annotation] }
+    let groupID = annotation.userName!
     var result: [PDFAnnotation] = []
     for index in 0..<document.pageCount {
       guard let page = document.page(at: index) else { continue }
@@ -291,6 +322,253 @@ final class AnnotationToolbarController: NSObject {
     borderViews = []
     deleteHosting?.isHidden = true
     syncCursorRects()
+  }
+
+  // MARK: - 批注（FR-4.3）
+
+  /// 正在编辑的批注标记
+  private var editingComment: PDFAnnotation?
+  private var commentPopover: NSPopover?
+  /// 编辑中的草稿（关闭时一次性写回标注，打字不触碰 PDFKit）
+  private var commentDraft: CommentDraft?
+
+  /// 批注图标尺寸（页坐标）
+  private static let commentIconSize: CGFloat = 22
+  /// 图标距页缘
+  private static let commentInset: CGFloat = 4
+  /// 点状虚线：1.1pt 小方块、间距 4pt（细长小高亮矩形拼成——PDFKit 不渲染程序化 Line/Ink，实测）
+  private static let commentDashSize: CGFloat = 1.1
+  private static let commentDashStep: CGFloat = 4
+
+  /// 划词创建批注（FR-4.3）：
+  /// 页缘放便签图标（不显示内容，点击才弹出编辑框；位置只跟随内容块垂直中心，
+  /// 与选区宽度无关，永不遮挡正文）+ 点状虚线直线连接（内容块边缘 → 图标中心，
+  /// 排队错位时斜线指认关系）+ 选中内容逐行高亮（FR-4.1 视觉），三者同组。
+  /// 左右侧严格按内容块中线判定（双栏论文左栏→左边栏、右栏→右边栏）。
+  private func createComment(anchoredTo selection: PDFSelection) {
+    guard let pdfView, let page = selection.pages.first else { return }
+    let anchor = selection.bounds(for: page)
+    guard !anchor.isNull, !anchor.isEmpty else { return }
+    // 必须用显示盒（默认 cropBox）算页边：mediaBox 与显示区域不一致时坐标错位
+    let pageBounds = page.bounds(for: pdfView.displayBox)
+    let isLeft = anchor.midX < pageBounds.midX
+    let size = Self.commentIconSize
+    let x = isLeft ? pageBounds.minX + Self.commentInset : pageBounds.maxX - Self.commentInset - size
+    var y = anchor.midY - size / 2
+    y = avoidCommentCollision(x: x, y: y, size: size, on: page)
+    y = min(max(y, pageBounds.minY + 4), pageBounds.maxY - size - 4)
+
+    let groupID = UUID().uuidString
+    let palette = store.colorsByKind[.freeText]?.nsColor ?? .systemBlue
+
+    // 批注标记（先创建：列表条目以其为主标注）
+    let marker = PDFAnnotation(
+      bounds: NSRect(x: x, y: y, width: size, height: size),
+      forType: .text,
+      withProperties: nil
+    )
+    marker.iconType = .comment
+    marker.color = palette
+    marker.userName = groupID
+    marker.contents = ""
+    store.add(marker, to: page)
+    // PDFKit 添加 /Text 会自动补 Popup 伴侣；PDFView 点击图标会原生打开它，
+    // 与我们的编辑框双开——彻底屏蔽（关闭 + 不渲染）
+    if let popup = marker.popup {
+      (popup as? PDFAnnotationPopup)?.isOpen = false
+      popup.shouldDisplay = false
+    }
+
+    // 点状虚线直线连接：内容块边缘 → 图标中心（排队错位时呈斜线，对应关系一目了然）
+    let iconCenter = NSPoint(x: x + size / 2, y: y + size / 2)
+    let anchorEdge = NSPoint(x: isLeft ? anchor.minX : anchor.maxX, y: anchor.midY)
+    addDashedConnector(from: anchorEdge, to: iconCenter, color: palette, groupID: groupID, page: page)
+
+    // 选中内容同步高亮（逐行，与 FR-4.1 高亮一致的贴合视觉）
+    let highlighted = highlightLines(of: selection, color: palette, groupID: groupID)
+
+    Logger.pdf.debug("添加批注[\(isLeft ? "左" : "右")边栏]: 页 \((pdfView.document?.index(for: page) ?? 0) + 1)，anchor=\(NSStringFromRect(anchor))，page=\(NSStringFromRect(pageBounds))，icon=\(NSStringFromRect(marker.bounds))，高亮 \(highlighted) 行")
+    pdfView.setNeedsDisplay(pdfView.bounds)
+    edit(comment: marker)
+  }
+
+  /// 逐行创建高亮（FR-4.1 视觉：上下各缩 14% 贴合文字，相邻行不叠块）
+  @discardableResult
+  private func highlightLines(of selection: PDFSelection, color: NSColor, groupID: String) -> Int {
+    var created = 0
+    for lineSelection in selection.selectionsByLine() {
+      for page in lineSelection.pages {
+        var bounds = lineSelection.bounds(for: page)
+        guard !bounds.isNull, !bounds.isEmpty else { continue }
+        let shrink = bounds.height * 0.14
+        bounds = NSRect(
+          x: bounds.minX,
+          y: bounds.minY + shrink,
+          width: bounds.width,
+          height: bounds.height * 0.72
+        )
+        let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
+        annotation.color = color
+        annotation.userName = groupID
+        store.add(annotation, to: page)
+        created += 1
+      }
+    }
+    return created
+  }
+
+  /// 点状虚线：沿两点间直线（水平/垂直/斜线均可）按间距摆 1.1pt 小方块。
+  /// PDFKit 不渲染程序化创建的 Line/Ink 标注（渲染探针实锤），高亮块是 PDFView 可渲染的最小单元
+  private func addDashedConnector(from start: NSPoint, to end: NSPoint, color: NSColor, groupID: String, page: PDFPage) {
+    let dx = end.x - start.x
+    let dy = end.y - start.y
+    let length = hypot(dx, dy)
+    guard length > Self.commentDashStep else { return }
+    let dot = Self.commentDashSize
+    var d: CGFloat = 0
+    while d < length {
+      let t = d / length
+      let rect = NSRect(
+        x: start.x + dx * t - dot / 2,
+        y: start.y + dy * t - dot / 2,
+        width: dot,
+        height: dot
+      )
+      let dash = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
+      dash.color = color
+      dash.userName = groupID
+      store.add(dash, to: page)
+      d += Self.commentDashStep
+    }
+  }
+
+  /// 与同页既有批注图标纵向避让（往下挪，最多 20 轮防极端堆叠死循环）
+  private func avoidCommentCollision(x: CGFloat, y: CGFloat, size: CGFloat, on page: PDFPage) -> CGFloat {
+    var rect = NSRect(x: x, y: y, width: size, height: size)
+    for _ in 0..<20 {
+      guard let collision = page.annotations.first(where: {
+        $0.isCommentMarker && $0.bounds.intersects(rect)
+      }) else { return rect.minY }
+      rect.origin.y = collision.bounds.minY - size - 4
+    }
+    return rect.minY
+  }
+
+  /// 命中批注标记（含 Popup 伴侣反查），未命中返回 nil
+  private func markerAt(viewPoint point: NSPoint) -> PDFAnnotation? {
+    guard let pdfView,
+      let page = pdfView.page(for: point, nearest: false)
+    else { return nil }
+    var hit = page.annotation(at: pdfView.convert(point, to: page))
+    // 点中 Popup 伴侣窗口时按标记本体处理（无 parent 属性，反查）
+    if let popup = hit as? PDFAnnotationPopup,
+      let parent = page.annotations.first(where: { $0.popup === popup })
+    {
+      hit = parent
+    }
+    return hit?.isCommentMarker == true ? hit : nil
+  }
+
+  /// 批注图标的 mouseDown 拦截：命中标记 → 开编辑框并吞掉事件
+  private func handleMarkerMouseDown(at point: NSPoint) -> Bool {
+    guard let marker = markerAt(viewPoint: point) else { return false }
+    hideDelete()
+    edit(comment: marker)
+    return true
+  }
+
+  /// 弹出批注编辑框（锚定图标，朝页面内容一侧展开）
+  private func edit(comment marker: PDFAnnotation) {
+    guard let pdfView, let page = marker.page else { return }
+    commentPopover?.close()
+    // 点击图标可能刚把原生 Popup 伴侣窗打开，压掉（编辑统一走我们的 popover）
+    if let popup = marker.popup {
+      (popup as? PDFAnnotationPopup)?.isOpen = false
+      popup.shouldDisplay = false
+      pdfView.setNeedsDisplay(pdfView.bounds)
+    }
+    editingComment = marker
+    let draft = CommentDraft(marker.contents ?? "")
+    commentDraft = draft
+    let popover = NSPopover()
+    popover.behavior = .transient
+    popover.delegate = self
+    popover.contentViewController = NSHostingController(rootView: CommentEditorView(
+      draft: draft,
+      onDelete: { [weak self] in
+        self?.deleteComment(marker)
+      }
+    ))
+    let isLeft = marker.bounds.midX < page.bounds(for: pdfView.displayBox).midX
+    let anchorRect = pdfView.convert(marker.bounds, from: page)
+    commentPopover = popover
+    // 下一 runloop 再弹出：在 mouseDown/mouseUp 事件处理中同步 show 与 transient
+    // 行为竞态，会导致编辑框偶发不出现
+    DispatchQueue.main.async {
+      popover.show(relativeTo: anchorRect, of: pdfView, preferredEdge: isLeft ? .maxX : .minX)
+    }
+  }
+
+  /// 删除整条批注（图标 + 虚线段 + 高亮，同组；Popup 伴侣由 store.remove 连带）
+  private func deleteComment(_ marker: PDFAnnotation) {
+    guard let pdfView, let document = pdfView.document else { return }
+    for annotation in groupAnnotations(matching: marker, in: document) {
+      if let page = annotation.page {
+        store.remove(annotation, from: page)
+      }
+    }
+    editingComment = nil
+    pdfView.setNeedsDisplay(pdfView.bounds)
+    commentPopover?.close()
+    commentPopover = nil
+  }
+
+  /// 编辑框关闭时仍为空 → 整条移除（避免残留空图标）
+  private func discardCommentIfEmpty(_ marker: PDFAnnotation) {
+    guard (marker.contents ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      let document = pdfView?.document
+    else { return }
+    for annotation in groupAnnotations(matching: marker, in: document) {
+      if let page = annotation.page {
+        store.remove(annotation, from: page)
+      }
+    }
+    pdfView?.setNeedsDisplay(pdfView?.bounds ?? .zero)
+  }
+}
+
+extension AnnotationToolbarController: NSPopoverDelegate {
+  /// 弹出完成后把焦点放进文本区（新建/编辑都直接出光标）
+  func popoverDidShow(_ notification: Notification) {
+    guard let view = commentPopover?.contentViewController?.view,
+      let textView = view.firstDescendant(of: NSTextView.self)
+    else { return }
+    view.window?.makeFirstResponder(textView)
+    // 光标移到文末并显式重启闪烁——否则插入点要等首次击键才出现
+    textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+    textView.updateInsertionPointStateAndRestartTimer(true)
+  }
+
+  func popoverDidClose(_ notification: Notification) {
+    if let marker = editingComment, let draft = commentDraft {
+      // 打字全程只进草稿，关闭时一次性写回标注（每键直改 PDFAnnotation 是卡顿根因）
+      store.update(marker) { $0.contents = draft.text }
+      discardCommentIfEmpty(marker)
+    }
+    editingComment = nil
+    commentDraft = nil
+    commentPopover = nil
+  }
+}
+
+private extension NSView {
+  /// 递归找第一个指定类型子视图
+  func firstDescendant<T: NSView>(of type: T.Type) -> T? {
+    for subview in subviews {
+      if let match = subview as? T { return match }
+      if let found = subview.firstDescendant(of: type) { return found }
+    }
+    return nil
   }
 }
 

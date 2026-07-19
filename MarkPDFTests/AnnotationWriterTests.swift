@@ -89,4 +89,48 @@ final class AnnotationWriterTests: XCTestCase {
     let contents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
     XCTAssertFalse(contents.contains { $0.hasSuffix(".tmp") }, "不应残留临时文件")
   }
+
+  /// FR-4.3 批注：/Text 标记图标 + 高亮虚线段（同组）写回后内容与分组保留
+  /// （PDFKit 不渲染程序化 Line 标注，虚线用细长小高亮矩形拼出）
+  func testCommentAnnotationRoundTrip() throws {
+    let (doc, url) = try makePDF(named: "comment.pdf")
+    let page = doc.page(at: 0)!
+    let groupID = UUID().uuidString
+
+    let marker = PDFAnnotation(
+      bounds: NSRect(x: 4, y: 129, width: 22, height: 22),
+      forType: .text,
+      withProperties: nil
+    )
+    marker.iconType = .comment
+    marker.contents = "这一段与 §3 矛盾，需要复核"
+    marker.userName = groupID
+    page.addAnnotation(marker)
+
+    var dashX: CGFloat = 26
+    while dashX < 60 {
+      let dash = PDFAnnotation(
+        bounds: NSRect(x: dashX, y: 139.4, width: min(4, 60 - dashX), height: 1.2),
+        forType: .highlight,
+        withProperties: nil
+      )
+      dash.color = .systemBlue
+      dash.userName = groupID
+      page.addAnnotation(dash)
+      dashX += 6.5
+    }
+
+    try writer.writeBack(document: doc, to: url)
+
+    let reopened = PDFDocument(url: url)
+    let annotations = reopened?.page(at: 0)?.annotations ?? []
+    let markers = annotations.filter { $0.isCommentMarker }
+    XCTAssertEqual(markers.count, 1)
+    XCTAssertEqual(markers.first?.contents, "这一段与 §3 矛盾，需要复核")
+    XCTAssertEqual(markers.first?.userName, groupID)
+    let dashes = annotations.filter {
+      ($0.type == "Highlight" || $0.type == "/Highlight") && $0.userName == groupID
+    }
+    XCTAssertEqual(dashes.count, 6, "虚线段应与标记同组（整体删除/列表合并）")
+  }
 }

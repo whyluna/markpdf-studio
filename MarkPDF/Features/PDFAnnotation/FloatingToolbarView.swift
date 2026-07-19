@@ -12,6 +12,7 @@ struct FloatingToolbarView: View {
     (.highlight, "highlighter"),
     (.underline, "underline"),
     (.strikeOut, "strikethrough"),
+    (.freeText, "text.bubble"),
   ]
 
   var body: some View {

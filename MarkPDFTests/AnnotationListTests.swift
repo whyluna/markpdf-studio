@@ -49,13 +49,12 @@ final class AnnotationListTests: XCTestCase {
 
   // MARK: - 子类型映射
 
-  func testKindMappingCoversMarkupAndShapes() {
+  func testKindMappingCoversManagedKinds() {
     let cases: [(PDFAnnotationSubtype, AnnotationKind)] = [
       (.highlight, .highlight),
       (.underline, .underline),
       (.strikeOut, .strikeOut),
       (.freeText, .freeText),
-      (.ink, .ink),
     ]
     for (subtype, expected) in cases {
       let annotation = PDFAnnotation(bounds: .zero, forType: subtype, withProperties: nil)
@@ -74,9 +73,11 @@ final class AnnotationListTests: XCTestCase {
     let (doc, url) = makeDocument()
     store.attach(document: doc, url: url)
     let page = doc.page(at: 0)!
+    // 组 ID 必须是 UUID 形态（PDFKit 会自动把系统用户名写进 userName，不能误当组 ID）
+    let groupID = UUID().uuidString
     for annotation in [
-      highlight(y: 150, groupID: "g1"),
-      highlight(y: 130, groupID: "g1"),
+      highlight(y: 150, groupID: groupID),
+      highlight(y: 130, groupID: groupID),
       highlight(y: 100), // 无组：独立条目
     ] {
       page.addAnnotation(annotation)
@@ -84,10 +85,24 @@ final class AnnotationListTests: XCTestCase {
 
     let items = store.annotationItems()
     XCTAssertEqual(items.count, 2)
-    let grouped = items.first { $0.id == "g1" }
+    let grouped = items.first { $0.id == groupID }
     XCTAssertEqual(grouped?.annotations.count, 2)
     XCTAssertEqual(grouped?.pageLabel, 1)
     XCTAssertEqual(grouped?.kind, .highlight)
+  }
+
+  /// 作者名形态的 userName（PDFKit 自动填系统用户名/预览写作者名）不得并组
+  func testAuthorNameUserNameDoesNotGroup() {
+    let (doc, url) = makeDocument()
+    store.attach(document: doc, url: url)
+    let page = doc.page(at: 0)!
+    for annotation in [
+      highlight(y: 150, groupID: "why"),
+      highlight(y: 130, groupID: "why"),
+    ] {
+      page.addAnnotation(annotation)
+    }
+    XCTAssertEqual(store.annotationItems().count, 2, "同作者名的两条标注应保持独立条目")
   }
 
   func testPopupCompanionIsExcludedFromItems() {
@@ -101,16 +116,18 @@ final class AnnotationListTests: XCTestCase {
     XCTAssertEqual(store.annotationItems().count, 1)
   }
 
-  func testRevisionBumpsOnChanges() {
+  /// revision 刷新有 300ms 防抖（批注输入每键 markDirty 不能按键频全文档重扫）；
+  /// 防抖窗口内的连续变更合并为一次刷新
+  func testRevisionBumpsOnChanges() async {
     let (doc, url) = makeDocument()
     store.attach(document: doc, url: url)
     let baseline = store.revision
     let page = doc.page(at: 0)!
     let annotation = highlight(y: 50)
     store.add(annotation, to: page)
-    XCTAssertEqual(store.revision, baseline + 1)
     store.remove(annotation, from: page)
-    XCTAssertEqual(store.revision, baseline + 2)
+    try? await Task.sleep(nanoseconds: 500_000_000)
+    XCTAssertEqual(store.revision, baseline + 1, "防抖窗口内连续增删合并为一次 revision 刷新")
   }
 
   // MARK: - 排序

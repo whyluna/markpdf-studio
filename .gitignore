@@ -20,3 +20,6 @@ MarkPDF/Resources/Web/dist/*
 
 # macOS
 .DS_Store
+
+# 测试用本地 DerivedData（避免污染用户全局 DerivedData）
+.dd/

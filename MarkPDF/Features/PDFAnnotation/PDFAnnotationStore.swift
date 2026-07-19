@@ -21,6 +21,9 @@ final class PDFAnnotationStore: ObservableObject {
   private let writer: AnnotationWriter
   private let defaults: UserDefaults
   private let debouncer = Debouncer(interval: 0.5)
+  /// revision 刷新防抖：批注输入每键都 markDirty，全文档重扫（含逐标注文本提取）
+  /// 不能按键频跑；列表最终一致即可
+  private let revisionDebouncer = Debouncer(interval: 0.3)
   private weak var document: PDFDocument?
 
   init(writer: AnnotationWriter = LiveAnnotationWriter(), defaults: UserDefaults = .standard) {
@@ -50,6 +53,14 @@ final class PDFAnnotationStore: ObservableObject {
     currentFileURL = url
     hasUnsavedChanges = false
     revision += 1
+    // 屏蔽原生 Popup 弹窗：PDFView 点击 /Text 图标会自开 Popup 伴侣窗，
+    // 与我们的批注编辑框双开（编辑统一走自己的 popover）
+    for pageIndex in 0..<document.pageCount {
+      guard let page = document.page(at: pageIndex) else { continue }
+      for annotation in page.annotations where annotation is PDFAnnotationPopup {
+        annotation.shouldDisplay = false
+      }
+    }
   }
 
   // MARK: - 标注变更
@@ -60,8 +71,11 @@ final class PDFAnnotationStore: ObservableObject {
     markDirty()
   }
 
-  /// 移除标注并调度写回
+  /// 移除标注并调度写回（便签型标注连带移除 Popup 伴侣）
   func remove(_ annotation: PDFAnnotation, from page: PDFPage) {
+    if let popup = annotation.popup, popup.page === page {
+      page.removeAnnotation(popup)
+    }
     page.removeAnnotation(annotation)
     markDirty()
   }
@@ -80,17 +94,18 @@ final class PDFAnnotationStore: ObservableObject {
 
   // MARK: - 列表快照（FR-4.5）
 
-  /// 全文档标注条目（同组标注合并；跳过 Popup/链接等非面板管理类型）
+  /// 全文档标注条目（同组标注合并，含组内非管理类型成员如批注连接线；
+  /// 无组的非管理类型如 Popup 不进列表）
   func annotationItems() -> [AnnotationItem] {
     guard let document else { return [] }
     var grouped: [String: [PDFAnnotation]] = [:]
     var singles: [PDFAnnotation] = []
     for pageIndex in 0..<document.pageCount {
       guard let page = document.page(at: pageIndex) else { continue }
-      for annotation in page.annotations where AnnotationKind.of(annotation) != nil {
-        if let groupID = annotation.userName, !groupID.isEmpty {
-          grouped[groupID, default: []].append(annotation)
-        } else {
+      for annotation in page.annotations {
+        if isAnnotationGroupID(annotation.userName) {
+          grouped[annotation.userName!, default: []].append(annotation)
+        } else if AnnotationKind.of(annotation) != nil {
           singles.append(annotation)
         }
       }
@@ -109,12 +124,18 @@ final class PDFAnnotationStore: ObservableObject {
     return items
   }
 
+  /// 组条目主标注：批注组以标记图标为主（contents = 批注正文，类型显示"批注"），
+  /// 否则取首个受管理类型成员
   private func makeItem(id: String, annotations: [PDFAnnotation]) -> AnnotationItem? {
-    guard let first = annotations.first,
-      let kind = AnnotationKind.of(first),
-      let page = first.page,
+    let primary = annotations.first(where: \.isCommentMarker)
+      ?? annotations.first(where: { AnnotationKind.of($0) != nil })
+    guard let primary,
+      let page = primary.page,
       let document
     else { return nil }
+    let kind: AnnotationKind = primary.isCommentMarker
+      ? .freeText
+      : AnnotationKind.of(primary)!
     // 摘录：拼接各段覆盖文本，规整空白后截断
     let excerpt = annotations
       .compactMap { $0.page?.selection(for: $0.bounds)?.string }
@@ -122,12 +143,12 @@ final class PDFAnnotationStore: ObservableObject {
       .components(separatedBy: .whitespacesAndNewlines)
       .filter { !$0.isEmpty }
       .joined(separator: " ")
-    let name = (first.contents ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let name = (primary.contents ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     return AnnotationItem(
       id: id,
       annotations: annotations,
       kind: kind,
-      color: first.color,
+      color: primary.color,
       pageIndex: document.index(for: page),
       excerpt: String(excerpt.prefix(80)),
       name: name
@@ -136,10 +157,15 @@ final class PDFAnnotationStore: ObservableObject {
 
   // MARK: - 写回调度（FR-4.6）
 
-  /// 标注变更统一入口：标记脏并调度 500ms 防抖写回
+  /// 标注变更统一入口：标记脏并调度 500ms 防抖写回。
+  /// hasUnsavedChanges 重复置 true 也会广播 @Published（每键触发全局重渲染），必须拦重
   func markDirty() {
-    hasUnsavedChanges = true
-    revision += 1
+    if !hasUnsavedChanges {
+      hasUnsavedChanges = true
+    }
+    revisionDebouncer.schedule { [weak self] in
+      self?.revision += 1
+    }
     debouncer.schedule { [weak self] in
       self?.writeBackNow()
     }

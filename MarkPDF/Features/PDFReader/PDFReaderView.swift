@@ -12,12 +12,33 @@ final class ZoomablePDFView: PDFView {
   /// （用于浮动按钮——PDFView 会按文字命中把光标抢设为 I 形，必须在 PDFKit 管线内拦截）
   var handCursorRects: [CGRect] = []
 
+  /// 批注图标 mouseDown 拦截（FR-4.3）：返回 true 表示命中批注标记并已处理，
+  /// 事件不传给 PDFKit——否则 PDFView 会原生打开 /Text 的 Popup 弹窗（深蓝框），
+  /// 且手势识别器路径时灵时不灵（PDFView 会先吃掉图标上的点击）
+  var onCommentMarkerMouseDown: ((NSPoint) -> Bool)?
+
+  /// 手指光标查询（FR-4.3）：命中批注标记时返回 true。
+  /// PDFView 在 /Text 图标上原生显示"抓抓手"，必须在 PDFKit 光标管线内改成手指
+  var onPointingHandQuery: ((NSPoint) -> Bool)?
+
   override func magnify(with event: NSEvent) {
     onMagnify?(event.phase, event.magnification)
   }
 
+  override func mouseDown(with event: NSEvent) {
+    let point = convert(event.locationInWindow, from: nil)
+    if let handler = onCommentMarkerMouseDown, handler(point) {
+      return
+    }
+    super.mouseDown(with: event)
+  }
+
   override func cursorUpdate(with event: NSEvent) {
     let point = convert(event.locationInWindow, from: nil)
+    if onPointingHandQuery?(point) == true {
+      NSCursor.pointingHand.set()
+      return
+    }
     if handCursorRects.contains(where: { $0.contains(point) }) {
       NSCursor.pointingHand.set()
       return
@@ -27,6 +48,10 @@ final class ZoomablePDFView: PDFView {
 
   override func mouseMoved(with event: NSEvent) {
     let point = convert(event.locationInWindow, from: nil)
+    if onPointingHandQuery?(point) == true {
+      NSCursor.pointingHand.set()
+      return
+    }
     if handCursorRects.contains(where: { $0.contains(point) }) {
       NSCursor.pointingHand.set()
       return

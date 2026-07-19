@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// 窗口工具栏 PDF 标注工具组（FR-4.4，对齐设计稿 #pdfTools）：
-/// 标注工具按钮（选中态 = 直接标注模式，划词即标）+ 四色色板（按类型记忆最近用色）。
-/// 便签 / 文本框 / 手绘 / 形状工具随 FR-4.2 / FR-4.3 落地后补入。
+/// 标注工具按钮（高亮/下划线/删除线 = 划词即标；批注 = 划词在页边插批注框）+
+/// 四色色板（按类型记忆最近用色）。
 struct PDFToolsView: View {
   @EnvironmentObject private var store: PDFAnnotationStore
   @State private var hoveredTool: AnnotationKind?
@@ -12,6 +12,7 @@ struct PDFToolsView: View {
     (.highlight, "highlighter"),
     (.underline, "underline"),
     (.strikeOut, "strikethrough"),
+    (.freeText, "text.bubble"),
   ]
 
   var body: some View {

@@ -9,16 +9,8 @@ enum AnnotationKind: String, CaseIterable, Identifiable {
   case underline
   /// 删除线
   case strikeOut
-  /// 波浪线
-  case squiggly
-  /// 文本框
+  /// 批注（页边文本框 + 虚线连接器，FR-4.3 精简后唯一图形标注）
   case freeText
-  /// 手绘
-  case ink
-  /// 矩形
-  case rectangle
-  /// 箭头
-  case arrow
 
   var id: String { rawValue }
 
@@ -27,11 +19,7 @@ enum AnnotationKind: String, CaseIterable, Identifiable {
     case .highlight: "高亮"
     case .underline: "下划线"
     case .strikeOut: "删除线"
-    case .squiggly: "波浪线"
-    case .freeText: "文本框"
-    case .ink: "手绘"
-    case .rectangle: "矩形"
-    case .arrow: "箭头"
+    case .freeText: "批注"
     }
   }
 }
@@ -60,18 +48,14 @@ enum AnnotationColor: String, CaseIterable, Identifiable {
     case .highlight: .yellow
     case .underline: .blue
     case .strikeOut: .red
-    case .squiggly: .green
     case .freeText: .blue
-    case .ink: .red
-    case .rectangle: .green
-    case .arrow: .red
     }
   }
 }
 
 extension AnnotationKind {
   /// 从 PDF 标注子类型映射（兼容 "Highlight" 与 "/Highlight" 两种上报形态）。
-  /// 返回 nil 表示不在面板管理范围（Popup / 链接等）
+  /// 返回 nil 表示不在面板管理范围（Popup / 连接线 / 外部阅读器创建的其他类型）
   static func of(_ annotation: PDFAnnotation) -> AnnotationKind? {
     guard let raw = annotation.type else { return nil }
     let name = raw.hasPrefix("/") ? String(raw.dropFirst()) : raw
@@ -80,12 +64,26 @@ extension AnnotationKind {
     case "Underline": return .underline
     case "StrikeOut": return .strikeOut
     case "FreeText": return .freeText
-    case "Ink": return .ink
-    case "Square": return .rectangle
-    case "Line": return .arrow
     default: return nil
     }
   }
+}
+
+extension PDFAnnotation {
+  /// 是否批注标记（/Text 便签图标；FR-4.3 批注在页边的锚点）。
+  /// 注意 PDFKit 上报无前导斜杠（"Text"），两种形态都认
+  var isCommentMarker: Bool {
+    guard let type else { return false }
+    return type == "Text" || type == PDFAnnotationSubtype.text.rawValue
+  }
+}
+
+/// 是否本应用生成的标注组 ID。
+/// 我们的组 ID 是 UUID；注意 PDFKit 会在创建标注时自动把系统用户名写进 userName，
+/// 预览等第三方阅读器写的是作者名——这些都不能当组 ID（否则同作者标注会被并成一组）
+func isAnnotationGroupID(_ userName: String?) -> Bool {
+  guard let userName, !userName.isEmpty else { return false }
+  return UUID(uuidString: userName) != nil
 }
 
 /// 标注列表条目（FR-4.5）：一次动作创建的同组标注合并为一项
