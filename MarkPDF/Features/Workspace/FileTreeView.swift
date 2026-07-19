@@ -7,6 +7,8 @@ import UniformTypeIdentifiers
 struct FileTreeView: View {
   @EnvironmentObject private var store: WorkspaceStore
   @EnvironmentObject private var tabStore: TabStore
+  @EnvironmentObject private var favoritesStore: FavoritesStore
+  @EnvironmentObject private var recentsStore: RecentFilesStore
   @Environment(\.undoManager) private var undoManager
 
   /// 行内命名状态：新建后为默认名节点命名，或对既有节点重命名
@@ -71,6 +73,11 @@ struct FileTreeView: View {
             treeRows(root.children ?? [], depth: 0)
           }
           .padding(.vertical, 4)
+          // FR-1.5：收藏 / 最近打开分区（对齐设计稿 .sec）
+          collectionSection(title: "收藏", urls: favoritesStore.files(forRoot: root.id)) { url in
+            favoritesStore.remove(url, forRoot: root.id)
+          }
+          collectionSection(title: "最近打开", urls: recentsStore.files(forRoot: root.id), onRemove: nil)
         }
       }
     }
@@ -189,6 +196,46 @@ struct FileTreeView: View {
     .padding(.vertical, 8)
   }
 
+  // MARK: - 收藏 / 最近打开分区（FR-1.5）
+
+  /// 文件集合分区：标题 + 文件行（点击打开）；已删除的文件不显示
+  @ViewBuilder
+  private func collectionSection(title: String, urls: [URL], onRemove: ((URL) -> Void)?) -> some View {
+    let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+    if !existing.isEmpty {
+      Text(title)
+        .font(.caption)
+        .fontWeight(.semibold)
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+      ForEach(existing, id: \.self) { url in
+        HStack(spacing: 4) {
+          Spacer()
+            .frame(width: 12)
+          Label(url.lastPathComponent, systemImage: FileNode.kind(for: url, isDirectory: false).iconName)
+            .lineLimit(1)
+            .truncationMode(.middle)
+          Spacer(minLength: 0)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 8)
+        .padding(.vertical, 4.5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture {
+          tabStore.open(url: url)
+        }
+        .contextMenu {
+          if let onRemove {
+            Button("从「\(title)」移除") { onRemove(url) }
+          }
+        }
+      }
+    }
+  }
+
   // MARK: - 右键菜单
 
   @ViewBuilder
@@ -196,6 +243,12 @@ struct FileTreeView: View {
     if node.isFolder {
       Button("新建 Markdown 文件") { createMarkdown(in: node.id) }
       Button("新建文件夹") { createFolder(in: node.id) }
+      Divider()
+    } else if let root = store.root {
+      // 收藏切换（FR-1.5）
+      Button(favoritesStore.contains(node.id, forRoot: root.id) ? "移除收藏" : "加入收藏") {
+        favoritesStore.toggle(node.id, forRoot: root.id)
+      }
       Divider()
     }
     Button("重命名") { naming = NamingState(node: node, draft: node.name) }
@@ -282,4 +335,6 @@ struct FileTreeView: View {
   FileTreeView()
     .environmentObject(WorkspaceStore())
     .environmentObject(TabStore())
+    .environmentObject(FavoritesStore())
+    .environmentObject(RecentFilesStore())
 }

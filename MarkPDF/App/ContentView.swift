@@ -8,6 +8,7 @@ struct ContentView: View {
   @EnvironmentObject private var tabStore: TabStore
   @EnvironmentObject private var pdfStore: PDFReaderStore
   @EnvironmentObject private var annotationStore: PDFAnnotationStore
+  @EnvironmentObject private var recentsStore: RecentFilesStore
 
   var body: some View {
     VStack(spacing: 0) {
@@ -18,6 +19,13 @@ struct ContentView: View {
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
       tabStore.flushAll()
       annotationStore.flushPendingWrites()
+    }
+    // 最近打开记录接线（FR-1.5）：文件打开 → 按当前工作区根路径记录
+    .onAppear {
+      tabStore.onOpenFile = { url in
+        guard let root = workspaceStore.root?.id else { return }
+        recentsStore.record(url, forRoot: root)
+      }
     }
     // 快速打开面板（FR-6.1 ⌘P）
     .overlay {

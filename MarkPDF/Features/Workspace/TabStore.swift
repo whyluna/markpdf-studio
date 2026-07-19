@@ -7,6 +7,8 @@ final class TabStore: ObservableObject {
   @Published var activeGroupID: TabGroup.ID
   /// 拖拽中的标签（应用内拖拽共享状态）
   var draggingTab: (tab: EditorTab, from: TabGroup.ID)?
+  /// 文件被打开的回调（FR-1.5 最近打开记录；由 App 层接线，与工作区根路径关联）
+  var onOpenFile: ((URL) -> Void)?
 
   init() {
     let group = TabGroup()
@@ -29,6 +31,7 @@ final class TabStore: ObservableObject {
   /// 在当前组打开文件
   func open(_ node: FileNode) {
     activeGroup.open(node)
+    onOpenFile?(node.id)
   }
 
   /// 按 URL 打开文件（导出笔记后打开、最近打开等场景）

@@ -10,6 +10,17 @@ struct FileNode: Identifiable, Hashable {
     case pdf
     case image
     case other
+
+    /// SF Symbols 图标
+    var iconName: String {
+      switch self {
+      case .folder: return "folder.fill"
+      case .markdown: return "doc.text"
+      case .pdf: return "doc.richtext"
+      case .image: return "photo"
+      case .other: return "doc"
+      }
+    }
   }
 
   /// 以文件 URL 作为稳定身份（同一路径即同一节点）
@@ -44,15 +55,7 @@ struct FileNode: Identifiable, Hashable {
   }
 
   /// SF Symbols 图标
-  var iconName: String {
-    switch kind {
-    case .folder: return "folder.fill"
-    case .markdown: return "doc.text"
-    case .pdf: return "doc.richtext"
-    case .image: return "photo"
-    case .other: return "doc"
-    }
-  }
+  var iconName: String { kind.iconName }
 
   // Hashable 仅按路径判定：避免整棵子树参与比较/哈希（扫描结果可能很大）
   static func == (lhs: FileNode, rhs: FileNode) -> Bool {

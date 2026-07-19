@@ -9,6 +9,8 @@ struct MarkPDFApp: App {
   @StateObject private var imageStore = ImagePreviewStore()
   @StateObject private var annotationStore = PDFAnnotationStore()
   @StateObject private var readingPositionStore = PDFReadingPositionStore()
+  @StateObject private var favoritesStore = FavoritesStore()
+  @StateObject private var recentsStore = RecentFilesStore()
 
   /// 当前标签是否可缩放（PDF / 图片）
   private var zoomable: Bool {
@@ -35,6 +37,8 @@ struct MarkPDFApp: App {
         .environmentObject(imageStore)
         .environmentObject(annotationStore)
         .environmentObject(readingPositionStore)
+        .environmentObject(favoritesStore)
+        .environmentObject(recentsStore)
         .frame(minWidth: 1080, minHeight: 640)
     }
     .defaultSize(width: 1380, height: 900)
