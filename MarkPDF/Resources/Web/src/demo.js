@@ -37,4 +37,16 @@ out = llm.generate(prompts, SamplingParams(max_tokens=512))  # block 自动分�
 - [ ] 整理 Mooncake 配置笔记
 
 > “PagedAttention divides the request's KV cache into blocks ... near-zero waste (less than 4%).”
+
+## 扩展语法（FR-2.4）
+
+注意力复杂度是 $O(n^2 d)$，其中 $d$ 为 head 维度；核心结论见下式[^paper]：
+
+$$
+\\text{Attention}(Q,K,V)=\\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d}}\\right)V
+$$
+
+PagedAttention 把显存浪费压到 ==< 4%==，这是 ==最关键== 的收益之一。
+
+[^paper]: vLLM 论文 arXiv:2309.06180
 `;

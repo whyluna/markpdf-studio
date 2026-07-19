@@ -4,7 +4,9 @@
 import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { RangeSetBuilder, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
+import katex from "katex";
 import { docContext } from "./doccontext.js";
+import { scanExtended } from "./extended.js";
 
 /* ---------- 小部件 ---------- */
 
@@ -74,6 +76,72 @@ class HRWidget extends WidgetType {
     const el = document.createElement("span");
     el.className = "cm-hr";
     return el;
+  }
+}
+
+// KaTeX 公式（FR-2.4）：displayMode 为块级（div 独占成行），否则行内（span）
+class MathWidget extends WidgetType {
+  constructor(latex, displayMode, source) {
+    super();
+    this.latex = latex;
+    this.displayMode = displayMode;
+    this.source = source; // 原始源码，用于 eq 去重与异常降级
+  }
+  eq(o) {
+    return o.source === this.source && o.displayMode === this.displayMode;
+  }
+  toDOM(view) {
+    const el = document.createElement(this.displayMode ? "div" : "span");
+    el.className = this.displayMode ? "cm-math-display" : "cm-math-inline";
+    try {
+      el.innerHTML = katex.renderToString(this.latex, {
+        displayMode: this.displayMode,
+        throwOnError: false, // 语法错误时输出错误样式，不炸编辑器
+        output: "html",
+      });
+    } catch {
+      el.textContent = this.source; // 极端异常降级为源码文本
+    }
+    // 块级单击、行内双击 → 光标落回公式源码处，显露源码进入编辑
+    // （位置由 posAtDOM 实时解析，不怕上文编辑偏移；阅读模式 alwaysRender 下重渲染后仍是渲染态）
+    el.addEventListener(this.displayMode ? "mousedown" : "dblclick", (e) => {
+      e.preventDefault();
+      const pos = view.posAtDOM(el);
+      view.dispatch({ selection: { anchor: pos } });
+      view.focus();
+    });
+    return el;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
+// 脚注引用上标（FR-2.4）：[^label] → [n]（编号按首次引用顺序；不做点击跳转）
+class FootnoteRefWidget extends WidgetType {
+  constructor(n, label) {
+    super();
+    this.n = n;
+    this.label = label;
+  }
+  eq(o) {
+    return o.n === this.n && o.label === this.label;
+  }
+  toDOM(view) {
+    const el = document.createElement("sup");
+    el.className = "cm-footnote-ref";
+    el.textContent = `[${this.n}]`;
+    // 双击落光标显露源码（与图片/公式一致的手感）
+    el.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      const pos = view.posAtDOM(el);
+      view.dispatch({ selection: { anchor: pos } });
+      view.focus();
+    });
+    return el;
+  }
+  ignoreEvent() {
+    return false;
   }
 }
 
@@ -309,9 +377,88 @@ function buildDecorations(state, alwaysRender) {
   const isLineActive = (pos) => !alwaysRender && lineActive(state, pos);
   const isRangeActive = (from, to) => !alwaysRender && rangeActive(state, from, to);
 
+  /* ---- 扩展语法（FR-2.4）：数学公式 / 高亮 / 脚注（正则扫描，跳过代码区） ---- */
+
+  // 第一遍：收集排除范围。代码区内三种语法不生效；
+  // 图片/表格会被整体 replace，其内部再叠加 replace 会互相重叠，一并排除
+  const excludeRanges = [];
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (
+        node.name === "InlineCode" ||
+        node.name === "FencedCode" ||
+        node.name === "IndentedCode" ||
+        node.name === "Image" ||
+        node.name === "Table"
+      ) {
+        excludeRanges.push({ from: node.from, to: node.to });
+      }
+    },
+  });
+
+  const ext = scanExtended(state.doc.toString(), excludeRanges);
+  // 扩展语法当前生效的 replace 范围：树装饰落在其中必须抑制（避免 replace 重叠，
+  // 如公式块内的强调标记、被识别为 Link 的脚注引用 [^a]）
+  const extReplaces = [];
+
+  for (const m of ext.maths) {
+    if (isRangeActive(m.from, m.to)) continue; // 光标在场 → 显露源码
+    const source = state.doc.sliceString(m.from, m.to);
+    const widget = new MathWidget(m.latex, m.displayMode, source);
+    if (m.displayMode) {
+      // 块级公式：所在行首尾仅剩空白时按行边界整块替换；嵌在行内则退为行内 widget
+      const startLine = state.doc.lineAt(m.from);
+      const endLine = state.doc.lineAt(m.to);
+      const alone =
+        /^\s*$/.test(startLine.text.slice(0, m.from - startLine.from)) &&
+        /^\s*$/.test(endLine.text.slice(m.to - endLine.from));
+      if (alone) {
+        decos.push({
+          from: startLine.from,
+          to: endLine.to,
+          deco: Decoration.replace({ widget, block: true }),
+        });
+        extReplaces.push({ from: startLine.from, to: endLine.to });
+        continue;
+      }
+    }
+    addWidgetReplace(m.from, m.to, widget);
+    extReplaces.push({ from: m.from, to: m.to });
+  }
+
+  for (const h of ext.highlights) {
+    // 高亮内容始终带底色（对齐 Emphasis 的显隐策略），光标不在场时隐藏两侧 ==
+    addMark(h.contentFrom, h.contentTo, "cm-highlight");
+    if (!isRangeActive(h.from, h.to)) {
+      addHide(h.openFrom, h.openTo);
+      addHide(h.closeFrom, h.closeTo);
+    }
+  }
+
+  for (const r of ext.footnoteRefs) {
+    if (isRangeActive(r.from, r.to)) continue;
+    addWidgetReplace(r.from, r.to, new FootnoteRefWidget(r.n, r.label));
+    extReplaces.push({ from: r.from, to: r.to });
+  }
+
+  for (const d of ext.footnoteDefs) {
+    addLine(state.doc.lineAt(d.markerFrom).from, "cm-footnote-def");
+    if (!isLineActive(d.markerFrom)) {
+      addHide(d.markerFrom, d.markerTo);
+      // 定义行可能被语法树解析为 Paragraph+Link（前缀 [^label] 的 [ ] 会被 Link 分支隐藏），
+      // 标记隐藏范围同样需抑制树装饰
+      extReplaces.push({ from: d.markerFrom, to: d.markerTo });
+    }
+  }
+
   syntaxTree(state).iterate({
     enter(node) {
       const { name, from, to } = node;
+
+      // 落在扩展语法 replace 范围内的节点不再装饰（避免 replace 重叠）
+      for (const r of extReplaces) {
+        if (from >= r.from && to <= r.to) return false;
+      }
 
       // 标题行样式
       if (headingClass[name]) {

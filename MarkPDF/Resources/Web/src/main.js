@@ -6,6 +6,8 @@ import { search, searchKeymap } from "@codemirror/search";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage, syntaxTree } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
+// KaTeX 样式：esbuild 自动拆出 dist/editor.css 并复制字体（FR-2.4，离线打包不用 CDN）
+import "katex/dist/katex.min.css";
 
 // 自定义高亮：代码块 token 配色走 CSS 变量（随明暗主题切换）；
 // 显式取消 defaultHighlightStyle 给标题加的 underline

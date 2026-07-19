@@ -11,11 +11,13 @@
   --tok-k:#af3ad4; --tok-s:#c9352b; --tok-c:#8e8e93; --tok-f:#0a84ff; --tok-n:#b05c00;
   --editor-font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","PingFang SC",sans-serif;
   --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  --hl:rgba(255,212,59,.4);
 }
 [data-theme="dark"]{
   --win-bg:#1e1e21; --text:#f5f5f7; --text2:#a1a1a6; --text3:#6c6c70;
   --border:#3c3c41; --sel:rgba(10,132,255,.35); --accent:#0a84ff; --code-bg:#2a2a30;
   --tok-k:#e08cff; --tok-s:#ff9a8a; --tok-c:#8e8e93; --tok-f:#6ab8ff; --tok-n:#ffbe5c;
+  --hl:rgba(255,197,23,.27);
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%}
@@ -99,7 +101,17 @@ body{display:flex;flex-direction:column}
 .cm-table-widget th,.cm-table-widget td{border:1px solid var(--border);padding:8px 12px;text-align:left}
 .cm-table-widget th{background:var(--code-bg);font-weight:600}
 .cm-table-widget tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--code-bg) 45%,transparent)}
+/* KaTeX 公式（FR-2.4）。widget 根元素用 padding 代替垂直 margin（margin 不计入 offsetHeight） */
+.cm-math-display{padding:8px 0;overflow-x:auto}
+.cm-math-display .katex-display{margin:0}
+/* 高亮 ==text==：半透明黄底随明暗主题（--hl），文字保持主题色 */
+.cm-highlight{background:var(--hl);border-radius:3px;padding:0 1px}
+/* 脚注：引用上标与定义行（小号、次要色） */
+.cm-footnote-ref{color:var(--accent);font-size:.78em;padding:0 1px;cursor:default}
+.cm-footnote-def{font-size:13px;color:var(--text2)}
 </style>
+<!-- KaTeX 样式（esbuild 由 src/main.js 的 CSS import 自动拆出） -->
+<link rel="stylesheet" href="dist/editor.css">
 </head>
 <body>
 <div id="devbar">

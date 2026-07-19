@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "serve": "python3 -m http.server 8000"
+    "serve": "python3 -m http.server 8000",
+    "test": "vitest run"
   },
   "dependencies": {
     "@codemirror/commands": "6.10.4",
@@ -26,9 +27,11 @@
     "@codemirror/search": "6.5.11",
     "@codemirror/state": "6.7.1",
     "@codemirror/view": "6.43.6",
-    "@lezer/highlight": "1.2.3"
+    "@lezer/highlight": "1.2.3",
+    "katex": "0.18.1"
   },
   "devDependencies": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "vitest": "4.1.10"
   }
 }
