@@ -170,6 +170,11 @@ final class WorkspaceStore: ObservableObject {
     do {
       let newURL = try ops.move(at: node.id, toFolder: folder)
       if newURL != node.id {
+        // FR-2.5：md 跨目录移动后重写相对图片链接（保持指向原目标）；
+        // 打开中的标签由 EditorStore.fileDidMove 检测磁盘变化并重载
+        if node.kind == .markdown {
+          rewriteImageLinksAfterMove(from: node.id, to: newURL)
+        }
         refresh(selecting: newURL)
         undo?.registerUndo(withTarget: self) { target in
           target.move(
@@ -184,6 +189,22 @@ final class WorkspaceStore: ObservableObject {
     } catch {
       lastError = error.localizedDescription
       return nil
+    }
+  }
+
+  /// md 移动后重写磁盘上的相对图片链接（FR-2.5 验收：移动后相对链接自动修正）
+  private func rewriteImageLinksAfterMove(from oldURL: URL, to newURL: URL) {
+    guard let content = try? String(contentsOf: newURL, encoding: .utf8) else { return }
+    let rewritten = MarkdownImageLinkRewriter.rewrite(
+      markdown: content,
+      fromOldDir: oldURL.deletingLastPathComponent(),
+      toNewDir: newURL.deletingLastPathComponent()
+    )
+    guard rewritten != content else { return }
+    do {
+      try rewritten.write(to: newURL, atomically: true, encoding: .utf8)
+    } catch {
+      Logger.workspace.error("移动后重写图片链接失败 \(newURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
     }
   }
 

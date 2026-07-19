@@ -60,10 +60,19 @@ final class EditorStore: ObservableObject {
     onCursorLineChange?(url, line)
   }
 
-  /// 打开的文件被重命名/移动：跟随更新标识（FR-1.2）
+  /// 打开的文件被重命名/移动：跟随更新标识（FR-1.2）；
+  /// 移动可能触发磁盘链接修正（FR-2.5），磁盘与上次落盘不一致时以磁盘为准重载
+  ///（重命名无磁盘变化，不影响未落盘编辑）
   func fileDidMove(from oldURL: URL, to newURL: URL) {
     guard currentFileURL == oldURL else { return }
     currentFileURL = newURL
+    if let disk = try? String(contentsOf: newURL, encoding: .utf8), disk != lastPersistedText {
+      pendingSave?.cancel()
+      pendingSave = nil
+      lastPersistedText = disk
+      text = disk
+      hasUnsavedChanges = false
+    }
   }
 
   /// 打开的文件被移入废纸篓：转为草稿态、停止自动保存（内容保留在编辑器与废纸篓）

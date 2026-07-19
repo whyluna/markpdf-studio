@@ -37,6 +37,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   let scrollToLine: Int?
   /// 载入文档时恢复的上次编辑行（FR-1.6 编辑位置记忆）；nil 不跳转
   let initialLine: Int?
+  /// 工作区根目录（FR-2.5 图片存 assets/ 用）；nil = 无工作区
+  let workspaceRoot: URL?
   /// 内核内容变更回调（自动保存挂钩，FR-2.7）
   var onContentChanged: ((String) -> Void)?
   /// 大纲变更回调（FR-2.6）
@@ -53,6 +55,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     theme: EditorTheme = .light,
     scrollToLine: Int? = nil,
     initialLine: Int? = nil,
+    workspaceRoot: URL? = nil,
     onContentChanged: ((String) -> Void)? = nil,
     onOutlineChanged: (([Heading]) -> Void)? = nil,
     onScrollHandled: (() -> Void)? = nil,
@@ -64,6 +67,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.theme = theme
     self.scrollToLine = scrollToLine
     self.initialLine = initialLine
+    self.workspaceRoot = workspaceRoot
     self.onContentChanged = onContentChanged
     self.onOutlineChanged = onOutlineChanged
     self.onScrollHandled = onScrollHandled
@@ -107,6 +111,13 @@ struct MarkdownEditorView: NSViewRepresentable {
       guard let line = payload["line"] as? Int else { return }
       Task { @MainActor in
         coordinator?.parent.onCursorMoved?(line)
+      }
+    }
+    // 粘贴/拖拽图片存盘（FR-2.5）：写入工作区 assets/，应答相对路径
+    bridge.on(.saveImage) { [weak coordinator = context.coordinator] payload, id in
+      guard let id else { return }
+      Task { @MainActor in
+        coordinator?.saveImage(payload: payload, id: id)
       }
     }
     // ⌘+点击链接：只允许 http/https 用默认浏览器打开（拦截 javascript:/file: 等协议）
@@ -163,6 +174,8 @@ extension MarkdownEditorView {
     private var isReady = false
     private var lastPushedMode: EditorMode?
     private var lastPushedTheme: EditorTheme?
+    /// 图片资产存储（FR-2.5；可注入 mock 测试）
+    let imageAssetService: ImageAssetService = LiveImageAssetService()
     /// 已载入内核的外部文档标识（去重，避免每次宿主刷新都重置内容）
     var lastDocumentID: URL?
 
@@ -240,6 +253,43 @@ extension MarkdownEditorView {
         if case .success(let payload) = result, let text = payload["text"] as? String {
           completion(text)
         }
+      }
+    }
+
+    /// 图片存盘请求（FR-2.5）：写工作区 assets/ 并应答相对路径；失败应答 error 并弹提示
+    func saveImage(payload: [String: Any], id: String) {
+      func fail(_ message: String) {
+        bridge.respond(id: id, payload: ["error": message])
+        let alert = NSAlert()
+        alert.messageText = "图片保存失败"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
+      }
+      guard let dataString = payload["data"] as? String,
+        let data = Data(base64Encoded: dataString)
+      else {
+        fail("图片数据解码失败。")
+        return
+      }
+      guard let root = parent.workspaceRoot,
+        let dir = parent.documentID?.deletingLastPathComponent()
+      else {
+        fail("草稿或未打开工作区时无法保存图片，请先保存文件。")
+        return
+      }
+      do {
+        let path = try imageAssetService.save(
+          data: data,
+          suggestedName: payload["name"] as? String,
+          mime: payload["mime"] as? String,
+          workspaceRoot: root,
+          documentDir: dir
+        )
+        bridge.respond(id: id, payload: ["path": path])
+      } catch {
+        Logger.editor.error("图片存盘失败: \(error.localizedDescription, privacy: .public)")
+        fail(error.localizedDescription)
       }
     }
 

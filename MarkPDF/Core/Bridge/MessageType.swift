@@ -17,4 +17,6 @@ enum BridgeMessageType: String {
   case outline = "editor.outline"
   case openLink = "editor.openLink"
   case cursor = "editor.cursor"
+  /// 粘贴/拖拽图片存盘请求（FR-2.5；带 id 请求-响应，应答 {path} 或 {error}）
+  case saveImage = "editor.saveImage"
 }

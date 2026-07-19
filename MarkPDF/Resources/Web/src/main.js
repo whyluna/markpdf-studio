@@ -241,6 +241,73 @@ view.dom.addEventListener(
   true
 );
 
+/* ---------- 图片粘贴/拖拽入 assets（FR-2.5） ---------- */
+
+// 图片二进制 → native 存盘（请求-响应，应答 {path} 或 {error}）
+function sendImageToNative(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = String(reader.result).split(",")[1] ?? "";
+      Bridge.request("editor.saveImage", {
+        name: file.name || "",
+        mime: file.type || "",
+        data: base64,
+      }).then(resolve, reject);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function insertImageLink(path) {
+  view.dispatch(view.state.replaceSelection(`![](${path})`));
+  view.focus();
+}
+
+function handleImageFile(file) {
+  if (!file) return;
+  sendImageToNative(file)
+    .then((p) => {
+      if (p && p.path) insertImageLink(p.path);
+      // 失败（{error}）时 native 已弹提示，此处静默
+    })
+    .catch(() => {});
+}
+
+// 粘贴：剪贴板含图片时接管，否则交给 CM 默认文本粘贴
+view.dom.addEventListener(
+  "paste",
+  (e) => {
+    const items = [...(e.clipboardData?.items ?? [])];
+    const imgItem = items.find((it) => it.kind === "file" && it.type.startsWith("image/"));
+    if (!imgItem) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleImageFile(imgItem.getAsFile());
+  },
+  true
+);
+
+// 拖拽：图片文件落在编辑器内，落点处插入链接
+view.dom.addEventListener(
+  "drop",
+  (e) => {
+    const files = [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+    if (pos != null) view.dispatch({ selection: { anchor: pos } });
+    files.forEach(handleImageFile);
+  },
+  true
+);
+view.dom.addEventListener("dragover", (e) => {
+  const hasImage = [...(e.dataTransfer?.items ?? [])].some((it) => it.type.startsWith("image/"));
+  if (hasImage) e.preventDefault();
+});
+
 Bridge.notify("editor.ready", { version: "0.1.0" });
 
 // 调试句柄：供 native 探针/浏览器控制台诊断坐标映射（不影响功能）

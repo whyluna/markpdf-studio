@@ -61,6 +61,7 @@ struct MarkdownTabView: View {
   @ObservedObject var store: EditorStore
   @Environment(\.colorScheme) private var colorScheme
   @EnvironmentObject private var stateStore: WorkspaceStateStore
+  @EnvironmentObject private var workspaceStore: WorkspaceStore
 
   var body: some View {
     MarkdownEditorView(
@@ -71,6 +72,8 @@ struct MarkdownTabView: View {
       scrollToLine: store.pendingScrollLine,
       // FR-1.6：载入即恢复上次编辑行；光标变化经内核防抖上报回存
       initialLine: store.currentFileURL.flatMap { stateStore.cursorLine(for: $0) },
+      // FR-2.5：图片粘贴/拖拽存工作区 assets/
+      workspaceRoot: workspaceStore.root?.id,
       onContentChanged: { newText in
         store.contentDidChange(newText)
       },
