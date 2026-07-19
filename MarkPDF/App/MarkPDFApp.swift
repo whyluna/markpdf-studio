@@ -59,7 +59,7 @@ struct MarkPDFApp: App {
             tabStore.open(url: url)
           }
         }
-        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf || annotationStore.currentFileURL == nil)
+        .disabled(annotationStore.currentFileURL == nil)
       }
       CommandGroup(replacing: .saveItem) {
         Button("保存") {

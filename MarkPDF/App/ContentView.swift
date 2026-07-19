@@ -111,9 +111,9 @@ struct ContentView: View {
 
   // MARK: - 导出（FR-4.8）
 
-  /// 当前可导出标注：激活标签为 PDF 且标注 Store 已关联文档
+  /// 当前可导出标注：标注 Store 已关联 PDF 文档（激活标签可以是分栏另一侧的笔记——场景 A）
   private var canExportAnnotations: Bool {
-    tabStore.activeGroup.activeTab?.kind == .pdf && annotationStore.currentFileURL != nil
+    annotationStore.currentFileURL != nil
   }
 
   /// 导出当前 PDF 的全部标注到目标笔记，并在新标签中打开该笔记
