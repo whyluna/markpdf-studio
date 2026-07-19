@@ -7,15 +7,17 @@ struct ContentView: View {
   @EnvironmentObject private var workspaceStore: WorkspaceStore
   @EnvironmentObject private var tabStore: TabStore
   @EnvironmentObject private var pdfStore: PDFReaderStore
+  @EnvironmentObject private var annotationStore: PDFAnnotationStore
 
   var body: some View {
     VStack(spacing: 0) {
       splitView
       StatusBarView()
     }
-    // 退出前兜底落盘（FR-2.7）：全部标签
+    // 退出前兜底落盘（FR-2.7）：全部标签 + PDF 标注写回（FR-4.6 防抖窗口内退出不丢）
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
       tabStore.flushAll()
+      annotationStore.flushPendingWrites()
     }
     // 快速打开面板（FR-6.1 ⌘P）
     .overlay {
@@ -54,6 +56,23 @@ struct ContentView: View {
             }
           }
           ToolbarItem(placement: .primaryAction) {
+            // 导出菜单（设计稿 #btnExport）：PDF/HTML 导出为 FR-2.9 占位
+            Menu {
+              Button("导出为 PDF") {}
+                .disabled(true)
+              Button("导出为 HTML") {}
+                .disabled(true)
+              Divider()
+              Button("导出全部标注为 Markdown…") {
+                exportAnnotations()
+              }
+              .disabled(!canExportAnnotations)
+            } label: {
+              Image(systemName: "square.and.arrow.up")
+            }
+            .help("导出")
+          }
+          ToolbarItem(placement: .primaryAction) {
             // 分栏切换（FR-1.4；设计稿 #btnSplit）
             Button {
               tabStore.toggleSplit()
@@ -80,6 +99,19 @@ struct ContentView: View {
       }
       .frame(minWidth: 266)
     }
+  }
+
+  // MARK: - 导出（FR-4.8）
+
+  /// 当前可导出标注：激活标签为 PDF 且标注 Store 已关联文档
+  private var canExportAnnotations: Bool {
+    tabStore.activeGroup.activeTab?.kind == .pdf && annotationStore.currentFileURL != nil
+  }
+
+  /// 导出当前 PDF 的全部标注到目标笔记，并在新标签中打开该笔记
+  private func exportAnnotations() {
+    guard let url = AnnotationExportFlow.run(store: annotationStore) else { return }
+    tabStore.open(url: url)
   }
 
   // MARK: - 标签内容区

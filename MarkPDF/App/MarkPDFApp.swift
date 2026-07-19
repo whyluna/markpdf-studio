@@ -46,6 +46,14 @@ struct MarkPDFApp: App {
           workspaceStore.isQuickOpenPresented = true
         }
         .keyboardShortcut("p")
+        Divider()
+        // 导出全部标注为 Markdown（FR-4.8），导出后打开目标笔记
+        Button("导出全部标注为 Markdown…") {
+          if let url = AnnotationExportFlow.run(store: annotationStore) {
+            tabStore.open(url: url)
+          }
+        }
+        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf || annotationStore.currentFileURL == nil)
       }
       CommandGroup(replacing: .saveItem) {
         Button("保存") {

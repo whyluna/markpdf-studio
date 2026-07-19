@@ -31,6 +31,11 @@ final class TabStore: ObservableObject {
     activeGroup.open(node)
   }
 
+  /// 按 URL 打开文件（导出笔记后打开、最近打开等场景）
+  func open(url: URL) {
+    open(FileNode(id: url, name: url.lastPathComponent, kind: FileNode.kind(for: url, isDirectory: false)))
+  }
+
   /// 切换分栏：无则创建空右组；有则右组标签并回左组
   func toggleSplit() {
     if isSplit, let right = groups.last {
