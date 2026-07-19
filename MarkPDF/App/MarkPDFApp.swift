@@ -12,6 +12,7 @@ struct MarkPDFApp: App {
   @StateObject private var favoritesStore = FavoritesStore()
   @StateObject private var recentsStore = RecentFilesStore()
   @StateObject private var stateStore = WorkspaceStateStore()
+  @StateObject private var settingsStore = SettingsStore()
 
   /// 当前标签是否可缩放（PDF / 图片）
   private var zoomable: Bool {
@@ -41,6 +42,7 @@ struct MarkPDFApp: App {
         .environmentObject(favoritesStore)
         .environmentObject(recentsStore)
         .environmentObject(stateStore)
+        .environmentObject(settingsStore)
         .frame(minWidth: 1080, minHeight: 640)
     }
     .defaultSize(width: 1380, height: 900)
@@ -105,6 +107,12 @@ struct MarkPDFApp: App {
         .keyboardShortcut("g", modifiers: [.command, .shift])
         .disabled(!pdfStore.isFindBarVisible)
       }
+    }
+
+    // 设置（FR-7.2；⌘,）
+    Settings {
+      SettingsView()
+        .environmentObject(settingsStore)
     }
   }
 }

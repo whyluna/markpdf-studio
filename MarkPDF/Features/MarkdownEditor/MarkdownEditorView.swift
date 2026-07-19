@@ -39,6 +39,10 @@ struct MarkdownEditorView: NSViewRepresentable {
   let initialLine: Int?
   /// 工作区根目录（FR-2.5 图片存 assets/ 用）；nil = 无工作区
   let workspaceRoot: URL?
+  /// 编辑器排版（FR-7.2）：字体 CSS 栈（空串 = 内核默认）、字号、行高
+  let fontCSS: String
+  let fontSize: Double
+  let lineHeight: Double
   /// 内核内容变更回调（自动保存挂钩，FR-2.7）
   var onContentChanged: ((String) -> Void)?
   /// 大纲变更回调（FR-2.6）
@@ -56,6 +60,9 @@ struct MarkdownEditorView: NSViewRepresentable {
     scrollToLine: Int? = nil,
     initialLine: Int? = nil,
     workspaceRoot: URL? = nil,
+    fontCSS: String = "",
+    fontSize: Double = SettingsStore.defaultFontSize,
+    lineHeight: Double = SettingsStore.defaultLineHeight,
     onContentChanged: ((String) -> Void)? = nil,
     onOutlineChanged: (([Heading]) -> Void)? = nil,
     onScrollHandled: (() -> Void)? = nil,
@@ -68,6 +75,9 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.scrollToLine = scrollToLine
     self.initialLine = initialLine
     self.workspaceRoot = workspaceRoot
+    self.fontCSS = fontCSS
+    self.fontSize = fontSize
+    self.lineHeight = lineHeight
     self.onContentChanged = onContentChanged
     self.onOutlineChanged = onOutlineChanged
     self.onScrollHandled = onScrollHandled
@@ -174,6 +184,13 @@ extension MarkdownEditorView {
     private var isReady = false
     private var lastPushedMode: EditorMode?
     private var lastPushedTheme: EditorTheme?
+    /// 排版去重键（FR-7.2）
+    struct Typography: Equatable {
+      var fontCSS: String
+      var fontSize: Double
+      var lineHeight: Double
+    }
+    private var lastPushedTypography: Typography?
     /// 图片资产存储（FR-2.5；可注入 mock 测试）
     let imageAssetService: ImageAssetService = LiveImageAssetService()
     /// 已载入内核的外部文档标识（去重，避免每次宿主刷新都重置内容）
@@ -190,6 +207,7 @@ extension MarkdownEditorView {
       lastDocumentID = parent.documentID
       lastPushedMode = nil
       lastPushedTheme = nil
+      lastPushedTypography = nil
       pushModeAndThemeIfNeeded()
     }
 
@@ -215,6 +233,16 @@ extension MarkdownEditorView {
       if lastPushedTheme != parent.theme {
         bridge.notify(.setTheme, payload: ["theme": parent.theme.rawValue])
         lastPushedTheme = parent.theme
+      }
+      // FR-7.2：排版（字号/行高/字体任一变化即推送）
+      let typography = Typography(fontCSS: parent.fontCSS, fontSize: parent.fontSize, lineHeight: parent.lineHeight)
+      if lastPushedTypography != typography {
+        bridge.notify(.setTypography, payload: [
+          "fontCSS": typography.fontCSS,
+          "fontSize": typography.fontSize,
+          "lineHeight": typography.lineHeight,
+        ])
+        lastPushedTypography = typography
       }
     }
 

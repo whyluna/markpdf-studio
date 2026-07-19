@@ -10,6 +10,8 @@ enum BridgeMessageType: String {
   case setTheme = "editor.setTheme"
   case insertAtCursor = "editor.insertAtCursor"
   case scrollToLine = "editor.scrollToLine"
+  /// 编辑器排版（FR-7.2：字体/字号/行高）
+  case setTypography = "editor.setTypography"
 
   // web → native
   case ready = "editor.ready"

@@ -83,8 +83,9 @@ const baseTheme = EditorView.theme({
     maxWidth: "780px",
     margin: "0 auto",
     padding: "38px 52px 140px",
-    fontSize: "15.5px",
-    lineHeight: "1.8",
+    // 字号/行高走 CSS 变量（FR-7.2 设置即时生效），回退值与 SettingsStore 默认一致
+    fontSize: "var(--editor-font-size, 15.5px)",
+    lineHeight: "var(--editor-line-height, 1.8)",
     caretColor: "var(--accent)",
   },
   "&.cm-focused": { outline: "none" },
@@ -184,6 +185,15 @@ Bridge.onMessage("editor.setMode", (p) => {
 
 Bridge.onMessage("editor.setTheme", (p) => {
   document.documentElement.dataset.theme = p.theme === "dark" ? "dark" : "light";
+});
+
+// 编辑器排版（FR-7.2）：字体/字号/行高 → CSS 变量，即时生效
+Bridge.onMessage("editor.setTypography", (p) => {
+  const style = document.documentElement.style;
+  if (typeof p.fontSize === "number") style.setProperty("--editor-font-size", `${p.fontSize}px`);
+  if (typeof p.lineHeight === "number") style.setProperty("--editor-line-height", String(p.lineHeight));
+  // fontCSS 为空串时移除变量，回退到样式表默认字体栈
+  if (typeof p.fontCSS === "string") style.setProperty("--editor-font", p.fontCSS);
 });
 
 Bridge.onMessage("editor.insertAtCursor", (p) => {

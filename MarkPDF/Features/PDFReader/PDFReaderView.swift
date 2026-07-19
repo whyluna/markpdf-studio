@@ -68,10 +68,12 @@ struct PDFReaderView: NSViewRepresentable {
   @EnvironmentObject private var pdfStore: PDFReaderStore
   @EnvironmentObject private var annotationStore: PDFAnnotationStore
   @EnvironmentObject private var positionStore: PDFReadingPositionStore
+  @EnvironmentObject private var settings: SettingsStore
 
   func makeNSView(context: Context) -> PDFView {
     let pdfView = ZoomablePDFView()
-    pdfView.displayMode = .singlePageContinuous
+    // FR-7.2：默认视图模式设置
+    pdfView.displayMode = settings.pdfViewMode.pdfDisplayMode
     pdfView.displayDirection = .vertical
     pdfView.autoScales = true
     pdfView.document = PDFDocument(url: url)
@@ -129,6 +131,10 @@ struct PDFReaderView: NSViewRepresentable {
       }
       context.coordinator.restorePosition(url: url)
       return
+    }
+    // FR-7.2：默认视图模式设置即时生效
+    if pdfView.displayMode != settings.pdfViewMode.pdfDisplayMode {
+      pdfView.displayMode = settings.pdfViewMode.pdfDisplayMode
     }
     // 外部驱动的目标缩放（按钮/快捷键）；手动缩放时脱离自适应
     if abs(pdfView.scaleFactor - pdfStore.scale) > 0.001 {
@@ -296,5 +302,6 @@ struct PDFReaderView: NSViewRepresentable {
     .environmentObject(PDFReaderStore())
     .environmentObject(PDFAnnotationStore())
     .environmentObject(PDFReadingPositionStore())
+    .environmentObject(SettingsStore())
     .frame(width: 640, height: 480)
 }

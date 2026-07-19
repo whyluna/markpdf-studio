@@ -62,6 +62,7 @@ struct MarkdownTabView: View {
   @Environment(\.colorScheme) private var colorScheme
   @EnvironmentObject private var stateStore: WorkspaceStateStore
   @EnvironmentObject private var workspaceStore: WorkspaceStore
+  @EnvironmentObject private var settings: SettingsStore
 
   var body: some View {
     MarkdownEditorView(
@@ -74,6 +75,10 @@ struct MarkdownTabView: View {
       initialLine: store.currentFileURL.flatMap { stateStore.cursorLine(for: $0) },
       // FR-2.5：图片粘贴/拖拽存工作区 assets/
       workspaceRoot: workspaceStore.root?.id,
+      // FR-7.2：编辑器排版设置
+      fontCSS: settings.editorFont.cssFontStack ?? "",
+      fontSize: settings.editorFontSize,
+      lineHeight: settings.editorLineHeight,
       onContentChanged: { newText in
         store.contentDidChange(newText)
       },
@@ -94,4 +99,5 @@ struct MarkdownTabView: View {
   TabGroupPane(group: TabGroup())
     .environmentObject(TabStore())
     .environmentObject(WorkspaceStateStore())
+    .environmentObject(SettingsStore())
 }
