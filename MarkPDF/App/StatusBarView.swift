@@ -27,6 +27,10 @@ struct StatusBarView: View {
         Text("图片 · 查看")
         zoomControls(scale: imageStore.scale, onZoomIn: imageStore.zoomIn, onZoomOut: imageStore.zoomOut)
       default:
+        if let stats = tabStore.activeEditorStore?.stats {
+          // FR-2.8：字数 / 字符 / 预计阅读时长
+          Text("\(stats.words.formatted()) 字 · \(stats.characters.formatted()) 字符 · 约 \(stats.readingMinutes) 分钟")
+        }
         Text("Markdown · \(tabStore.activeEditorStore?.mode.title ?? "所见即所得")")
       }
       Text("UTF-8")

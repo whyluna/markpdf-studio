@@ -5,7 +5,11 @@ import os
 /// 当前为单文档实现；标签页/多文档接入后按文档拆分。
 final class EditorStore: ObservableObject {
   /// 当前文档文本（内核变更实时同步到这里）
-  @Published var text: String = EditorStore.welcomeDocument
+  @Published var text: String = EditorStore.welcomeDocument {
+    didSet { stats = TextStatistics.of(text) }
+  }
+  /// 文本统计（FR-2.8：字数/字符/阅读时长，随内容实时更新）
+  @Published private(set) var stats: EditorStats = TextStatistics.of(EditorStore.welcomeDocument)
   /// 编辑模式
   @Published var mode: MarkdownEditorView.EditorMode = .wysiwyg
   /// 当前打开的磁盘文件（nil = 欢迎页草稿）
