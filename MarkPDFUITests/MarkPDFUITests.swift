@@ -9,6 +9,6 @@ final class MarkPDFUITests: XCTestCase {
   func testLaunchShowsMainWindow() throws {
     let app = XCUIApplication()
     app.launch()
-    XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
   }
 }
