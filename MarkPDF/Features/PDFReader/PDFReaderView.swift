@@ -67,6 +67,7 @@ struct PDFReaderView: NSViewRepresentable {
   let url: URL
   @EnvironmentObject private var pdfStore: PDFReaderStore
   @EnvironmentObject private var annotationStore: PDFAnnotationStore
+  @EnvironmentObject private var positionStore: PDFReadingPositionStore
 
   func makeNSView(context: Context) -> PDFView {
     let pdfView = ZoomablePDFView()
@@ -112,18 +113,21 @@ struct PDFReaderView: NSViewRepresentable {
     if let document = pdfView.document {
       annotationStore.attach(document: document, url: url)
     }
+    // 阅读位置记忆（FR-3.5）：恢复上次页码与缩放
+    context.coordinator.restorePosition(url: url)
     return pdfView
   }
 
   func updateNSView(_ pdfView: PDFView, context: Context) {
     if pdfView.document?.documentURL != url {
       pdfView.document = PDFDocument(url: url)
-      // 新文档回到自适应宽度；切换标注写回关联
+      // 新文档默认自适应宽度；有阅读位置存档则恢复（FR-3.5）
       pdfView.autoScales = true
       context.coordinator.syncPageState()
       if let document = pdfView.document {
         annotationStore.attach(document: document, url: url)
       }
+      context.coordinator.restorePosition(url: url)
       return
     }
     // 外部驱动的目标缩放（按钮/快捷键）；手动缩放时脱离自适应
@@ -139,6 +143,7 @@ struct PDFReaderView: NSViewRepresentable {
 
   static func dismantleNSView(_ pdfView: PDFView, coordinator: Coordinator) {
     NotificationCenter.default.removeObserver(coordinator)
+    coordinator.flushPositionSave()
   }
 
   @MainActor
@@ -147,6 +152,8 @@ struct PDFReaderView: NSViewRepresentable {
     weak var pdfView: PDFView?
     /// 划词浮动工具条控制器（FR-4.1）
     var toolbarController: AnnotationToolbarController?
+    /// 阅读位置落盘防抖（FR-3.5：翻页/缩放高频，合并写）
+    private let positionDebouncer = Debouncer(interval: 0.5)
     /// 捏合手势进行中（此时不回写 Store，避免逐帧触发 SwiftUI 重渲染）
     private var isPinching = false
     /// 手势期间临时收起的文本选区（结束后恢复）
@@ -174,11 +181,47 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc func pageChanged(_ note: Notification) {
       syncPageState()
+      schedulePositionSave()
     }
 
     @objc func scaleChanged(_ note: Notification) {
       guard let pdfView, !isPinching else { return }
       parent.pdfStore.scale = pdfView.scaleFactor
+      schedulePositionSave()
+    }
+
+    // MARK: - 阅读位置记忆（FR-3.5）
+
+    /// 恢复上次阅读位置（页码 + 缩放）；无存档则保持自适应宽度
+    func restorePosition(url: URL) {
+      guard let pdfView, let doc = pdfView.document,
+        let saved = parent.positionStore.position(for: url)
+      else { return }
+      let scale = PDFReaderStore.clamped(CGFloat(saved.scale))
+      pdfView.autoScales = false
+      pdfView.scaleFactor = scale
+      let pageIndex = min(max(saved.page - 1, 0), doc.pageCount - 1)
+      if let page = doc.page(at: pageIndex) {
+        pdfView.go(to: page)
+      }
+      parent.pdfStore.scale = scale
+      syncPageState()
+    }
+
+    /// 防抖记录当前页码与缩放
+    private func schedulePositionSave() {
+      guard let pdfView, let doc = pdfView.document else { return }
+      let page = pdfView.currentPage.map { doc.index(for: $0) + 1 } ?? 1
+      let scale = Double(pdfView.scaleFactor)
+      let url = parent.url
+      positionDebouncer.schedule { [weak self] in
+        self?.parent.positionStore.save(.init(page: page, scale: scale), for: url)
+      }
+    }
+
+    /// 视图拆除前落盘挂起的位置记录
+    func flushPositionSave() {
+      positionDebouncer.fire()
     }
 
     /// 捏合缩放（响应链 magnify 通道）：
@@ -251,5 +294,7 @@ struct PDFReaderView: NSViewRepresentable {
 #Preview {
   PDFReaderView(url: URL(fileURLWithPath: "/tmp/demo.pdf"))
     .environmentObject(PDFReaderStore())
+    .environmentObject(PDFAnnotationStore())
+    .environmentObject(PDFReadingPositionStore())
     .frame(width: 640, height: 480)
 }

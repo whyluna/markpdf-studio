@@ -22,4 +22,12 @@ final class Debouncer {
     item?.cancel()
     item = nil
   }
+
+  /// 立即执行挂起的动作（若有），不再等待间隔（退出/拆除前的兜底落盘）
+  func fire() {
+    guard let item else { return }
+    self.item = nil
+    item.cancel()
+    item.perform()
+  }
 }
