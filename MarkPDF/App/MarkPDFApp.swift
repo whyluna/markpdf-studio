@@ -13,6 +13,7 @@ struct MarkPDFApp: App {
   @StateObject private var recentsStore = RecentFilesStore()
   @StateObject private var stateStore = WorkspaceStateStore()
   @StateObject private var settingsStore = SettingsStore()
+  @StateObject private var searchStore = SearchStore()
 
   /// 当前标签是否可缩放（PDF / 图片）
   private var zoomable: Bool {
@@ -43,6 +44,7 @@ struct MarkPDFApp: App {
         .environmentObject(recentsStore)
         .environmentObject(stateStore)
         .environmentObject(settingsStore)
+        .environmentObject(searchStore)
         .frame(minWidth: 1080, minHeight: 640)
     }
     .defaultSize(width: 1380, height: 900)
@@ -56,8 +58,25 @@ struct MarkPDFApp: App {
           workspaceStore.isQuickOpenPresented = true
         }
         .keyboardShortcut("p")
+        // 全文搜索（FR-6.2 ⌘⇧F）
+        Button("全文搜索…") {
+          workspaceStore.isFullTextSearchPresented = true
+        }
+        .keyboardShortcut("f", modifiers: [.command, .shift])
         Divider()
-        // 导出全部标注为 Markdown（FR-4.8），导出后打开目标笔记
+        // 导出当前 md（FR-2.9）/ 导出全部标注（FR-4.8，导出后打开目标笔记）
+        Button("导出为 PDF") {
+          if let store = tabStore.activeEditorStore {
+            MarkdownExportFlow.run(.pdf, store: store)
+          }
+        }
+        .disabled(tabStore.activeEditorStore?.kernel == nil)
+        Button("导出为 HTML") {
+          if let store = tabStore.activeEditorStore {
+            MarkdownExportFlow.run(.html, store: store)
+          }
+        }
+        .disabled(tabStore.activeEditorStore?.kernel == nil)
         Button("导出全部标注为 Markdown…") {
           if let url = AnnotationExportFlow.run(store: annotationStore) {
             tabStore.open(url: url)

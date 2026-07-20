@@ -21,4 +21,6 @@ enum BridgeMessageType: String {
   case cursor = "editor.cursor"
   /// 粘贴/拖拽图片存盘请求（FR-2.5；带 id 请求-响应，应答 {path} 或 {error}）
   case saveImage = "editor.saveImage"
+  /// 导出 HTML 请求（FR-2.9；带 id 请求-响应，应答 {title, html}）
+  case exportHTML = "editor.exportHTML"
 }

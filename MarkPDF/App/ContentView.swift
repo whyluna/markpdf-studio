@@ -10,6 +10,7 @@ struct ContentView: View {
   @EnvironmentObject private var annotationStore: PDFAnnotationStore
   @EnvironmentObject private var recentsStore: RecentFilesStore
   @EnvironmentObject private var stateStore: WorkspaceStateStore
+  @EnvironmentObject private var searchStore: SearchStore
 
   var body: some View {
     VStack(spacing: 0) {
@@ -43,11 +44,17 @@ struct ContentView: View {
           collapsedFolders: workspaceStore?.collapsedFolders ?? []
         )
       }
+      // 全文搜索候选（FR-6.2）：工作区全部文件
+      searchStore.filesProvider = { [weak workspaceStore] in
+        workspaceStore?.allFiles.map(\.id) ?? []
+      }
     }
-    // 快速打开面板（FR-6.1 ⌘P）
+    // 快速打开面板（FR-6.1 ⌘P）与全文搜索面板（FR-6.2 ⌘⇧F）
     .overlay {
       if workspaceStore.isQuickOpenPresented {
         quickOpenOverlay
+      } else if workspaceStore.isFullTextSearchPresented {
+        fullTextSearchOverlay
       }
     }
   }
@@ -81,12 +88,16 @@ struct ContentView: View {
             }
           }
           ToolbarItem(placement: .primaryAction) {
-            // 导出菜单（设计稿 #btnExport）：PDF/HTML 导出为 FR-2.9 占位
+            // 导出菜单（设计稿 #btnExport）
             Menu {
-              Button("导出为 PDF") {}
-                .disabled(true)
-              Button("导出为 HTML") {}
-                .disabled(true)
+              Button("导出为 PDF") {
+                exportMarkdown(.pdf)
+              }
+              .disabled(!canExportMarkdown)
+              Button("导出为 HTML") {
+                exportMarkdown(.html)
+              }
+              .disabled(!canExportMarkdown)
               Divider()
               Button("导出全部标注为 Markdown…") {
                 exportAnnotations()
@@ -126,17 +137,28 @@ struct ContentView: View {
     }
   }
 
-  // MARK: - 导出（FR-4.8）
+  // MARK: - 导出（FR-4.8 / FR-2.9）
 
   /// 当前可导出标注：标注 Store 已关联 PDF 文档（激活标签可以是分栏另一侧的笔记——场景 A）
   private var canExportAnnotations: Bool {
     annotationStore.currentFileURL != nil
   }
 
+  /// 当前可导出 md：激活标签为 md 且内核就绪
+  private var canExportMarkdown: Bool {
+    tabStore.activeEditorStore?.kernel != nil
+  }
+
   /// 导出当前 PDF 的全部标注到目标笔记，并在新标签中打开该笔记
   private func exportAnnotations() {
     guard let url = AnnotationExportFlow.run(store: annotationStore) else { return }
     tabStore.open(url: url)
+  }
+
+  /// 导出当前 md 为 PDF / HTML（FR-2.9）
+  private func exportMarkdown(_ format: MarkdownExportFlow.Format) {
+    guard let store = tabStore.activeEditorStore else { return }
+    MarkdownExportFlow.run(format, store: store)
   }
 
   // MARK: - 标签内容区
@@ -153,6 +175,38 @@ struct ContentView: View {
       }
       // 右边缘落点：拖标签到窗口右缘创建/移入右组（FR-1.4 拖拽至边缘分栏）
       EdgeTabDropZone()
+    }
+  }
+
+  /// 全文搜索浮层：顶部居中，点击遮罩关闭；命中跳转（md 跳行 / pdf 跳页）
+  private var fullTextSearchOverlay: some View {
+    ZStack(alignment: .top) {
+      Color.black.opacity(0.15)
+        .ignoresSafeArea()
+        .onTapGesture {
+          workspaceStore.isFullTextSearchPresented = false
+        }
+      FullTextSearchView(
+        store: searchStore,
+        rootPath: workspaceStore.root?.id.path ?? "",
+        onSelect: { result in
+          workspaceStore.isFullTextSearchPresented = false
+          tabStore.open(url: result.url)
+          switch result.kind {
+          case .markdown:
+            // 内核未就绪时滚动请求排队，就绪后补发（不丢）
+            tabStore.activeEditorStore?.scrollTo(line: result.location)
+          case .pdf:
+            pdfStore.pendingPage = result.location
+          default:
+            break
+          }
+        },
+        onDismiss: {
+          workspaceStore.isFullTextSearchPresented = false
+        }
+      )
+      .padding(.top, 80)
     }
   }
 

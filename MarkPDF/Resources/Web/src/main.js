@@ -58,6 +58,7 @@ import { wysiwyg } from "./wysiwyg.js";
 import * as Bridge from "./bridge.js";
 import { DEMO_DOC } from "./demo.js";
 import { docContext } from "./doccontext.js";
+import { buildExport } from "./exporthtml.js";
 
 /* ---------- 模式（FR-2.2） ---------- */
 
@@ -98,6 +99,16 @@ const baseTheme = EditorView.theme({
 
 /* ---------- 编辑器实例 ---------- */
 
+// 基础扩展：主实例与导出实例（FR-2.9 离屏渲染）共用，避免配置漂移
+function baseExtensions() {
+  return [
+    markdown({ base: markdownLanguage, codeLanguages }),
+    syntaxHighlighting(mdHighlight),
+    baseTheme,
+    EditorView.lineWrapping,
+  ];
+}
+
 const view = new EditorView({
   parent: document.getElementById("editor"),
   state: EditorState.create({
@@ -108,10 +119,7 @@ const view = new EditorView({
       drawSelection(),
       search({ top: true }),
       keymap.of([...searchKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
-      markdown({ base: markdownLanguage, codeLanguages }),
-      syntaxHighlighting(mdHighlight),
-      baseTheme,
-      EditorView.lineWrapping,
+      ...baseExtensions(),
       placeholder("开始输入 Markdown…"),
       modeConf.of(modeExtension("wysiwyg")),
       EditorView.updateListener.of((u) => {
@@ -198,6 +206,18 @@ Bridge.onMessage("editor.setTypography", (p) => {
 
 Bridge.onMessage("editor.insertAtCursor", (p) => {
   view.dispatch(view.state.replaceSelection(p.text ?? ""));
+});
+
+// 导出独立 HTML（FR-2.9）：阅读模式离屏重渲染，应答 {title, html}
+Bridge.onMessage("editor.exportHTML", (_p, id) => {
+  buildExport({
+    docText: view.state.doc.toString(),
+    baseURL: docContext.baseURL,
+    extensions: [...baseExtensions(), ...modeExtension("reading")],
+    theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+  })
+    .then(({ title, html }) => Bridge.respond(id, { title, html }))
+    .catch(() => Bridge.respond(id, { error: "export render failed" }));
 });
 
 // 大纲跳转（FR-2.6）：滚动到指定行并落光标

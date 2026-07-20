@@ -117,6 +117,11 @@ struct PDFReaderView: NSViewRepresentable {
     }
     // 阅读位置记忆（FR-3.5）：恢复上次页码与缩放
     context.coordinator.restorePosition(url: url)
+    // 全文搜索命中跳转（FR-6.2）：优先于位置恢复
+    if let page = pdfStore.pendingPage {
+      pdfStore.pendingPage = nil
+      pdfStore.goTo(page: page)
+    }
     return pdfView
   }
 

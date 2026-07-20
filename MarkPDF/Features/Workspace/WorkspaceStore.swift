@@ -18,6 +18,8 @@ final class WorkspaceStore: ObservableObject {
   @Published var lastError: String?
   /// 快速打开面板（FR-6.1 ⌘P）是否展示
   @Published var isQuickOpenPresented = false
+  /// 全文搜索面板（FR-6.2 ⌘⇧F）是否展示
+  @Published var isFullTextSearchPresented = false
   /// 折叠的文件夹（FR-1.1 树展开态；默认全部展开，点击文件夹行切换，重扫后按 URL 保留）
   @Published var collapsedFolders: Set<URL> = [] {
     didSet { onStateChange?() }

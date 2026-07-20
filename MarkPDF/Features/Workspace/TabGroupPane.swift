@@ -90,6 +90,10 @@ struct MarkdownTabView: View {
       },
       onCursorMoved: { line in
         store.cursorDidMove(to: line)
+      },
+      // FR-2.9：导出经内核渲染，store 持有内核引用
+      onCoordinatorAvailable: { coordinator in
+        store.kernel = coordinator
       }
     )
   }
