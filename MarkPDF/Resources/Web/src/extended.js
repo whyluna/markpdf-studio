@@ -211,3 +211,33 @@ export function scanExtended(text, excludeRanges = []) {
   const { refs, defs } = scanFootnotes(text, excl);
   return { maths, highlights, footnoteRefs: refs, footnoteDefs: defs };
 }
+
+/* ---------- 标题锚点（目录/文内链接跳转） ---------- */
+
+// GitHub 风格 slug：小写、去标点（保留字母/数字/组合符/空格/连字符/下划线，CJK 属字母）、空格转连字符
+export function slugifyHeading(text) {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\p{M}\s\-_]/gu, "")
+    .replace(/\s+/g, "-");
+}
+
+/**
+ * 锚点（# 后内容，可能 percent-encoded）匹配标题行号。
+ * @param headings collectOutline 产出 [{level, text, line}]
+ * @returns 命中的 1 起行号，未命中 null
+ */
+export function matchHeadingLine(anchor, headings) {
+  let decoded = anchor;
+  try {
+    decoded = decodeURIComponent(anchor);
+  } catch {
+    // 非合法编码按原文匹配
+  }
+  const slug = slugifyHeading(decoded);
+  for (const h of headings) {
+    if (slugifyHeading(h.text) === slug) return h.line;
+  }
+  return null;
+}

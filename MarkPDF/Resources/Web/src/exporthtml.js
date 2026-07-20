@@ -70,11 +70,12 @@ export function rewriteImgSrc(src, baseURL) {
 
 /* ---------- 样式收集与 HTML 包装 ---------- */
 
-// 收集页面样式：内联 <style> 文本（含主题变量/装饰样式与 CM 注入的主题样式）+ 外部样式表 href
+// 收集页面样式：内联 <style> 文本（含主题变量/装饰样式与 CM 注入的主题样式）+ 外部样式表
+// 绝对地址（el.href 属性：App 内为 file:// bundle 路径；getAttribute 是源码里的相对路径，不能用）
 export function collectPageStyles(doc = document) {
   const inlineStyles = [...doc.querySelectorAll("style")].map((el) => el.textContent ?? "");
   const cssHrefs = [...doc.querySelectorAll('link[rel="stylesheet"]')]
-    .map((el) => el.getAttribute("href"))
+    .map((el) => el.href)
     .filter(Boolean);
   return { inlineStyles, cssHrefs };
 }
@@ -83,11 +84,22 @@ const escapeHTML = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace
 
 /**
  * 包成独立 HTML 文档。cm-editor/cm-scroller/cm-content 外壳让收集到的
- * CM 主题与装饰样式（.cm-content 的 maxWidth/padding 等）在导出页中生效。
+ * CM 主题与装饰样式（.cm-content 的 maxWidth/padding 等）在导出页中生效；
+ * classes 为临时 view 的真实类名（含主题 hash 类，否则 CM 注入的主题样式全部落空——
+ * 此前裸 cm-editor 外壳导致导出回退到 CM 默认 monospace 主题）。
  */
-export function buildExportHTML({ title, theme, inlineStyles, cssHrefs, contentHTML }) {
+export function buildExportHTML({ title, theme, inlineStyles, cssHrefs, contentHTML, classes }) {
   const styles = inlineStyles.map((s) => `<style>\n${s}\n</style>`).join("\n");
   const links = cssHrefs.map((h) => `<link rel="stylesheet" href="${escapeHTML(h)}">`).join("\n");
+  const editorClass = classes?.editor || "cm-editor";
+  const scrollerClass = classes?.scroller || "cm-scroller";
+  const contentClass = classes?.content || "cm-content";
+  // 导出页整页流式布局（编辑器壳是内滚动容器，导出文档应整页滚动，否则 body 只有一屏高）
+  const exportOverrides = `
+html, body { margin: 0; height: auto !important; }
+.cm-editor, .cm-scroller { height: auto !important; overflow-y: visible !important; }
+.cm-scroller { overflow-x: auto; }
+`;
   return `<!DOCTYPE html>
 <html data-theme="${escapeHTML(theme)}">
 <head>
@@ -95,9 +107,10 @@ export function buildExportHTML({ title, theme, inlineStyles, cssHrefs, contentH
 <title>${escapeHTML(title)}</title>
 ${styles}
 ${links}
+<style>${exportOverrides}</style>
 </head>
 <body>
-<div class="cm-editor"><div class="cm-scroller"><div class="cm-content">
+<div class="${escapeHTML(editorClass)}"><div class="${escapeHTML(scrollerClass)}"><div class="${escapeHTML(contentClass)}">
 ${contentHTML}
 </div></div></div>
 </body>
@@ -114,50 +127,71 @@ const nextFrame =
 
 /**
  * 离屏重渲染文档为 .cm-content 的 innerHTML。
- * CM 只渲染视口内容：宿主给一个足够大的显式高度，等测量循环生效后检查
- * view.viewport 是否覆盖全文，未覆盖则加倍高度重试（隐藏容器 clientHeight 为 0，
- * 不显式给高则长文档会被截断）。渲染完成后销毁临时 view 并移除宿主。
+ * 关键机制（CM 源码实锤）：CM 只测量「在窗口内」的编辑器（measure 首行判
+ * inView/scrollTarget/inWindow，不可见直接 return 0），且视口最多超出可见区
+ * 2×VP.Margin——所以宿主必须在屏（不可见即可，visibility:hidden）且滚动器
+ * 可滚动、高度 ≥ 全文高度；完全离屏（left:-100000px）或滚动器不可滚动
+ * （height:auto/overflow:visible 退化给窗口滚动）都会导致视口不增长、导出截断。
+ * 返回渲染内容、外壳类名（主题 hash 类，导出排版与编辑态一致的关键）与页面样式
+ * （在临时 view 销毁前收集，style-mod 卸载后其样式会从 head 移除）。
  */
 export function renderExportContent(docText, extensions, baseURL) {
   return new Promise((resolve) => {
     const holder = document.createElement("div");
     holder.setAttribute("aria-hidden", "true");
-    holder.style.cssText = "position:absolute;left:-100000px;top:0;width:900px;overflow:hidden";
-    let height = Math.max(20000, docText.split("\n").length * 100 + 5000);
-    holder.style.height = height + "px";
+    // 在屏但不可见（CM 不测量窗口外编辑器）。初始高度仅首屏量级——
+    // 必须让内容高度 > 滚动器高度使其「可滚动」（滚动器 ≤ 内容时滚动父级
+    // 会退化为窗口，视口随之坍缩到窗口大小，导出截断；CM 源码实锤）
+    holder.style.cssText = "position:fixed;left:0;top:0;width:900px;z-index:-100;visibility:hidden";
+    holder.style.height = "5000px";
     document.body.appendChild(holder);
     const view = new EditorView({
       parent: holder,
       state: EditorState.create({ doc: docText, extensions }),
     });
+    // CM「打印模式」（官方机制，beforeprint 事件同款）：pixelViewport 取全文范围、
+    // 视口不再受限——普通渲染态 CM 视口只算「窗口内可见部分」，任何离屏/超高滚动器
+    // 花招都无法让它覆盖全文（用户长文档导出截断的根因）
+    view.viewState.printing = true;
+    view.measure();
 
+    let settled = false;
     const finish = () => {
+      if (settled) return;
+      settled = true;
       // 图片链接重写：markpdf-file:// 绝对地址 → 相对/ file:// 可分享地址
       for (const img of view.dom.querySelectorAll("img")) {
         const src = img.getAttribute("src");
         const rewritten = rewriteImgSrc(src, baseURL);
         if (rewritten !== src) img.setAttribute("src", rewritten);
       }
-      const html = view.contentDOM.innerHTML;
+      const result = {
+        html: view.contentDOM.innerHTML,
+        classes: {
+          editor: view.dom.className,
+          scroller: view.scrollDOM.className,
+          content: view.contentDOM.className,
+        },
+        styles: collectPageStyles(),
+      };
       view.destroy();
       holder.remove();
-      resolve(html);
+      resolve(result);
     };
 
-    let attempts = 0;
-    const pump = () => {
+    // 打印模式下一次同步测量视口即覆盖全文；留逐帧复核与 3s 兜底（绝不 hang）
+    const start = Date.now();
+    const check = () => {
       nextFrame(() => {
-        if (attempts < 8 && view.viewport.to < view.state.doc.length) {
-          attempts++;
-          height *= 2;
-          holder.style.height = height + "px";
-          pump();
-        } else {
+        view.requestMeasure();
+        if (view.viewport.to >= view.state.doc.length || Date.now() - start > 3000) {
           finish();
+        } else {
+          check();
         }
       });
     };
-    pump();
+    check();
   });
 }
 
@@ -166,8 +200,17 @@ export function renderExportContent(docText, extensions, baseURL) {
  * @param extensions 阅读模式配置（由 main.js 传入，与主实例共用基础扩展）
  */
 export async function buildExport({ docText, baseURL, extensions, theme }) {
-  const { inlineStyles, cssHrefs } = collectPageStyles();
-  const contentHTML = await renderExportContent(docText, extensions, baseURL);
+  const { html: contentHTML, classes, styles } = await renderExportContent(docText, extensions, baseURL);
   const title = extractTitle(docText);
-  return { title, html: buildExportHTML({ title, theme, inlineStyles, cssHrefs, contentHTML }) };
+  return {
+    title,
+    html: buildExportHTML({
+      title,
+      theme,
+      inlineStyles: styles.inlineStyles,
+      cssHrefs: styles.cssHrefs,
+      contentHTML,
+      classes,
+    }),
+  };
 }

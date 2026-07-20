@@ -206,3 +206,31 @@ describe("组合扫描 scanExtended", () => {
     expect(r.footnoteDefs).toHaveLength(1);
   });
 });
+
+describe("标题锚点匹配（目录跳转）", () => {
+  const headings = [
+    { level: 2, text: "KIVI：非对称均匀量化", line: 10 },
+    { level: 3, text: "3.1.1 PagedAttention (vLLM)", line: 20 },
+    { level: 2, text: "结论与推荐路线", line: 30 },
+  ];
+  it("GitHub slug 匹配", async () => {
+    const { matchHeadingLine } = await import("./extended.js");
+    expect(matchHeadingLine("kivi非对称均匀量化", headings)).toBe(10);
+    expect(matchHeadingLine("311-pagedattention-vllm", headings)).toBe(20);
+    expect(matchHeadingLine("结论与推荐路线", headings)).toBe(30);
+  });
+  it("percent-encoded 锚点", async () => {
+    const { matchHeadingLine } = await import("./extended.js");
+    expect(matchHeadingLine(encodeURIComponent("结论与推荐路线"), headings)).toBe(30);
+  });
+  it("未命中返回 null", async () => {
+    const { matchHeadingLine } = await import("./extended.js");
+    expect(matchHeadingLine("不存在的标题", headings)).toBeNull();
+  });
+  it("slugifyHeading 规则", async () => {
+    const { slugifyHeading } = await import("./extended.js");
+    expect(slugifyHeading("3.1.1 PagedAttention (vLLM)")).toBe("311-pagedattention-vllm");
+    expect(slugifyHeading("KIVI：非对称均匀量化")).toBe("kivi非对称均匀量化");
+    expect(slugifyHeading("实验模型选择（A40 40GB）")).toBe("实验模型选择a40-40gb");
+  });
+});

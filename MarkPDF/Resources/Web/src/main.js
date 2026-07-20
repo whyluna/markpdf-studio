@@ -59,6 +59,7 @@ import * as Bridge from "./bridge.js";
 import { DEMO_DOC } from "./demo.js";
 import { docContext } from "./doccontext.js";
 import { buildExport } from "./exporthtml.js";
+import { matchHeadingLine } from "./extended.js";
 
 /* ---------- 模式（FR-2.2） ---------- */
 
@@ -268,7 +269,14 @@ view.dom.addEventListener(
     e.preventDefault();
     e.stopPropagation();
     const url = findLinkURLAt(view.posAtDOM(linkEl));
-    if (url) Bridge.notify("editor.openLink", { url });
+    if (!url) return;
+    // 文内锚点（#标题）：按 GitHub slug 匹配标题并滚动（目录跳转）
+    if (url.startsWith("#")) {
+      const line = matchHeadingLine(url.slice(1), collectOutline());
+      if (line != null) scrollToLine(line);
+      return;
+    }
+    Bridge.notify("editor.openLink", { url });
   },
   true
 );
