@@ -18,7 +18,7 @@ final class PDFAnnotationStore: ObservableObject {
   /// 标注结构版本号：增删改即 +1，驱动列表面板实时同步（FR-4.5）
   @Published private(set) var revision = 0
 
-  private let writer: AnnotationWriter
+  private var writer: AnnotationWriter
   private let defaults: UserDefaults
   private let debouncer = Debouncer(interval: 0.5)
   /// revision 刷新防抖：批注输入每键都 markDirty，全文档重扫（含逐标注文本提取）
@@ -51,6 +51,17 @@ final class PDFAnnotationStore: ObservableObject {
     flushPendingWrites()
     self.document = document
     currentFileURL = url
+    // FR-4.7：按文件恢复只读模式与对应写回通道
+    let sidecar = Self.persistedSidecarPaths(defaults: defaults).contains(url.path)
+    isSidecarMode = sidecar
+    writer = sidecar ? SidecarAnnotationWriter(pdfURL: url) : LiveAnnotationWriter()
+    if sidecar, let data = try? Data(contentsOf: SidecarAnnotationStorage.sidecarURL(for: url)) {
+      // 只读模式：从 sidecar JSON 重建标注到页面
+      for (pageIndex, annotation) in SidecarAnnotationStorage.annotations(from: data) {
+        guard let page = document.page(at: pageIndex) else { continue }
+        page.addAnnotation(annotation)
+      }
+    }
     hasUnsavedChanges = false
     revision += 1
     // 屏蔽原生 Popup 弹窗：PDFView 点击 /Text 图标会自开 Popup 伴侣窗，
@@ -61,6 +72,31 @@ final class PDFAnnotationStore: ObservableObject {
         annotation.shouldDisplay = false
       }
     }
+  }
+
+  // MARK: - 只读模式（FR-4.7）
+
+  /// 当前文件是否只读标注模式（标注存同名 sidecar JSON，不改 PDF 本体）
+  @Published private(set) var isSidecarMode = false
+
+  private static let sidecarPathsKey = "sidecarModePaths"
+
+  private static func persistedSidecarPaths(defaults: UserDefaults) -> Set<String> {
+    Set(defaults.stringArray(forKey: sidecarPathsKey) ?? [])
+  }
+
+  /// 逐文件切换只读模式（持久化；切换只影响写回目的地，不迁移既有标注）
+  func setSidecarMode(_ enabled: Bool) {
+    guard let url = currentFileURL, enabled != isSidecarMode else { return }
+    var paths = Self.persistedSidecarPaths(defaults: defaults)
+    if enabled {
+      paths.insert(url.path)
+    } else {
+      paths.remove(url.path)
+    }
+    defaults.set(Array(paths), forKey: Self.sidecarPathsKey)
+    isSidecarMode = enabled
+    writer = enabled ? SidecarAnnotationWriter(pdfURL: url) : LiveAnnotationWriter()
   }
 
   // MARK: - 标注变更

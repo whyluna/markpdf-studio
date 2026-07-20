@@ -83,6 +83,16 @@ struct MarkPDFApp: App {
           }
         }
         .disabled(annotationStore.currentFileURL == nil)
+        Divider()
+        // 只读标注模式（FR-4.7）：逐文件切换，标注存同名 sidecar JSON
+        Toggle(
+          "只读标注模式",
+          isOn: Binding(
+            get: { annotationStore.isSidecarMode },
+            set: { annotationStore.setSidecarMode($0) }
+          )
+        )
+        .disabled(annotationStore.currentFileURL == nil)
       }
       CommandGroup(replacing: .saveItem) {
         Button("保存") {
