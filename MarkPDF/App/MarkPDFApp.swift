@@ -70,13 +70,13 @@ struct MarkPDFApp: App {
             MarkdownExportFlow.run(.pdf, store: store)
           }
         }
-        .disabled(tabStore.activeEditorStore?.kernel == nil)
+        .disabled(tabStore.activeEditorStore == nil)
         Button("导出为 HTML") {
           if let store = tabStore.activeEditorStore {
             MarkdownExportFlow.run(.html, store: store)
           }
         }
-        .disabled(tabStore.activeEditorStore?.kernel == nil)
+        .disabled(tabStore.activeEditorStore == nil)
         Button("导出全部标注为 Markdown…") {
           if let url = AnnotationExportFlow.run(store: annotationStore) {
             tabStore.open(url: url)

@@ -144,9 +144,10 @@ struct ContentView: View {
     annotationStore.currentFileURL != nil
   }
 
-  /// 当前可导出 md：激活标签为 md 且内核就绪
+  /// 当前可导出 md：激活标签为 md（内核引用不可观测，不做启用条件，避免菜单禁用状态不刷新；
+  /// 内核未就绪的极端情况由 MarkdownExportFlow 自行弹提示）
   private var canExportMarkdown: Bool {
-    tabStore.activeEditorStore?.kernel != nil
+    tabStore.activeEditorStore != nil
   }
 
   /// 导出当前 PDF 的全部标注到目标笔记，并在新标签中打开该笔记
