@@ -5,19 +5,32 @@ import XCTest
 final class FavoritesRecentsTests: XCTestCase {
   private var suiteName: String!
   private var defaults: UserDefaults!
-  private let rootA = URL(fileURLWithPath: "/tmp/ws-a")
-  private let rootB = URL(fileURLWithPath: "/tmp/ws-b")
-  private let file1 = URL(fileURLWithPath: "/tmp/ws-a/笔记.md")
-  private let file2 = URL(fileURLWithPath: "/tmp/ws-a/论文.pdf")
+  private var tempDir: URL!
+  private var rootA: URL!
+  private var rootB: URL!
+  private var file1: URL!
+  private var file2: URL!
 
   override func setUp() {
     super.setUp()
     suiteName = "FavoritesRecentsTests.\(UUID().uuidString)"
     defaults = UserDefaults(suiteName: suiteName)
+    // 真实临时文件（最近打开列表会按存在性自动清理，不能用虚构路径）
+    tempDir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("FavoritesRecentsTests.\(UUID().uuidString)")
+    rootA = tempDir.appendingPathComponent("ws-a")
+    rootB = tempDir.appendingPathComponent("ws-b")
+    try? FileManager.default.createDirectory(at: rootA, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(at: rootB, withIntermediateDirectories: true)
+    file1 = rootA.appendingPathComponent("笔记.md")
+    file2 = rootA.appendingPathComponent("论文.pdf")
+    try? "a".write(to: file1, atomically: true, encoding: .utf8)
+    try? "b".write(to: file2, atomically: true, encoding: .utf8)
   }
 
   override func tearDown() {
     defaults.removePersistentDomain(forName: suiteName)
+    try? FileManager.default.removeItem(at: tempDir)
     super.tearDown()
   }
 
@@ -75,15 +88,40 @@ final class FavoritesRecentsTests: XCTestCase {
   }
 
   @MainActor
-  func testRecentsCappedAtLimit() {
+  func testRecentsCappedAtLimit() throws {
     let store = RecentFilesStore(defaults: defaults)
     for i in 1...25 {
-      store.record(URL(fileURLWithPath: "/tmp/ws-a/f\(i).md"), forRoot: rootA)
+      let url = rootA.appendingPathComponent("f\(i).md")
+      try "x".write(to: url, atomically: true, encoding: .utf8)
+      store.record(url, forRoot: rootA)
     }
     let files = store.files(forRoot: rootA)
     XCTAssertEqual(files.count, RecentFilesStore.limit)
-    XCTAssertEqual(files.first, URL(fileURLWithPath: "/tmp/ws-a/f25.md"))
-    XCTAssertEqual(files.last, URL(fileURLWithPath: "/tmp/ws-a/f6.md"))
+    XCTAssertEqual(files.first, rootA.appendingPathComponent("f25.md"))
+    XCTAssertEqual(files.last, rootA.appendingPathComponent("f\(26 - RecentFilesStore.limit).md"))
+  }
+
+  @MainActor
+  func testRecentsAutoCleansDeletedFiles() throws {
+    // 真实临时文件：记录后删除其一，读取时自动清理并回写存储
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("RecentFilesTests.\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let alive = dir.appendingPathComponent("alive.md")
+    let dead = dir.appendingPathComponent("dead.md")
+    try "a".write(to: alive, atomically: true, encoding: .utf8)
+    try "b".write(to: dead, atomically: true, encoding: .utf8)
+
+    let store = RecentFilesStore(defaults: defaults)
+    store.record(alive, forRoot: rootA)
+    store.record(dead, forRoot: rootA)
+    try FileManager.default.removeItem(at: dead)
+
+    XCTAssertEqual(store.files(forRoot: rootA), [alive])
+    // 已回写存储：新实例读到的也是清理后的列表
+    let reopened = RecentFilesStore(defaults: defaults)
+    XCTAssertEqual(reopened.files(forRoot: rootA), [alive])
   }
 
   @MainActor
