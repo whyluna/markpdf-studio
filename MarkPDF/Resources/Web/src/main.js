@@ -2,7 +2,7 @@
 import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, placeholder, drawSelection } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { search, searchKeymap } from "@codemirror/search";
+import { search, searchKeymap, getSearchQuery } from "@codemirror/search";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage, syntaxTree } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
@@ -258,6 +258,38 @@ function findLinkURLAt(pos) {
   });
   return url;
 }
+
+// ⌘F 查找面板：↑↓ 在面板内导航上一个/下一个命中（捕获阶段且限面板内目标，不影响正文光标）。
+// 不走 findNext/findPrevious：其末尾 selectSearchInput 重聚焦会触发 DOM 选区同步竞态、
+// 把刚派发的命中选区吞掉（首个 ↓ 空跳）；直接按查询游标派发选区
+function stepSearchMatch(backward) {
+  const query = getSearchQuery(view.state);
+  if (!query.valid) return;
+  const main = view.state.selection.main;
+  // SearchQuery 是规格对象，nextMatch/prevMatch 在其 create() 的 QueryType 上
+  const qt = query.create();
+  const match = backward
+    ? qt.prevMatch(view.state, main.from, main.from)
+    : qt.nextMatch(view.state, main.to, main.to);
+  if (!match) return;
+  view.dispatch({
+    selection: { anchor: match.from, head: match.to },
+    effects: EditorView.scrollIntoView(match.from, { y: "center" }),
+    userEvent: "select.search",
+  });
+}
+view.dom.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const target = e.target;
+    if (!(target instanceof HTMLElement) || !target.closest(".cm-search")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    stepSearchMatch(e.key === "ArrowUp");
+  },
+  true
+);
 
 // capture 阶段拦截 ⌘+mousedown：先于 CM 的落光标逻辑，链接不展开直接跳转
 view.dom.addEventListener(
