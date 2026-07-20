@@ -5,6 +5,7 @@
 // HTML 包装）单独导出便于 vitest 单测。
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
+import { forceParsing } from "@codemirror/language";
 
 /* ---------- 标题提取 ---------- */
 
@@ -127,11 +128,11 @@ const nextFrame =
 
 /**
  * 离屏重渲染文档为 .cm-content 的 innerHTML。
- * 关键机制（CM 源码实锤）：CM 只测量「在窗口内」的编辑器（measure 首行判
- * inView/scrollTarget/inWindow，不可见直接 return 0），且视口最多超出可见区
- * 2×VP.Margin——所以宿主必须在屏（不可见即可，visibility:hidden）且滚动器
- * 可滚动、高度 ≥ 全文高度；完全离屏（left:-100000px）或滚动器不可滚动
- * （height:auto/overflow:visible 退化给窗口滚动）都会导致视口不增长、导出截断。
+ * 关键机制：CM「打印模式」（viewState.printing = true，官方 beforeprint 事件同款）——
+ * pixelViewport 取全文范围、视口不再受限。普通渲染态 CM 视口只算「窗口内可见部分」
+ * （源码实锤：visiblePixelRange 按窗口裁剪；不可见编辑器 measure 直接 return 0），
+ * 任何离屏/超高滚动器花招都无法让视口覆盖全文（用户长文档导出截断的根因）。
+ * 打印模式 + measure() 一次同步测量即全渲染，离屏 webview（无 rAF）也能完成。
  * 返回渲染内容、外壳类名（主题 hash 类，导出排版与编辑态一致的关键）与页面样式
  * （在临时 view 销毁前收集，style-mod 卸载后其样式会从 head 移除）。
  */
@@ -139,9 +140,7 @@ export function renderExportContent(docText, extensions, baseURL) {
   return new Promise((resolve) => {
     const holder = document.createElement("div");
     holder.setAttribute("aria-hidden", "true");
-    // 在屏但不可见（CM 不测量窗口外编辑器）。初始高度仅首屏量级——
-    // 必须让内容高度 > 滚动器高度使其「可滚动」（滚动器 ≤ 内容时滚动父级
-    // 会退化为窗口，视口随之坍缩到窗口大小，导出截断；CM 源码实锤）
+    // 在屏但不可见（inWindow 判断需要；visibility:hidden 不影响布局与测量）
     holder.style.cssText = "position:fixed;left:0;top:0;width:900px;z-index:-100;visibility:hidden";
     holder.style.height = "5000px";
     document.body.appendChild(holder);
@@ -149,11 +148,9 @@ export function renderExportContent(docText, extensions, baseURL) {
       parent: holder,
       state: EditorState.create({ doc: docText, extensions }),
     });
-    // CM「打印模式」（官方机制，beforeprint 事件同款）：pixelViewport 取全文范围、
-    // 视口不再受限——普通渲染态 CM 视口只算「窗口内可见部分」，任何离屏/超高滚动器
-    // 花招都无法让它覆盖全文（用户长文档导出截断的根因）
-    view.viewState.printing = true;
-    view.measure();
+    // 强制同步解析全文：lezer 按时间预算增量解析，新建视图的语法树是残缺的
+    // （装饰只覆盖已解析前缀，导出后半段变源码——离屏 webview 无 rAF 等不到后台解析）
+    forceParsing(view, view.state.doc.length);
 
     let settled = false;
     const finish = () => {
@@ -179,7 +176,15 @@ export function renderExportContent(docText, extensions, baseURL) {
       resolve(result);
     };
 
-    // 打印模式下一次同步测量视口即覆盖全文；留逐帧复核与 3s 兜底（绝不 hang）
+    view.viewState.printing = true;
+    view.measure();
+    // 同步路径：打印模式下一次测量视口即覆盖全文（离屏 webview 无 rAF，必须同步完成）
+    if (view.viewport.to >= view.state.doc.length) {
+      finish();
+      return;
+    }
+
+    // 兜底：逐帧复核（在窗环境）+ 3s 超时（渲染多少算多少，绝不 hang）
     const start = Date.now();
     const check = () => {
       nextFrame(() => {

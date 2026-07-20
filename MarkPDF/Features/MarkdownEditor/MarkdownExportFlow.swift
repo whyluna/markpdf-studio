@@ -26,13 +26,14 @@ enum MarkdownExportFlow {
   }
 
   static func run(_ format: Format, store: EditorStore) {
-    guard let kernel = store.kernel else {
-      alert(title: "无法导出", message: "编辑器尚未就绪，请稍后再试。")
-      return
-    }
-    kernel.requestExportHTML { html, title in
+    // 独立离屏导出会话（与活体内核解耦）；文本/基准目录直接取自已同步的 EditorStore
+    let session = MarkdownExportSession()
+    session.exportHTML(
+      text: store.text,
+      baseURL: store.currentFileURL?.deletingLastPathComponent()
+    ) { html, title in
       guard let html, !html.isEmpty else {
-        alert(title: "导出失败", message: "渲染结果为空或内核超时。")
+        alert(title: "导出失败", message: "渲染结果为空或内核超时，请稍后再试。")
         return
       }
       presentSavePanel(format: format, suggestedName: title ?? "导出") { url in
@@ -126,23 +127,35 @@ final class MarkdownPDFGenerator: NSObject, WKNavigationDelegate {
     }
   }
 
-  /// 页面加载完成：稍等图片等异步资源落定再转 PDF
+  /// 页面加载完成：稍等图片等异步资源落定再打印
   private func finish() {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
       guard let self, let outputURL else { return }
-      webView.createPDF(configuration: WKPDFConfiguration()) { result in
-        switch result {
-        case .success(let data):
-          do {
-            try data.write(to: outputURL, options: .atomic)
+      // NSPrintOperation 打印通道（Safari 同款）：A4 真实分页 + 遵循打印排版。
+      // （WKWebView.createPDF 只是内容快照：整篇挤成一两页超长页，不做打印分页——已实测）
+      let printInfo = NSPrintInfo()
+      printInfo.paperSize = NSSize(width: 595, height: 842)  // A4（pt）
+      printInfo.topMargin = 48
+      printInfo.bottomMargin = 48
+      printInfo.leftMargin = 48
+      printInfo.rightMargin = 48
+      printInfo.jobDisposition = .save
+      (printInfo.dictionary() as NSMutableDictionary)[NSPrintInfo.AttributeKey.jobSavingURL] = outputURL
+      let operation = webView.printOperation(with: printInfo)
+      operation.showsPrintPanel = false
+      operation.showsProgressPanel = false
+      // run() 阻塞，放后台；完成后回主线程校验与清理
+      DispatchQueue.global().async { [weak self] in
+        guard let self else { return }
+        let succeeded = operation.run()
+        DispatchQueue.main.async {
+          if succeeded, FileManager.default.fileExists(atPath: outputURL.path) {
             Logger.editor.info("已导出 PDF: \(outputURL.lastPathComponent, privacy: .public)")
-          } catch {
-            MarkdownExportFlow.alert(title: "导出失败", message: error.localizedDescription)
+          } else {
+            MarkdownExportFlow.alert(title: "导出失败", message: "PDF 打印任务未完成。")
           }
-        case .failure(let error):
-          MarkdownExportFlow.alert(title: "导出失败", message: error.localizedDescription)
+          self.cleanup()
         }
-        self.cleanup()
       }
     }
   }

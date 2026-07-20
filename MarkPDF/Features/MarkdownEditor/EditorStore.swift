@@ -57,8 +57,6 @@ final class EditorStore: ObservableObject {
 
   /// 光标行变化回调（FR-1.6 编辑位置记忆；参数为文件 URL 与 1 起行号）
   var onCursorLineChange: ((URL, Int) -> Void)?
-  /// 内核引用（FR-2.9 导出经内核渲染；视图存活期间有效，弱引用）
-  weak var kernel: MarkdownEditorView.Coordinator?
 
   /// 内核光标上报入口（防抖已由内核完成）
   func cursorDidMove(to line: Int) {

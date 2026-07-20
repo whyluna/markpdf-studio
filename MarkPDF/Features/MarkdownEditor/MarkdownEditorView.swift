@@ -51,8 +51,6 @@ struct MarkdownEditorView: NSViewRepresentable {
   var onScrollHandled: (() -> Void)?
   /// 光标行变化回调（FR-1.6；内核 500ms 防抖上报）
   var onCursorMoved: ((Int) -> Void)?
-  /// Coordinator 就绪回调（FR-2.9：EditorStore 持有内核引用用于导出）
-  var onCoordinatorAvailable: ((Coordinator) -> Void)?
 
   init(
     text: Binding<String>,
@@ -68,8 +66,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     onContentChanged: ((String) -> Void)? = nil,
     onOutlineChanged: (([Heading]) -> Void)? = nil,
     onScrollHandled: (() -> Void)? = nil,
-    onCursorMoved: ((Int) -> Void)? = nil,
-    onCoordinatorAvailable: ((Coordinator) -> Void)? = nil
+    onCursorMoved: ((Int) -> Void)? = nil
   ) {
     _text = text
     self.documentID = documentID
@@ -85,7 +82,6 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.onOutlineChanged = onOutlineChanged
     self.onScrollHandled = onScrollHandled
     self.onCursorMoved = onCursorMoved
-    self.onCoordinatorAvailable = onCoordinatorAvailable
   }
 
   func makeCoordinator() -> Coordinator {
@@ -154,7 +150,6 @@ struct MarkdownEditorView: NSViewRepresentable {
     var appPage = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)
     appPage?.query = "app=1"
     webView.loadFileURL(appPage?.url ?? pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
-    onCoordinatorAvailable?(context.coordinator)
     return webView
   }
 
@@ -295,17 +290,6 @@ extension MarkdownEditorView {
       bridge.request(.getContent) { result in
         if case .success(let payload) = result, let text = payload["text"] as? String {
           completion(text)
-        }
-      }
-    }
-
-    /// 导出用渲染 HTML（FR-2.9）：内核离屏 reading 模式重渲染产出独立 HTML
-    func requestExportHTML(completion: @escaping (_ html: String?, _ title: String?) -> Void) {
-      bridge.request(.exportHTML) { result in
-        if case .success(let payload) = result {
-          completion(payload["html"] as? String, payload["title"] as? String)
-        } else {
-          completion(nil, nil)
         }
       }
     }
