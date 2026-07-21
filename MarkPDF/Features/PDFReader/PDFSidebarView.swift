@@ -14,6 +14,7 @@ struct PDFSidebarView: View {
     case thumbnails = "缩略图"
     case bookmarks = "书签"
     case annotations = "标注"
+    case references = "引用"
     var id: String { rawValue }
   }
 
@@ -40,6 +41,9 @@ struct PDFSidebarView: View {
         bookmarkContent
       case .annotations:
         AnnotationListView()
+      case .references:
+        // 反向链接（FR-5.4）：当前 PDF 被哪些 md 引用
+        BacklinksPanelView(target: url)
       }
     }
   }

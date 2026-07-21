@@ -15,6 +15,7 @@ struct MarkPDFApp: App {
   @StateObject private var stateStore = WorkspaceStateStore()
   @StateObject private var settingsStore = SettingsStore()
   @StateObject private var searchStore = SearchStore()
+  @StateObject private var backlinksStore = BacklinksStore()
 
   /// 当前标签是否可缩放（PDF / 图片）
   private var zoomable: Bool {
@@ -70,6 +71,7 @@ struct MarkPDFApp: App {
         .environmentObject(stateStore)
         .environmentObject(settingsStore)
         .environmentObject(searchStore)
+        .environmentObject(backlinksStore)
         .frame(minWidth: 1080, minHeight: 640)
     }
     .defaultSize(width: 1380, height: 900)

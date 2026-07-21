@@ -11,6 +11,7 @@ struct ContentView: View {
   @EnvironmentObject private var recentsStore: RecentFilesStore
   @EnvironmentObject private var stateStore: WorkspaceStateStore
   @EnvironmentObject private var searchStore: SearchStore
+  @EnvironmentObject private var backlinksStore: BacklinksStore
 
   var body: some View {
     VStack(spacing: 0) {
@@ -43,11 +44,19 @@ struct ContentView: View {
           root: workspaceStore?.root?.id,
           collapsedFolders: workspaceStore?.collapsedFolders ?? []
         )
+        // 反向链接（FR-5.4）：工作区变化（含 FSEvents 刷新）后重扫，新引用 5s 内出现
+        backlinksStore.setWorkspaceRoot(workspaceStore?.root?.id)
+        backlinksStore.refresh()
       }
       // 全文搜索候选（FR-6.2）：工作区全部文件
       searchStore.filesProvider = { [weak workspaceStore] in
         workspaceStore?.allFiles.map(\.id) ?? []
       }
+      // 反向链接候选（FR-5.4）：仅 md 文件
+      backlinksStore.filesProvider = { [weak workspaceStore] in
+        workspaceStore?.allFiles.filter { $0.kind == .markdown }.map(\.id) ?? []
+      }
+      backlinksStore.setWorkspaceRoot(workspaceStore.root?.id)
     }
     // 快速打开面板（FR-6.1 ⌘P）与全文搜索面板（FR-6.2 ⌘⇧F）
     .overlay {
@@ -123,15 +132,20 @@ struct ContentView: View {
     }
   }
 
-  /// 右侧面板：pdf 标签 = 缩略图/书签/标注（FR-3.3）；其余 = 大纲（FR-2.6）
+  /// 右侧面板：pdf 标签 = 缩略图/书签/标注/引用（FR-3.3/5.4）；其余 = 大纲（FR-2.6）+ 反向链接（FR-5.4）
   @ViewBuilder
   private var detailPanel: some View {
     if let tab = tabStore.activeGroup.activeTab, tab.kind == .pdf, let url = tab.url {
       PDFSidebarView(url: url)
         .frame(minWidth: 266)
     } else {
-      OutlinePanelView(items: tabStore.activeEditorStore?.outline ?? []) { heading in
-        tabStore.activeEditorStore?.scrollTo(line: heading.line)
+      VStack(spacing: 0) {
+        OutlinePanelView(items: tabStore.activeEditorStore?.outline ?? []) { heading in
+          tabStore.activeEditorStore?.scrollTo(line: heading.line)
+        }
+        .frame(maxHeight: .infinity)
+        BacklinksPanelView(target: tabStore.activeGroup.activeTab?.url)
+          .frame(maxHeight: .infinity)
       }
       .frame(minWidth: 266)
     }
