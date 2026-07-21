@@ -190,10 +190,10 @@ struct PDFReaderView: NSViewRepresentable {
       pdfView.layer?.backgroundColor = nil
     case .sepia:
       let multiply = CIFilter(name: "CIColorMultiply", parameters: [
-        "inputColor": CIColor(red: 1.0, green: 0.945, blue: 0.85, alpha: 1.0),
+        "inputColor": CIColor(red: 1.0, green: 0.90, blue: 0.72, alpha: 1.0),
       ])
       pdfView.layer?.filters = multiply.map { [$0] }
-      pdfView.layer?.backgroundColor = NSColor(red: 0.98, green: 0.93, blue: 0.82, alpha: 1).cgColor
+      pdfView.layer?.backgroundColor = NSColor(red: 0.96, green: 0.90, blue: 0.78, alpha: 1).cgColor
     case .night:
       let invert = CIFilter(name: "CIColorInvert")
       let hueRotate = CIFilter(name: "CIHueRotate", parameters: ["inputAngle": NSNumber(value: Double.pi)])

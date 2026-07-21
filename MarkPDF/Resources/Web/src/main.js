@@ -238,9 +238,15 @@ Bridge.onMessage("editor.setTypography", (p) => {
   if (typeof p.fontCSS === "string") style.setProperty("--editor-font", p.fontCSS);
 });
 
-// 打字机模式（FR-2.10）：选区变化后当前行垂直居中
+// 打字机模式（FR-2.10）：选区变化后当前行垂直居中；开启时立即居中一次（即时反馈）
 Bridge.onMessage("editor.setTypewriter", (p) => {
-  view.dispatch({ effects: typewriterConf.reconfigure(p.enabled ? typewriterExt : []) });
+  const on = !!p.enabled;
+  view.dispatch({ effects: typewriterConf.reconfigure(on ? typewriterExt : []) });
+  if (on) {
+    view.dispatch({
+      effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: "center" }),
+    });
+  }
 });
 
 // 专注模式（FR-2.10）：压暗非当前行（编辑器根加开关类，CSS 生效）
