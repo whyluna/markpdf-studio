@@ -32,28 +32,13 @@ struct MarkPDFApp: App {
     }
   }
 
-  /// 复制为带回链的引用块（FR-5.2）：引用块 + 页码回链（相对工作区根目录路径，FR-5.3 可解析）
+  /// 复制为带回链的引用块（FR-5.2）：委托 PDFQuoteExporter（与命令面板共用）
   private func copyPDFSelectionAsQuote() {
-    guard let pdfView = pdfStore.pdfView,
-      let selection = pdfView.currentSelection,
-      let text = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !text.isEmpty,
-      let pdfURL = pdfView.document?.documentURL
-    else { return }
-    let page = (selection.pages.first.flatMap { pdfView.document?.index(for: $0) } ?? (pdfStore.currentPage - 1)) + 1
-    // 相对工作区根目录的路径（任何 md 都能经根目录回退解析）；无工作区退化为文件名
-    let relPath = workspaceStore.root.map {
-      MarkdownImageLinkRewriter.relativePath(from: $0.id, to: pdfURL)
-    } ?? pdfURL.lastPathComponent
-    let quoted = text.components(separatedBy: .newlines)
-      .map { $0.isEmpty ? ">" : "> \($0)" }
-      .joined(separator: "\n")
-    let name = pdfURL.deletingPathExtension().lastPathComponent
-    let quote = "\(quoted)\n>\n> — [\(name) · p.\(page)](\(relPath)#page=\(page))"
-    let pasteboard = NSPasteboard.general
-    pasteboard.clearContents()
-    pasteboard.setString(quote, forType: .string)
-    Logger.pdf.debug("已复制回链引用: \(pdfURL.lastPathComponent, privacy: .public) p.\(page)")
+    PDFQuoteExporter.copyAsQuote(
+      pdfView: pdfStore.pdfView,
+      currentPage: pdfStore.currentPage,
+      workspaceRoot: workspaceStore.root?.id
+    )
   }
 
   var body: some Scene {
@@ -77,10 +62,15 @@ struct MarkPDFApp: App {
     .defaultSize(width: 1380, height: 900)
     .commands {
       CommandGroup(after: .newItem) {
+        // 命令面板（FR-6.3 ⌘O）；「打开文件夹」让位改 ⌘⇧O
+        Button("命令面板…") {
+          workspaceStore.isCommandPalettePresented = true
+        }
+        .keyboardShortcut("o")
         Button("打开文件夹…") {
           workspaceStore.openFolderPanel()
         }
-        .keyboardShortcut("o")
+        .keyboardShortcut("o", modifiers: [.command, .shift])
         Button("快速打开…") {
           workspaceStore.isQuickOpenPresented = true
         }
