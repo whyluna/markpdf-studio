@@ -31,8 +31,9 @@ enum AnnotationMarkdownExporter {
     AnnotationSort.page.sort(items).compactMap { line(for: $0, pageLink: pageLink) }
   }
 
-  /// 合并到目标笔记：新文件带标题头；追加时按行内容精确去重（增量导出不重复，FR-4.8 验收）。
-  /// 返回合并后的完整内容与本次新增行数（addedCount = 0 表示无需写盘）。
+  /// 合并到目标笔记：新文件带标题头；追加时按行内容精确去重（增量导出不重复，FR-4.8 验收）；
+  /// 旧格式行（无回链的 `- [p.N] 文本`）若与新行同页同文则就地升级为回链行。
+  /// 返回合并后的完整内容与本次新增+升级行数（addedCount = 0 表示无需写盘）。
   static func mergedContent(
     existing: String?,
     pdfBaseName: String,
@@ -42,13 +43,36 @@ enum AnnotationMarkdownExporter {
       let body = newLines.joined(separator: "\n")
       return ("# \(pdfBaseName) 标注\n\n\(body)\n", newLines.count)
     }
-    let existingLines = Set(
-      existing.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) })
-    let additions = newLines.filter { !existingLines.contains($0) }
-    guard !additions.isEmpty else { return (existing, 0) }
-    var content = existing
-    while content.hasSuffix("\n") { content.removeLast() }
-    content += "\n\n" + additions.joined(separator: "\n") + "\n"
-    return (content, additions.count)
+    var lines = existing.components(separatedBy: .newlines)
+    var appended: [String] = []
+    var addedCount = 0
+    for newLine in newLines {
+      if lines.contains(newLine) {
+        continue  // 已有同格式行：去重跳过
+      }
+      if let plain = plainForm(of: newLine), let index = lines.firstIndex(of: plain) {
+        lines[index] = newLine  // 旧格式行：就地升级为回链行
+        addedCount += 1
+        continue
+      }
+      appended.append(newLine)
+    }
+    addedCount += appended.count
+    guard addedCount > 0 else { return (existing, 0) }
+    var content = lines.joined(separator: "\n")
+    if !appended.isEmpty {
+      while content.hasSuffix("\n") { content.removeLast() }
+      content += "\n\n" + appended.joined(separator: "\n") + "\n"
+    }
+    return (content, addedCount)
+  }
+
+  /// 回链行转纯文本行：`- [p.N](dest) 文本` → `- [p.N] 文本`（识别旧格式用）
+  private static func plainForm(of line: String) -> String? {
+    guard line.hasPrefix("- [p."),
+      let open = line.range(of: "]("),
+      let close = line.range(of: ") ", range: open.upperBound..<line.endIndex)
+    else { return nil }
+    return String(line[..<open.lowerBound]) + "] " + line[close.upperBound...]
   }
 }

@@ -104,4 +104,26 @@ final class AnnotationExporterTests: XCTestCase {
       existing: existing, pdfBaseName: "vllm", newLines: ["- [p.1](a.pdf#page=1) 摘录"])
     XCTAssertEqual(content, "# 笔记\n\n- [p.1](a.pdf#page=1) 摘录\n")
   }
+
+  /// 旧格式行（无回链）再导出时就地升级为回链行，不重复追加
+  func testMergeUpgradesLegacyPlainLines() {
+    let existing = "# vllm 标注\n\n- [p.3] 摘录\n- [p.5] 另一条\n"
+    let (content, added) = AnnotationMarkdownExporter.mergedContent(
+      existing: existing,
+      pdfBaseName: "vllm",
+      newLines: ["- [p.3](a.pdf#page=3) 摘录", "- [p.5](a.pdf#page=5) 另一条"])
+    XCTAssertEqual(content, "# vllm 标注\n\n- [p.3](a.pdf#page=3) 摘录\n- [p.5](a.pdf#page=5) 另一条\n")
+    XCTAssertEqual(added, 2)
+  }
+
+  /// 用户手改过的旧行（文本不一致）不升级，按新行追加
+  func testMergeDoesNotUpgradeEditedLegacyLines() {
+    let existing = "# vllm 标注\n\n- [p.3] 用户改过的文本\n"
+    let (content, added) = AnnotationMarkdownExporter.mergedContent(
+      existing: existing,
+      pdfBaseName: "vllm",
+      newLines: ["- [p.3](a.pdf#page=3) 摘录"])
+    XCTAssertEqual(content, "# vllm 标注\n\n- [p.3] 用户改过的文本\n\n- [p.3](a.pdf#page=3) 摘录\n")
+    XCTAssertEqual(added, 1)
+  }
 }
