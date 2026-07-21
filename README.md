@@ -1,16 +1,48 @@
 # MarkPDF Studio
 
-macOS 原生 Markdown + PDF 阅读编辑工作台：在一个窗口内完成「管理文件 → 阅读并标注 PDF → 编写 Markdown 笔记 → 双向关联」的闭环。
+**macOS 原生 Markdown + PDF 阅读编辑工作台**：在一个窗口内完成「管理文件 → 阅读并标注 PDF → 编写 Markdown 笔记 → 双向关联」的完整闭环。
 
-- **需求文档 / 开发规范**：见 [`docs/`](docs/)
-- **UI 设计基准**：见 [`prototype/index.html`](prototype/index.html)（浏览器打开即可交互预览）
-- **目标平台**：macOS 13+（Apple Silicon / Intel）
+![MarkPDF Studio](docs/images/screenshot.png)
 
-## 技术栈
+[![macOS CI](https://github.com/whyluna/markpdf-studio/actions/workflows/macos.yml/badge.svg)](https://github.com/whyluna/markpdf-studio/actions/workflows/macos.yml)
+[![Release](https://img.shields.io/github/v/release/whyluna/markpdf-studio)](https://github.com/whyluna/markpdf-studio/releases)
 
-Swift 5.9 · SwiftUI + AppKit · PDFKit · WKWebView（CodeMirror 6 编辑器内核）· XcodeGen 工程生成
+## 这是什么
 
-## 本地开发
+为「读论文/文档 + 做笔记」场景而生的轻量工作台，适合：
+
+- **研究生 / 科研人员**：大量阅读 PDF 论文，需要高亮批注并沉淀为结构化笔记
+- **开发者 / 文字工作者**：需要 Typora 级体验的 Markdown 写作工具
+
+**文件即真相**：md 存纯文本源码、PDF 标注写回标准 PDF Annotation（系统预览可见），不使用私有数据库锁死你的数据。单机离线、无账号、无遥测。
+
+## 功能亮点
+
+| 模块 | 能力 |
+|---|---|
+| **Markdown 编辑** | 所见即所得 / 源码 / 阅读三模式 · GFM 全集 · KaTeX 公式 / 脚注 / `==高亮==` · 大纲 TOC · 图片粘贴自动存入 assets · 字数统计 · 导出 PDF（A4 分页）/ HTML · 打字机与专注模式 |
+| **PDF 阅读** | 缩放 50%–400% · 大纲 / 书签 / 缩略图 · 页内搜索 · 阅读位置记忆 · 夜间主题（智能反色、图片不反色） |
+| **PDF 标注** | 高亮 / 下划线 / 删除线 / 页边批注 · 四色系统 · 写回标准 PDF（自动 .bak 备份）· 只读 sidecar 模式 · 一键导出全部标注为 Markdown（按页分组 + 页码回链 + 增量去重） |
+| **双向关联** | PDF 选字 ⇧⌘C 复制为带回链引用块 · md 中 ⌘+点击回链跳回 PDF 对应页 · 反向链接面板 |
+| **效率** | ⌘P 快速打开 · ⌘⇧F 全文搜索（md + PDF）· ⌘O 命令面板（支持拼音首字母） · 标签页 / 左右分栏 · 收藏夹与最近打开 |
+
+## 下载安装
+
+- **要求**：macOS 13 Ventura 及以上（Apple Silicon / Intel）
+- 在 [**Releases**](https://github.com/whyluna/markpdf-studio/releases) 下载最新 `MarkPDF-x.x.x.dmg`，把 MarkPDF.app 拖入 Applications
+- **首次打开请右键点击图标 →「打开」**（当前未购买 Apple Developer ID 签名，Gatekeeper 提示「无法验证开发者」属正常现象，仅需首次操作一次）
+
+## 快速上手
+
+1. **⌘⇧O** 打开一个文件夹作为工作区——左侧文件树展示其中的 md / PDF / 图片（⌘O 现为命令面板入口）
+2. 点 `.md` 进入编辑（三模式切换，停止输入 0.5 秒自动保存，**⌘S** 立即保存）
+3. 点 `.pdf` 阅读：划词即出标注工具条，右侧栏管理缩略图 / 书签 / 标注
+4. 标注完成 → 工具栏导出图标 →「导出全部标注为 Markdown」，按页分组写进笔记并带页码回链
+5. 笔记里 **⌘+点击** 回链 → 跳回 PDF 对应页并闪烁；右侧「引用」面板查看反向链接
+
+更多技巧：**⌘O** 打开命令面板，全部功能可搜索执行（支持拼音首字母，如输 `dc` 找「导出」）。
+
+## 从源码构建
 
 ```bash
 # 前置：Xcode 15+，Node.js 20+（编辑器内核构建），XcodeGen
@@ -28,20 +60,14 @@ xcodegen generate
 open MarkPDF.xcodeproj   # Cmd+R 运行
 ```
 
-若跳过手动构建，Xcode 首次编译时 preBuild 脚本也会自动执行 `npm ci && npm run build`（耗时一两分钟，需 npm 位于 `/opt/homebrew/bin`、`/usr/local/bin` 或经由 nvm 安装）。
+测试：Swift 单元测试 `xcodebuild -scheme MarkPDF test`；编辑器内核测试 `cd MarkPDF/Resources/Web && npm test`。
 
-## 使用
+## 文档与协作
 
-- **⌘O** 打开一个文件夹作为工作区，左侧文件树展示其中的 Markdown / PDF / 图片
-- 点击 `.md` 进入编辑（所见即所得 / 源码 / 阅读 三模式）；停止输入 0.5 秒自动保存，**⌘S** 立即保存
-- 点击 `.pdf` / 图片直接预览（PDF 标注能力在 M2 提供）
+- [需求文档（PRD）](docs/需求文档.md) · [开发规范](docs/开发规范.md) · [开发进度](docs/进度.md) · [CHANGELOG](CHANGELOG.md)
+- UI 设计基准：[`prototype/index.html`](prototype/index.html)（浏览器打开即可交互预览）
+- 贡献方式：`main` 直推，Conventional Commits；CI 绿为健康线
 
-## CI
+## License
 
-[`docs/macos-ci.yml`](docs/macos-ci.yml) 是现成的 GitHub Actions 模板（Node 环境 → 构建 Web 内核 → XcodeGen → 编译 + 测试）。启用方式：复制为 `.github/workflows/macos.yml` 后 push（自动化 token 无 workflow scope，需手动添加一次）。
-
-## 协作约定
-
-- 分支：`main` 直推，Conventional Commits
-- 每完成一个功能或修复一个 bug 即 commit + push
-- 视觉与交互以 `prototype/index.html` 为唯一基准
+待定（建议在发布仓库前补充 LICENSE 文件，如 MIT）。
