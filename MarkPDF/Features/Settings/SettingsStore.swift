@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import os
 
 /// 应用设置（FR-7.2）：编辑器字体/字号/行高、PDF 默认视图模式；即时生效并持久化。
 @MainActor
@@ -90,11 +91,17 @@ final class SettingsStore: ObservableObject {
   }
   /// 打字机模式（FR-2.10：当前行垂直居中）
   @Published var typewriterMode: Bool {
-    didSet { defaults.set(typewriterMode, forKey: Key.typewriterMode) }
+    didSet {
+      defaults.set(typewriterMode, forKey: Key.typewriterMode)
+      Logger.editor.debug("设置写入: typewriterMode=\(self.typewriterMode)")
+    }
   }
   /// 专注模式（FR-2.10：高亮当前段落）
   @Published var focusMode: Bool {
-    didSet { defaults.set(focusMode, forKey: Key.focusMode) }
+    didSet {
+      defaults.set(focusMode, forKey: Key.focusMode)
+      Logger.editor.debug("设置写入: focusMode=\(self.focusMode)")
+    }
   }
 
   private let defaults: UserDefaults
