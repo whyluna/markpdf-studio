@@ -3,8 +3,9 @@ import Foundation
 /// 标注导出为 Markdown 的纯格式化逻辑（FR-4.8）。
 /// 与 UI/文件 IO 解耦，供单元测试直接覆盖。
 enum AnnotationMarkdownExporter {
-  /// 单条标注的导出行：`- [p.N] 摘录`；有命名时追加 ` — 名称`；两者皆空返回 nil（不导出空行）
-  static func line(for item: AnnotationItem) -> String? {
+  /// 单条标注的导出行：`- [p.N](回链) 摘录`；有命名时追加 ` — 名称`；两者皆空返回 nil（不导出空行）。
+  /// pageLink 生成页码回链（FR-5.3 格式 `pdf相对路径#page=N`，由调用方按目标笔记位置计算）
+  static func line(for item: AnnotationItem, pageLink: (Int) -> String) -> String? {
     let excerpt = item.excerpt
     let name = item.name
       .components(separatedBy: .newlines)
@@ -22,12 +23,12 @@ enum AnnotationMarkdownExporter {
     case (false, false):
       text = "\(excerpt) — \(name)"
     }
-    return "- [p.\(item.pageLabel)] \(text)"
+    return "- [p.\(item.pageLabel)](\(pageLink(item.pageLabel))) \(text)"
   }
 
   /// 全部标注的导出行：按页码分组（页内视觉顺序），与列表面板排序口径一致
-  static func lines(for items: [AnnotationItem]) -> [String] {
-    AnnotationSort.page.sort(items).compactMap(line(for:))
+  static func lines(for items: [AnnotationItem], pageLink: (Int) -> String) -> [String] {
+    AnnotationSort.page.sort(items).compactMap { line(for: $0, pageLink: pageLink) }
   }
 
   /// 合并到目标笔记：新文件带标题头；追加时按行内容精确去重（增量导出不重复，FR-4.8 验收）。

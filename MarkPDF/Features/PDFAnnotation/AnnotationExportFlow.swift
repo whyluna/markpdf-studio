@@ -9,9 +9,9 @@ import os
 enum AnnotationExportFlow {
   static func run(store: PDFAnnotationStore) -> URL? {
     guard let pdfURL = store.currentFileURL else { return nil }
-    let lines = AnnotationMarkdownExporter.lines(for: store.annotationItems())
+    let items = store.annotationItems()
     let pdfBaseName = pdfURL.deletingPathExtension().lastPathComponent
-    guard !lines.isEmpty else {
+    guard !items.isEmpty else {
       alert(title: "没有可导出的标注", message: "当前 PDF 还没有任何标注。")
       return nil
     }
@@ -25,6 +25,12 @@ enum AnnotationExportFlow {
     }
     guard panel.runModal() == .OK, let target = panel.url else { return nil }
 
+    // 页码回链：相对目标笔记目录的路径（FR-5.3 可解析；点击跳回 PDF 对应页）
+    let pdfRelative = MarkdownImageLinkRewriter.relativePath(
+      from: target.deletingLastPathComponent(), to: pdfURL)
+    let lines = AnnotationMarkdownExporter.lines(for: items) { page in
+      "\(pdfRelative)#page=\(page)"
+    }
     let existing = try? String(contentsOf: target, encoding: .utf8)
     let (content, addedCount) = AnnotationMarkdownExporter.mergedContent(
       existing: existing, pdfBaseName: pdfBaseName, newLines: lines)

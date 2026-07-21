@@ -113,7 +113,8 @@ function baseExtensions() {
 const view = new EditorView({
   parent: document.getElementById("editor"),
   state: EditorState.create({
-    doc: DEMO_DOC,
+    // App 内初始为空（防 setContent 丢失时误显示 demo 内容）；浏览器调试才用示例文档
+    doc: new URLSearchParams(location.search).has("app") ? "" : DEMO_DOC,
     extensions: [
       history(),
       // 自绘光标/选区：替代 WebKit 原生光标（原生按 line-height 1.8 的行框绘制，显得过长）
