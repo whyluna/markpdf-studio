@@ -51,6 +51,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   var onScrollHandled: (() -> Void)?
   /// 光标行变化回调（FR-1.6；内核 500ms 防抖上报）
   var onCursorMoved: ((Int) -> Void)?
+  /// 文件回链打开回调（FR-5.3；参数为解析后的文件 URL 与可选页码）
+  var onOpenFileLink: ((URL, Int?) -> Void)?
 
   init(
     text: Binding<String>,
@@ -66,7 +68,8 @@ struct MarkdownEditorView: NSViewRepresentable {
     onContentChanged: ((String) -> Void)? = nil,
     onOutlineChanged: (([Heading]) -> Void)? = nil,
     onScrollHandled: (() -> Void)? = nil,
-    onCursorMoved: ((Int) -> Void)? = nil
+    onCursorMoved: ((Int) -> Void)? = nil,
+    onOpenFileLink: ((URL, Int?) -> Void)? = nil
   ) {
     _text = text
     self.documentID = documentID
@@ -82,6 +85,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.onOutlineChanged = onOutlineChanged
     self.onScrollHandled = onScrollHandled
     self.onCursorMoved = onCursorMoved
+    self.onOpenFileLink = onOpenFileLink
   }
 
   func makeCoordinator() -> Coordinator {
@@ -130,15 +134,11 @@ struct MarkdownEditorView: NSViewRepresentable {
         coordinator?.saveImage(payload: payload, id: id)
       }
     }
-    // ⌘+点击链接：只允许 http/https 用默认浏览器打开（拦截 javascript:/file: 等协议）
-    bridge.on(.openLink) { payload, _ in
-      guard let urlString = payload["url"] as? String,
-        let url = URL(string: urlString),
-        let scheme = url.scheme?.lowercased(),
-        scheme == "http" || scheme == "https"
-      else { return }
+    // ⌘+点击链接：http/https 用默认浏览器打开；文件回链（FR-5.3）解析后打开标签
+    bridge.on(.openLink) { [weak coordinator = context.coordinator] payload, _ in
+      guard let urlString = payload["url"] as? String else { return }
       Task { @MainActor in
-        NSWorkspace.shared.open(url)
+        coordinator?.openLink(urlString)
       }
     }
 
@@ -292,6 +292,26 @@ extension MarkdownEditorView {
           completion(text)
         }
       }
+    }
+
+    /// ⌘+点击链接（FR-2.3 / FR-5.3）：http/https 走浏览器；文件回链解析后交给宿主打开
+    func openLink(_ urlString: String) {
+      if let url = URL(string: urlString),
+        let scheme = url.scheme?.lowercased(),
+        scheme == "http" || scheme == "https"
+      {
+        NSWorkspace.shared.open(url)
+        return
+      }
+      guard let link = MarkdownFileLink.parse(urlString),
+        let target = MarkdownFileLink.resolve(
+          path: link.path,
+          documentDir: parent.documentID?.deletingLastPathComponent(),
+          workspaceRoot: parent.workspaceRoot
+        )
+      else { return }
+      Logger.editor.debug("回链跳转: \(target.lastPathComponent, privacy: .public) page=\(link.page ?? -1)")
+      parent.onOpenFileLink?(target, link.page)
     }
 
     /// 图片存盘请求（FR-2.5）：写工作区 assets/ 并应答相对路径；失败应答 error 并弹提示

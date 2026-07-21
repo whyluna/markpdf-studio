@@ -22,6 +22,8 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
   weak var pdfView: PDFView?
   /// 待跳转页（FR-6.2 全文搜索命中跳转；PDFReaderView 创建后消费一次）
   var pendingPage: Int?
+  /// 跳转后是否闪烁页面（FR-5.3 回链跳转短暂高亮）
+  var pendingFlash = false
 
   static let minScale: CGFloat = 0.5
   static let maxScale: CGFloat = 4.0

@@ -196,13 +196,30 @@ enum AnnotationFlasher {
       overlay.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.35).cgColor
       overlay.layer?.cornerRadius = 3
       pdfView.addSubview(overlay)
-      NSAnimationContext.runAnimationGroup { context in
-        context.duration = 1.0
-        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        overlay.animator().alphaValue = 0
-      } completionHandler: {
-        overlay.removeFromSuperview()
-      }
+      fadeOutAndRemove(overlay)
+    }
+  }
+
+  /// 回链跳转后的整页闪烁提示（FR-5.3）：页面边框 + 浅底色，短暂显示后淡出
+  static func flashPage(_ page: PDFPage, in pdfView: PDFView) {
+    let rect = pdfView.convert(page.bounds(for: .mediaBox), from: page).insetBy(dx: 4, dy: 4)
+    let overlay = FlashOverlayView(frame: rect)
+    overlay.wantsLayer = true
+    overlay.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+    overlay.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor
+    overlay.layer?.borderWidth = 2
+    overlay.layer?.cornerRadius = 6
+    pdfView.addSubview(overlay)
+    fadeOutAndRemove(overlay)
+  }
+
+  private static func fadeOutAndRemove(_ overlay: NSView) {
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 1.0
+      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      overlay.animator().alphaValue = 0
+    } completionHandler: {
+      overlay.removeFromSuperview()
     }
   }
 }

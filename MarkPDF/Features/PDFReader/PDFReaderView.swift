@@ -117,11 +117,8 @@ struct PDFReaderView: NSViewRepresentable {
     }
     // 阅读位置记忆（FR-3.5）：恢复上次页码与缩放
     context.coordinator.restorePosition(url: url)
-    // 全文搜索命中跳转（FR-6.2）：优先于位置恢复
-    if let page = pdfStore.pendingPage {
-      pdfStore.pendingPage = nil
-      pdfStore.goTo(page: page)
-    }
+    // 全文搜索命中/回链跳转（FR-6.2/FR-5.3）：优先于位置恢复
+    context.coordinator.jumpToPendingPageIfAny()
     return pdfView
   }
 
@@ -135,8 +132,11 @@ struct PDFReaderView: NSViewRepresentable {
         annotationStore.attach(document: document, url: url)
       }
       context.coordinator.restorePosition(url: url)
+      context.coordinator.jumpToPendingPageIfAny()
       return
     }
+    // 既有视图被重新激活：消费待跳转页（回链跳到已打开的 PDF，FR-5.3）
+    context.coordinator.jumpToPendingPageIfAny()
     // FR-7.2：默认视图模式设置即时生效
     if pdfView.displayMode != settings.pdfViewMode.pdfDisplayMode {
       pdfView.displayMode = settings.pdfViewMode.pdfDisplayMode
@@ -298,6 +298,21 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc func claimFocus(_ sender: Any) {
       parent.pdfStore.pdfView = pdfView
+    }
+
+    /// 消费待跳转页（FR-6.2 搜索 / FR-5.3 回链）；pendingFlash 时闪烁页面提示
+    func jumpToPendingPageIfAny() {
+      guard let pdfView, let page = parent.pdfStore.pendingPage else { return }
+      parent.pdfStore.pendingPage = nil
+      let flash = parent.pdfStore.pendingFlash
+      parent.pdfStore.pendingFlash = false
+      parent.pdfStore.goTo(page: page)
+      if flash, let target = pdfView.document?.page(at: page - 1) {
+        // 等 PDFKit 完成跳转布局后再放覆盖层（位置才准）
+        DispatchQueue.main.async {
+          AnnotationFlasher.flashPage(target, in: pdfView)
+        }
+      }
     }
   }
 }

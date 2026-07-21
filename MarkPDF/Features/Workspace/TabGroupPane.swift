@@ -63,6 +63,8 @@ struct MarkdownTabView: View {
   @EnvironmentObject private var stateStore: WorkspaceStateStore
   @EnvironmentObject private var workspaceStore: WorkspaceStore
   @EnvironmentObject private var settings: SettingsStore
+  @EnvironmentObject private var tabStore: TabStore
+  @EnvironmentObject private var pdfStore: PDFReaderStore
 
   var body: some View {
     MarkdownEditorView(
@@ -90,6 +92,14 @@ struct MarkdownTabView: View {
       },
       onCursorMoved: { line in
         store.cursorDidMove(to: line)
+      },
+      // FR-5.3：文件回链打开（pdf 带页码则跳转并闪烁）
+      onOpenFileLink: { url, page in
+        tabStore.open(url: url)
+        if let page {
+          pdfStore.pendingPage = page
+          pdfStore.pendingFlash = true
+        }
       }
     )
   }
@@ -100,4 +110,5 @@ struct MarkdownTabView: View {
     .environmentObject(TabStore())
     .environmentObject(WorkspaceStateStore())
     .environmentObject(SettingsStore())
+    .environmentObject(PDFReaderStore())
 }
