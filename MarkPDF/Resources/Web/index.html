@@ -109,6 +109,9 @@ body{display:flex;flex-direction:column}
 /* 脚注：引用上标与定义行（小号、次要色） */
 .cm-footnote-ref{color:var(--accent);font-size:.78em;padding:0 1px;cursor:default}
 .cm-footnote-def{font-size:13px;color:var(--text2)}
+/* 专注模式（FR-2.10）：非当前行压暗，当前行正常；过渡柔和 */
+.cm-focus-mode .cm-line{opacity:.35;transition:opacity .18s ease}
+.cm-focus-mode .cm-line.cm-focus-line{opacity:1}
 </style>
 <!-- KaTeX 样式（esbuild 由 src/main.js 的 CSS import 自动拆出） -->
 <link rel="stylesheet" href="dist/editor.css">

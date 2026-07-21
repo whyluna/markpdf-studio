@@ -43,6 +43,9 @@ struct MarkdownEditorView: NSViewRepresentable {
   let fontCSS: String
   let fontSize: Double
   let lineHeight: Double
+  /// 打字机/专注模式（FR-2.10）
+  let typewriter: Bool
+  let focusMode: Bool
   /// 内核内容变更回调（自动保存挂钩，FR-2.7）
   var onContentChanged: ((String) -> Void)?
   /// 大纲变更回调（FR-2.6）
@@ -65,6 +68,8 @@ struct MarkdownEditorView: NSViewRepresentable {
     fontCSS: String = "",
     fontSize: Double = SettingsStore.defaultFontSize,
     lineHeight: Double = SettingsStore.defaultLineHeight,
+    typewriter: Bool = false,
+    focusMode: Bool = false,
     onContentChanged: ((String) -> Void)? = nil,
     onOutlineChanged: (([Heading]) -> Void)? = nil,
     onScrollHandled: (() -> Void)? = nil,
@@ -81,6 +86,8 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.fontCSS = fontCSS
     self.fontSize = fontSize
     self.lineHeight = lineHeight
+    self.typewriter = typewriter
+    self.focusMode = focusMode
     self.onContentChanged = onContentChanged
     self.onOutlineChanged = onOutlineChanged
     self.onScrollHandled = onScrollHandled
@@ -184,11 +191,13 @@ extension MarkdownEditorView {
     private var isReady = false
     private var lastPushedMode: EditorMode?
     private var lastPushedTheme: EditorTheme?
-    /// 排版去重键（FR-7.2）
+    /// 排版去重键（FR-7.2/2.10）
     struct Typography: Equatable {
       var fontCSS: String
       var fontSize: Double
       var lineHeight: Double
+      var typewriter: Bool
+      var focusMode: Bool
     }
     private var lastPushedTypography: Typography?
     /// 内核就绪前排队的滚动行（scrollTo 在就绪前调用不再丢弃，FR-6.2 跳转依赖）
@@ -241,14 +250,22 @@ extension MarkdownEditorView {
         bridge.notify(.setTheme, payload: ["theme": parent.theme.rawValue])
         lastPushedTheme = parent.theme
       }
-      // FR-7.2：排版（字号/行高/字体任一变化即推送）
-      let typography = Typography(fontCSS: parent.fontCSS, fontSize: parent.fontSize, lineHeight: parent.lineHeight)
+      // FR-7.2：排版（字号/行高/字体任一变化即推送）；FR-2.10：打字机/专注模式
+      let typography = Typography(
+        fontCSS: parent.fontCSS,
+        fontSize: parent.fontSize,
+        lineHeight: parent.lineHeight,
+        typewriter: parent.typewriter,
+        focusMode: parent.focusMode
+      )
       if lastPushedTypography != typography {
         bridge.notify(.setTypography, payload: [
           "fontCSS": typography.fontCSS,
           "fontSize": typography.fontSize,
           "lineHeight": typography.lineHeight,
         ])
+        bridge.notify(.setTypewriter, payload: ["enabled": typography.typewriter])
+        bridge.notify(.setFocusMode, payload: ["enabled": typography.focusMode])
         lastPushedTypography = typography
       }
     }

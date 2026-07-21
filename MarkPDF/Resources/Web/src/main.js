@@ -1,6 +1,6 @@
 // MarkPDF Markdown 编辑器内核入口（FR-2.1 / FR-2.2 / FR-2.7）
-import { EditorState, Compartment } from "@codemirror/state";
-import { EditorView, keymap, placeholder, drawSelection } from "@codemirror/view";
+import { EditorState, Compartment, StateField } from "@codemirror/state";
+import { EditorView, keymap, placeholder, drawSelection, Decoration } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { search, searchKeymap, getSearchQuery } from "@codemirror/search";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -65,6 +65,35 @@ import { matchHeadingLine } from "./extended.js";
 
 const modeConf = new Compartment();
 
+// 打字机/专注模式（FR-2.10）：默认关，native 推送开关
+const typewriterConf = new Compartment();
+const focusConf = new Compartment();
+
+// 打字机模式：选区变化后当前行垂直居中（异步派发，避免 updateListener 内同步 dispatch）
+const typewriterExt = EditorView.updateListener.of((u) => {
+  if (!u.selectionSet) return;
+  const head = u.state.selection.main.head;
+  setTimeout(() => {
+    view.dispatch({ effects: EditorView.scrollIntoView(head, { y: "center" }) });
+  }, 0);
+});
+
+// 专注模式：当前行加 cm-focus-line 类，CSS 压暗其余行
+const focusLineField = StateField.define({
+  create(state) {
+    return focusDecorations(state);
+  },
+  update(_deco, tr) {
+    return focusDecorations(tr.state);
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+function focusDecorations(state) {
+  const line = state.doc.lineAt(state.selection.main.head);
+  return Decoration.set([Decoration.line({ class: "cm-focus-line" }).range(line.from)]);
+}
+
 function modeExtension(mode) {
   if (mode === "source") {
     return [EditorView.editable.of(true), EditorState.readOnly.of(false)];
@@ -124,6 +153,9 @@ const view = new EditorView({
       ...baseExtensions(),
       placeholder("开始输入 Markdown…"),
       modeConf.of(modeExtension("wysiwyg")),
+      // 打字机/专注模式（FR-2.10）：默认关，经 editor.setTypewriter/setFocusMode 重配置
+      typewriterConf.of([]),
+      focusConf.of([]),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) scheduleContentNotify();
         if (u.selectionSet || u.docChanged) scheduleCursorNotify();
@@ -204,6 +236,18 @@ Bridge.onMessage("editor.setTypography", (p) => {
   if (typeof p.lineHeight === "number") style.setProperty("--editor-line-height", String(p.lineHeight));
   // fontCSS 为空串时移除变量，回退到样式表默认字体栈
   if (typeof p.fontCSS === "string") style.setProperty("--editor-font", p.fontCSS);
+});
+
+// 打字机模式（FR-2.10）：选区变化后当前行垂直居中
+Bridge.onMessage("editor.setTypewriter", (p) => {
+  view.dispatch({ effects: typewriterConf.reconfigure(p.enabled ? typewriterExt : []) });
+});
+
+// 专注模式（FR-2.10）：压暗非当前行（编辑器根加开关类，CSS 生效）
+Bridge.onMessage("editor.setFocusMode", (p) => {
+  const on = !!p.enabled;
+  view.dom.classList.toggle("cm-focus-mode", on);
+  view.dispatch({ effects: focusConf.reconfigure(on ? focusLineField : []) });
 });
 
 Bridge.onMessage("editor.insertAtCursor", (p) => {

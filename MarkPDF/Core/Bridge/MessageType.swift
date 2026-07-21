@@ -12,6 +12,10 @@ enum BridgeMessageType: String {
   case scrollToLine = "editor.scrollToLine"
   /// 编辑器排版（FR-7.2：字体/字号/行高）
   case setTypography = "editor.setTypography"
+  /// 打字机模式开关（FR-2.10）
+  case setTypewriter = "editor.setTypewriter"
+  /// 专注模式开关（FR-2.10）
+  case setFocusMode = "editor.setFocusMode"
 
   // web → native
   case ready = "editor.ready"

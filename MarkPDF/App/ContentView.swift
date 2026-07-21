@@ -13,6 +13,7 @@ struct ContentView: View {
   @EnvironmentObject private var searchStore: SearchStore
   @EnvironmentObject private var backlinksStore: BacklinksStore
   @EnvironmentObject private var imageStore: ImagePreviewStore
+  @EnvironmentObject private var settingsStore: SettingsStore
 
   var body: some View {
     VStack(spacing: 0) {
@@ -295,6 +296,12 @@ struct ContentView: View {
     }
 
     // 其他
+    commands.append(AppCommand(id: "typewriter", title: "切换打字机模式", section: "视图", isEnabled: { tabStore.activeEditorStore != nil }) {
+      settingsStore.typewriterMode.toggle()
+    })
+    commands.append(AppCommand(id: "focus-mode", title: "切换专注模式", section: "视图", isEnabled: { tabStore.activeEditorStore != nil }) {
+      settingsStore.focusMode.toggle()
+    })
     commands.append(AppCommand(id: "settings", title: "设置…", section: "其他", shortcut: "⌘,") {
       NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     })

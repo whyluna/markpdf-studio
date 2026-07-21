@@ -67,6 +67,14 @@ final class SettingsStore: ObservableObject {
   @Published var pdfViewMode: PDFViewMode {
     didSet { defaults.set(pdfViewMode.rawValue, forKey: Key.pdfViewMode) }
   }
+  /// 打字机模式（FR-2.10：当前行垂直居中）
+  @Published var typewriterMode: Bool {
+    didSet { defaults.set(typewriterMode, forKey: Key.typewriterMode) }
+  }
+  /// 专注模式（FR-2.10：高亮当前段落）
+  @Published var focusMode: Bool {
+    didSet { defaults.set(focusMode, forKey: Key.focusMode) }
+  }
 
   private let defaults: UserDefaults
   private enum Key {
@@ -74,6 +82,8 @@ final class SettingsStore: ObservableObject {
     static let fontSize = "settings.editorFontSize"
     static let lineHeight = "settings.editorLineHeight"
     static let pdfViewMode = "settings.pdfViewMode"
+    static let typewriterMode = "settings.typewriterMode"
+    static let focusMode = "settings.focusMode"
   }
 
   /// 默认值（与内核 baseTheme 一致）
@@ -88,5 +98,7 @@ final class SettingsStore: ObservableObject {
     let lineHeight = defaults.double(forKey: Key.lineHeight)
     editorLineHeight = lineHeight > 0 ? lineHeight : Self.defaultLineHeight
     pdfViewMode = PDFViewMode(rawValue: defaults.string(forKey: Key.pdfViewMode) ?? "") ?? .continuous
+    typewriterMode = defaults.bool(forKey: Key.typewriterMode)
+    focusMode = defaults.bool(forKey: Key.focusMode)
   }
 }
