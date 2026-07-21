@@ -68,10 +68,9 @@ final class SettingsStore: ObservableObject {
   @Published var pdfViewMode: PDFViewMode {
     didSet { defaults.set(pdfViewMode.rawValue, forKey: Key.pdfViewMode) }
   }
-  /// PDF 阅读主题（FR-3.6）
+  /// PDF 阅读主题（FR-3.6；羊皮纸档经用户决策移除）
   enum PDFReadingTheme: String, CaseIterable, Identifiable {
     case day
-    case sepia
     case night
 
     var id: String { rawValue }
@@ -79,7 +78,6 @@ final class SettingsStore: ObservableObject {
     var title: String {
       switch self {
       case .day: "白天"
-      case .sepia: "羊皮纸"
       case .night: "夜间"
       }
     }
