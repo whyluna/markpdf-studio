@@ -296,6 +296,14 @@ struct ContentView: View {
     }
 
     // 其他
+    for theme in SettingsStore.PDFReadingTheme.allCases {
+      commands.append(AppCommand(
+        id: "reading-theme-\(theme.rawValue)", title: "PDF 阅读主题：\(theme.title)", section: "视图",
+        isEnabled: { isPDF }
+      ) {
+        settingsStore.pdfReadingTheme = theme
+      })
+    }
     commands.append(AppCommand(id: "typewriter", title: "切换打字机模式", section: "视图", isEnabled: { tabStore.activeEditorStore != nil }) {
       settingsStore.typewriterMode.toggle()
     })

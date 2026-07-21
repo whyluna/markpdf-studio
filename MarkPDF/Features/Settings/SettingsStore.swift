@@ -67,6 +67,27 @@ final class SettingsStore: ObservableObject {
   @Published var pdfViewMode: PDFViewMode {
     didSet { defaults.set(pdfViewMode.rawValue, forKey: Key.pdfViewMode) }
   }
+  /// PDF 阅读主题（FR-3.6）
+  enum PDFReadingTheme: String, CaseIterable, Identifiable {
+    case day
+    case sepia
+    case night
+
+    var id: String { rawValue }
+
+    var title: String {
+      switch self {
+      case .day: "白天"
+      case .sepia: "羊皮纸"
+      case .night: "夜间"
+      }
+    }
+  }
+
+  /// PDF 阅读主题（FR-3.6）
+  @Published var pdfReadingTheme: PDFReadingTheme {
+    didSet { defaults.set(pdfReadingTheme.rawValue, forKey: Key.pdfReadingTheme) }
+  }
   /// 打字机模式（FR-2.10：当前行垂直居中）
   @Published var typewriterMode: Bool {
     didSet { defaults.set(typewriterMode, forKey: Key.typewriterMode) }
@@ -84,6 +105,7 @@ final class SettingsStore: ObservableObject {
     static let pdfViewMode = "settings.pdfViewMode"
     static let typewriterMode = "settings.typewriterMode"
     static let focusMode = "settings.focusMode"
+    static let pdfReadingTheme = "settings.pdfReadingTheme"
   }
 
   /// 默认值（与内核 baseTheme 一致）
@@ -98,6 +120,7 @@ final class SettingsStore: ObservableObject {
     let lineHeight = defaults.double(forKey: Key.lineHeight)
     editorLineHeight = lineHeight > 0 ? lineHeight : Self.defaultLineHeight
     pdfViewMode = PDFViewMode(rawValue: defaults.string(forKey: Key.pdfViewMode) ?? "") ?? .continuous
+    pdfReadingTheme = PDFReadingTheme(rawValue: defaults.string(forKey: Key.pdfReadingTheme) ?? "") ?? .day
     typewriterMode = defaults.bool(forKey: Key.typewriterMode)
     focusMode = defaults.bool(forKey: Key.focusMode)
   }

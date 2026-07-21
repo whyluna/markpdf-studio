@@ -77,6 +77,7 @@ struct PDFReaderView: NSViewRepresentable {
     pdfView.displayDirection = .vertical
     pdfView.autoScales = true
     pdfView.document = PDFDocument(url: url)
+    applyReadingTheme(settings.pdfReadingTheme, to: pdfView)
     pdfView.onMagnify = { [weak coordinator = context.coordinator] phase, magnification in
       coordinator?.handleMagnify(phase: phase, magnification: magnification)
     }
@@ -147,6 +148,8 @@ struct PDFReaderView: NSViewRepresentable {
     if pdfView.displayMode != settings.pdfViewMode.pdfDisplayMode {
       pdfView.displayMode = settings.pdfViewMode.pdfDisplayMode
     }
+    // FR-3.6：阅读主题即时生效
+    applyReadingTheme(settings.pdfReadingTheme, to: pdfView)
     // 外部驱动的目标缩放（按钮/快捷键）；手动缩放时脱离自适应
     if abs(pdfView.scaleFactor - pdfStore.scale) > 0.001 {
       pdfView.autoScales = false
@@ -156,6 +159,29 @@ struct PDFReaderView: NSViewRepresentable {
 
   func makeCoordinator() -> Coordinator {
     Coordinator(self)
+  }
+
+  /// 阅读主题（FR-3.6）：白天原色；羊皮纸米色叠乘；夜间反色 + 色相旋转 180°
+  ///（Dark Reader 方案：亮度反转、色相保持，图片观感接近正常——PDFKit 无内容流级
+  /// 反色能力，这是其上最贴近「智能反色、图片不反色」的可行路径）
+  private func applyReadingTheme(_ theme: SettingsStore.PDFReadingTheme, to pdfView: PDFView) {
+    pdfView.wantsLayer = true
+    switch theme {
+    case .day:
+      pdfView.layer?.filters = nil
+      pdfView.layer?.backgroundColor = nil
+    case .sepia:
+      let multiply = CIFilter(name: "CIColorMultiply", parameters: [
+        "inputColor": CIColor(red: 1.0, green: 0.945, blue: 0.85, alpha: 1.0),
+      ])
+      pdfView.layer?.filters = multiply.map { [$0] }
+      pdfView.layer?.backgroundColor = NSColor(red: 0.98, green: 0.93, blue: 0.82, alpha: 1).cgColor
+    case .night:
+      let invert = CIFilter(name: "CIColorInvert")
+      let hueRotate = CIFilter(name: "CIHueRotate", parameters: ["inputAngle": NSNumber(value: Double.pi)])
+      pdfView.layer?.filters = [invert, hueRotate].compactMap { $0 }
+      pdfView.layer?.backgroundColor = NSColor.black.cgColor
+    }
   }
 
   static func dismantleNSView(_ pdfView: PDFView, coordinator: Coordinator) {

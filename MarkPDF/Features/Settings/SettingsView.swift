@@ -30,6 +30,12 @@ struct SettingsView: View {
           Text(mode.title).tag(mode)
         }
       }
+      // FR-3.6：阅读主题（白天/羊皮纸/夜间）
+      Picker("PDF 阅读主题", selection: $settings.pdfReadingTheme) {
+        ForEach(SettingsStore.PDFReadingTheme.allCases) { theme in
+          Text(theme.title).tag(theme)
+        }
+      }
       // FR-2.10：打字机/专注模式（可分别开关）
       Toggle("打字机模式（当前行居中）", isOn: $settings.typewriterMode)
       Toggle("专注模式（高亮当前段落）", isOn: $settings.focusMode)
