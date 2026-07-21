@@ -18,6 +18,7 @@ enum BacklinksFinder {
     let pattern = #"\[([^\]]*)\]\(\s*<?([^)\s>]+)>?"#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     let normalizedTarget = target.standardizedFileURL
+    let targetName = target.lastPathComponent
     var result: [Backlink] = []
     for file in mdFiles {
       // 排除自引用
@@ -25,12 +26,17 @@ enum BacklinksFinder {
         let data = try? Data(contentsOf: file), data.count <= maxFileBytes,
         let content = String(data: data, encoding: .utf8)
       else { continue }
+      // 预筛：不含目标文件名的直接跳过（大工作区下避免全文正则 + 逐链接 resolve 的 syscall 开销）
+      guard content.contains(targetName) else { continue }
       let nsRange = NSRange(content.startIndex..., in: content)
       for match in regex.matches(in: content, range: nsRange) {
-        // 排除图片 ![...](...)
-        if match.range.location > 0 {
-          let before = content.index(content.startIndex, offsetBy: match.range.location - 1)
-          if content[before] == "!" { continue }
+        guard let matchRange = Range(match.range, in: content) else { continue }
+        // 排除图片 ![...](...)（match.range 是 UTF-16 下标，必须先转 Range 再取字符，
+        // 直接用 offsetBy 会在多字节文本中越界崩溃——真机踩坑）
+        if matchRange.lowerBound > content.startIndex,
+          content[content.index(before: matchRange.lowerBound)] == "!"
+        {
+          continue
         }
         guard let textRange = Range(match.range(at: 1), in: content),
           let destRange = Range(match.range(at: 2), in: content)

@@ -44,6 +44,11 @@ final class WorkspaceStore: ObservableObject {
   private let watcher: FileWatcher
   /// 递归深度上限，防御符号链接环 / 异常目录
   private static let maxDepth = 12
+  /// 跳过的大型依赖/版本控制目录（FR-1.1 性能：node_modules 动辄上万文件，
+  /// 全量扫描 + 全文/反向链接扫描会卡死——真机踩坑）
+  private static let excludedDirectoryNames: Set<String> = [
+    "node_modules", ".git", ".svn", ".hg", ".build", ".xcodeproj", "DerivedData",
+  ]
   private var scanTask: Task<Void, Never>?
 
   init(ops: FileOperations = LiveFileOperations(), watcher: FileWatcher = LiveFileWatcher()) {
@@ -274,6 +279,10 @@ final class WorkspaceStore: ObservableObject {
     var children: [FileNode]?
     if isDirectory.boolValue {
       if depth < maxDepth {
+        // 排除大型依赖/版本控制目录（连子树都不进，避免上万文件的灾难性扫描）
+        if depth > 0, Self.excludedDirectoryNames.contains(url.lastPathComponent) {
+          return FileNode(id: url, name: url.lastPathComponent, kind: .other, children: nil)
+        }
         let urls = (try? fileManager.contentsOfDirectory(
           at: url,
           includingPropertiesForKeys: [.isDirectoryKey],

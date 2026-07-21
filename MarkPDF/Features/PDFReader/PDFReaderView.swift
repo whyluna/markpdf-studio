@@ -179,9 +179,11 @@ struct PDFReaderView: NSViewRepresentable {
     Coordinator(self)
   }
 
-  /// 阅读主题（FR-3.6）：白天原色；羊皮纸米色叠乘；夜间反色 + 色相旋转 180°
+  /// 阅读主题（FR-3.6）：白天原色；羊皮纸米色叠乘；夜间反色 + 色相调整 180°
   ///（Dark Reader 方案：亮度反转、色相保持，图片观感接近正常——PDFKit 无内容流级
-  /// 反色能力，这是其上最贴近「智能反色、图片不反色」的可行路径）
+  /// 反色能力，这是其上最贴近「智能反色、图片不反色」的可行路径。
+  /// 注意：新版 macOS 已移除 CIColorMultiply/CIHueRotate（返回 nil，曾导致滤镜静默失效），
+  /// 现用 CIMultiplyCompositing/CIHueAdjust 等价替代）
   private func applyReadingTheme(_ theme: SettingsStore.PDFReadingTheme, to pdfView: PDFView) {
     pdfView.wantsLayer = true
     switch theme {
@@ -189,15 +191,19 @@ struct PDFReaderView: NSViewRepresentable {
       pdfView.layer?.filters = nil
       pdfView.layer?.backgroundColor = nil
     case .sepia:
-      let multiply = CIFilter(name: "CIColorMultiply", parameters: [
-        "inputColor": CIColor(red: 1.0, green: 0.90, blue: 0.72, alpha: 1.0),
-      ])
+      // 米色叠乘：白底转暖米（CIColorMultiply 在新系统被移除，用合成滤镜 × 纯色底图替代）
+      let sepiaColor = CIImage(color: CIColor(red: 1.0, green: 0.90, blue: 0.72, alpha: 1.0))
+        .cropped(to: CGRect(x: 0, y: 0, width: 10000, height: 10000))
+      let multiply = CIFilter(name: "CIMultiplyCompositing")
+      multiply?.setValue(sepiaColor, forKey: kCIInputBackgroundImageKey)
       pdfView.layer?.filters = multiply.map { [$0] }
       pdfView.layer?.backgroundColor = NSColor(red: 0.96, green: 0.90, blue: 0.78, alpha: 1).cgColor
     case .night:
+      // 反色 + 色相调整 180°（CIHueRotate 在新系统被移除，CIHueAdjust 等价）
       let invert = CIFilter(name: "CIColorInvert")
-      let hueRotate = CIFilter(name: "CIHueRotate", parameters: ["inputAngle": NSNumber(value: Double.pi)])
-      pdfView.layer?.filters = [invert, hueRotate].compactMap { $0 }
+      let hueAdjust = CIFilter(name: "CIHueAdjust")
+      hueAdjust?.setValue(Double.pi, forKey: "inputAngle")
+      pdfView.layer?.filters = [invert, hueAdjust].compactMap { $0 }
       pdfView.layer?.backgroundColor = NSColor.black.cgColor
     }
   }

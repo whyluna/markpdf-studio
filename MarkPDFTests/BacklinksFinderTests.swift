@@ -56,6 +56,16 @@ final class BacklinksFinderTests: XCTestCase {
     XCTAssertTrue(found.isEmpty)
   }
 
+  /// 回归：多字节字符前置的图片链接不再越界崩溃（UTF-16 下标误用 bug）
+  func testImageExclusionWithMultibytePrefixDoesNotCrash() {
+    let md = write(
+      "notes/mb.md",
+      "中文中文中文中文中文中文中文中文中文中文中文\n![截图](../papers/论文.pdf)\n[论文](../papers/论文.pdf)\n")
+    let found = BacklinksFinder.find(target: target, in: [md], workspaceRoot: root)
+    XCTAssertEqual(found.count, 1)
+    XCTAssertEqual(found.first?.text, "论文")
+  }
+
   func testIgnoresExternalAndUnrelatedLinks() {
     let md = write(
       "notes/d.md",
