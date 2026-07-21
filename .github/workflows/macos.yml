@@ -1,0 +1,58 @@
+# MarkPDF Studio — macOS CI
+#
+# 流程：检出 → Node 环境 → 构建并测试 Web 编辑器内核（dist/editor.js + vitest）
+#       → XcodeGen 生成工程 → xcodebuild 编译 → 单元测试。
+
+name: macOS CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      # 文档/设计稿改动不触发构建，节省 Actions 分钟数
+      - "docs/**"
+      - "prototype/**"
+      - "README.md"
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: MarkPDF/Resources/Web/package-lock.json
+
+      - name: Build and test Web editor core
+        run: |
+          cd MarkPDF/Resources/Web
+          npm ci
+          npm test
+          npm run build
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build
+        run: >-
+          xcodebuild build
+          -project MarkPDF.xcodeproj
+          -scheme MarkPDF
+          -destination "platform=macOS"
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Run tests
+        run: >-
+          xcodebuild test
+          -project MarkPDF.xcodeproj
+          -scheme MarkPDF
+          -destination "platform=macOS"
+          CODE_SIGNING_ALLOWED=NO
