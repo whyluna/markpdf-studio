@@ -104,6 +104,12 @@ struct PDFReaderView: NSViewRepresentable {
       name: .PDFViewScaleChanged,
       object: pdfView
     )
+    center.addObserver(
+      context.coordinator,
+      selector: #selector(Coordinator.selectionChanged(_:)),
+      name: .PDFViewSelectionChanged,
+      object: pdfView
+    )
     context.coordinator.pdfView = pdfView
     pdfStore.pdfView = pdfView
     context.coordinator.syncPageState()
@@ -199,6 +205,15 @@ struct PDFReaderView: NSViewRepresentable {
       guard let pdfView, !isPinching else { return }
       parent.pdfStore.scale = pdfView.scaleFactor
       schedulePositionSave()
+    }
+
+    /// 选区变化（FR-5.2 菜单启用条件）
+    @objc func selectionChanged(_ note: Notification) {
+      guard let pdfView else { return }
+      let has = pdfView.currentSelection != nil
+      if parent.pdfStore.hasSelection != has {
+        parent.pdfStore.hasSelection = has
+      }
     }
 
     // MARK: - 阅读位置记忆（FR-3.5）

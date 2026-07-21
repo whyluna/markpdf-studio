@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 @main
 struct MarkPDFApp: App {
@@ -28,6 +29,30 @@ struct MarkPDFApp: App {
     case .image: action(imageStore)
     default: break
     }
+  }
+
+  /// 复制为带回链的引用块（FR-5.2）：引用块 + 页码回链（相对工作区根目录路径，FR-5.3 可解析）
+  private func copyPDFSelectionAsQuote() {
+    guard let pdfView = pdfStore.pdfView,
+      let selection = pdfView.currentSelection,
+      let text = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !text.isEmpty,
+      let pdfURL = pdfView.document?.documentURL
+    else { return }
+    let page = (selection.pages.first.flatMap { pdfView.document?.index(for: $0) } ?? (pdfStore.currentPage - 1)) + 1
+    // 相对工作区根目录的路径（任何 md 都能经根目录回退解析）；无工作区退化为文件名
+    let relPath = workspaceStore.root.map {
+      MarkdownImageLinkRewriter.relativePath(from: $0.id, to: pdfURL)
+    } ?? pdfURL.lastPathComponent
+    let quoted = text.components(separatedBy: .newlines)
+      .map { $0.isEmpty ? ">" : "> \($0)" }
+      .joined(separator: "\n")
+    let name = pdfURL.deletingPathExtension().lastPathComponent
+    let quote = "\(quoted)\n>\n> — [\(name) · p.\(page)](\(relPath)#page=\(page))"
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(quote, forType: .string)
+    Logger.pdf.debug("已复制回链引用: \(pdfURL.lastPathComponent, privacy: .public) p.\(page)")
   }
 
   var body: some Scene {
@@ -120,6 +145,12 @@ struct MarkPDFApp: App {
       }
       // PDF 页内搜索（FR-3.4）：⌘F 查找栏、⌘G 下一个、⇧⌘G 上一个
       CommandGroup(after: .textEditing) {
+        // 复制为带回链的引用块（FR-5.2）：引用块 + 页码回链，粘贴进 md 可跳转
+        Button("复制为带回链的引用") {
+          copyPDFSelectionAsQuote()
+        }
+        .keyboardShortcut("c", modifiers: [.command, .shift])
+        .disabled(tabStore.activeGroup.activeTab?.kind != .pdf || !pdfStore.hasSelection)
         Button("在文档中查找…") {
           pdfStore.isFindBarVisible = true
         }

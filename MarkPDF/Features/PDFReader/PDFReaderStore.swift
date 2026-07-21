@@ -24,6 +24,8 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
   var pendingPage: Int?
   /// 跳转后是否闪烁页面（FR-5.3 回链跳转短暂高亮）
   var pendingFlash = false
+  /// 当前是否有文本选区（FR-5.2 菜单启用条件；PDFReaderView 监听选区通知回写）
+  @Published var hasSelection = false
 
   static let minScale: CGFloat = 0.5
   static let maxScale: CGFloat = 4.0
