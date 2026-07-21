@@ -34,9 +34,12 @@ struct ContentView: View {
         guard let root = workspaceStore.root?.id else { return }
         recentsStore.record(url, forRoot: root)
       }
-      tabStore.onStructureChange = { [weak tabStore] in
+      tabStore.onStructureChange = { [weak tabStore, weak workspaceStore] in
         guard let tabStore else { return }
         stateStore.tabsDidChange(groups: tabStore.groups, activeGroupID: tabStore.activeGroupID)
+        // 文件树高亮始终跟随当前激活标签（打开新文件 / 切换标签 / 切换分栏组统一入口）
+        let activeURL = tabStore.activeGroup.activeTab?.url
+        workspaceStore?.selection = activeURL.flatMap { workspaceStore?.node(for: $0) }
       }
       tabStore.onEditorCursorLine = { url, line in
         stateStore.recordCursor(url: url, line: line)
@@ -263,7 +266,7 @@ struct ContentView: View {
 
     // PDF
     commands.append(AppCommand(id: "find", title: "在文档中查找…", section: "PDF", shortcut: "⌘F", isEnabled: { isPDF }) {
-      pdfStore.isFindBarVisible = true
+      pdfStore.presentFindBar()
     })
     commands.append(AppCommand(id: "find-next", title: "查找下一个", section: "PDF", shortcut: "⌘G", isEnabled: { pdfStore.isFindBarVisible }) {
       pdfStore.findNext()

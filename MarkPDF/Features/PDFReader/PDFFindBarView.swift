@@ -47,6 +47,10 @@ struct PDFFindBarView: View {
     .onAppear {
       fieldFocused = true
     }
+    .onChange(of: pdfStore.findFocusRequest) { _ in
+      // 再次按 ⌘F（含失焦后）重新聚焦输入框
+      fieldFocused = true
+    }
   }
 }
 

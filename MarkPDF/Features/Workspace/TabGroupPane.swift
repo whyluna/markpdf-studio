@@ -5,6 +5,7 @@ import SwiftUI
 struct TabGroupPane: View {
   @ObservedObject var group: TabGroup
   @EnvironmentObject private var tabStore: TabStore
+  @EnvironmentObject private var pdfStore: PDFReaderStore
 
   var body: some View {
     VStack(spacing: 0) {
@@ -27,6 +28,13 @@ struct TabGroupPane: View {
       case .pdf:
         if let url = tab.url {
           PDFReaderView(url: url)
+            // 页内查找栏（FR-3.4）：⌘F 置 isFindBarVisible 后浮于 PDF 顶部
+            .overlay(alignment: .top) {
+              if pdfStore.isFindBarVisible {
+                PDFFindBarView()
+                  .frame(maxWidth: .infinity)
+              }
+            }
         }
       case .image:
         if let url = tab.url {

@@ -86,9 +86,29 @@ body{display:flex;flex-direction:column}
   vertical-align:-2px;cursor:pointer;
 }
 .cm-hr{display:block;width:100%;border-top:1px solid var(--border);height:0;padding-top:4px}
-/* 查找面板（⌘F）与命中高亮 */
-.cm-panels{background:var(--chrome, #f6f6f8);color:var(--text);border-bottom:1px solid var(--border)}
-.cm-panels input,.cm-panels button{font-family:var(--editor-font);font-size:12.5px}
+/* 查找面板（⌘F）：美化为 macOS 风格，向 PDF 查找栏观感对齐（FR-3.4 一致性）；命中高亮保持 */
+.cm-panels{background:var(--code-bg);color:var(--text);border-bottom:1px solid var(--border)}
+.cm-panels .cm-search{padding:8px 36px 8px 12px;position:relative}
+.cm-panels .cm-textfield{
+  font-family:var(--editor-font);font-size:12.5px;background:var(--win-bg);color:var(--text);
+  border:1px solid var(--border);border-radius:6px;padding:4px 9px;outline:none;
+  margin:2px 6px 2px 0;min-width:180px;
+}
+.cm-panels .cm-textfield:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--sel)}
+.cm-panels .cm-button{
+  font-family:var(--editor-font);font-size:12px;background:var(--win-bg);background-image:none;
+  color:var(--text);border:1px solid var(--border);border-radius:6px;padding:3px 10px;
+  margin:2px 4px 2px 0;cursor:pointer;
+}
+.cm-panels .cm-button:hover{background:var(--code-bg);border-color:var(--text3)}
+.cm-panels .cm-button:active{background:var(--sel)}
+.cm-panels .cm-search label{font-size:12px;color:var(--text2);margin:0 8px 0 0}
+.cm-panels .cm-search label input[type=checkbox]{accent-color:var(--accent);vertical-align:-1px;margin-right:3px}
+.cm-panels .cm-search [name=close]{
+  position:absolute;top:6px;right:10px;border:none;background:transparent;color:var(--text2);
+  font-size:16px;line-height:1;padding:2px 6px;border-radius:6px;cursor:pointer;margin:0;
+}
+.cm-panels .cm-search [name=close]:hover{background:var(--sel);color:var(--text)}
 .cm-searchMatch{background:rgba(255,212,59,.45);border-radius:2px}
 .cm-searchMatch-selected{background:rgba(255,150,50,.55)}
 /* 渲染图片（FR-2.3）：不留内边距，紧凑排布 */

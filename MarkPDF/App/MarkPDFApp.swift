@@ -144,7 +144,7 @@ struct MarkPDFApp: App {
         .keyboardShortcut("c", modifiers: [.command, .shift])
         .disabled(tabStore.activeGroup.activeTab?.kind != .pdf || !pdfStore.hasSelection)
         Button("在文档中查找…") {
-          pdfStore.isFindBarVisible = true
+          pdfStore.presentFindBar()
         }
         .keyboardShortcut("f", modifiers: .command)
         .disabled(tabStore.activeGroup.activeTab?.kind != .pdf)

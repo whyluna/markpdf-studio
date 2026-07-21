@@ -21,6 +21,20 @@ final class ZoomablePDFView: PDFView {
   /// PDFView 在 /Text 图标上原生显示"抓抓手"，必须在 PDFKit 光标管线内改成手指
   var onPointingHandQuery: ((NSPoint) -> Bool)?
 
+  /// Esc 回调（FR-3.4）：查找栏开启时退出查找，返回 true 表示已消费。
+  /// keyDown 与 cancelOperation 双通道覆盖（PDFView 内部视图的键盘处理路径不一）
+  var onEscape: (() -> Bool)?
+
+  override func keyDown(with event: NSEvent) {
+    if event.keyCode == 53, onEscape?() == true { return }  // 53 = Esc
+    super.keyDown(with: event)
+  }
+
+  override func cancelOperation(_ sender: Any?) {
+    if onEscape?() == true { return }
+    super.cancelOperation(sender)
+  }
+
   override func magnify(with event: NSEvent) {
     onMagnify?(event.phase, event.magnification)
   }
@@ -80,6 +94,10 @@ struct PDFReaderView: NSViewRepresentable {
     applyReadingTheme(settings.pdfReadingTheme, to: pdfView)
     pdfView.onMagnify = { [weak coordinator = context.coordinator] phase, magnification in
       coordinator?.handleMagnify(phase: phase, magnification: magnification)
+    }
+    // Esc 退出查找（FR-3.4）：焦点在 PDF 上时也能退出，无需先聚焦查找框
+    pdfView.onEscape = { [weak coordinator = context.coordinator] in
+      coordinator?.handleEscape() ?? false
     }
 
     // 点击认领焦点：分栏双 PDF 时，缩放/搜索作用于最近点击的视图（FR-1.4）。
@@ -339,6 +357,13 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc func claimFocus(_ sender: Any) {
       parent.pdfStore.pdfView = pdfView
+    }
+
+    /// Esc 退出查找（FR-3.4）：查找栏开启时关闭并消费；焦点在 PDF 上（非查找框）也生效
+    func handleEscape() -> Bool {
+      guard parent.pdfStore.isFindBarVisible else { return false }
+      parent.pdfStore.closeFindBar()
+      return true
     }
 
     /// 消费待跳转页（FR-6.2 搜索 / FR-5.3 回链）；pendingFlash 时闪烁页面提示

@@ -66,6 +66,8 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
 
   /// 查找栏是否可见
   @Published var isFindBarVisible = false
+  /// ⌘F 聚焦请求令牌：每次按 ⌘F 递增，查找栏据此重新聚焦输入框（已打开时再按也回焦）
+  @Published var findFocusRequest = 0
   /// 搜索词（变更后 300ms 防抖执行搜索）
   @Published var findQuery = "" {
     didSet {
@@ -86,6 +88,12 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
     if findQuery.isEmpty { return "" }
     if findMatches.isEmpty { return "无结果" }
     return "\(currentMatchIndex + 1) / \(findMatches.count)"
+  }
+
+  /// 显示查找栏并请求聚焦（⌘F 入口）：已打开时再次调用也会让输入框重新聚焦（FR-3.4）
+  func presentFindBar() {
+    isFindBarVisible = true
+    findFocusRequest += 1
   }
 
   func performFind() {
@@ -126,8 +134,7 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
     guard findMatches.indices.contains(currentMatchIndex) else { return }
     let selection = findMatches[currentMatchIndex]
     pdfView?.setCurrentSelection(selection, animate: true)
-    if let page = selection.pages.first {
-      pdfView?.go(to: page)
-    }
+    // 滚动到命中词的精确位置：放大后命中词可能在当前视口外（同页下半部），go(to:page) 只对齐页顶不够
+    pdfView?.go(to: selection)
   }
 }
