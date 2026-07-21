@@ -249,10 +249,12 @@ Bridge.onMessage("editor.setTypewriter", (p) => {
   }
 });
 
-// 专注模式（FR-2.10）：压暗非当前行（编辑器根加开关类，CSS 生效）
+// 专注模式（FR-2.10）：压暗非当前行。
+// 注意：开关类必须挂在 documentElement 上——CM 每次交易都会按主题重建 view.dom.className，
+// 手动挂在编辑器根上的类会在下一次点击/输入时被抹掉（真机踩坑）
 Bridge.onMessage("editor.setFocusMode", (p) => {
   const on = !!p.enabled;
-  view.dom.classList.toggle("cm-focus-mode", on);
+  document.documentElement.classList.toggle("cm-focus-mode", on);
   view.dispatch({ effects: focusConf.reconfigure(on ? focusLineField : []) });
 });
 
@@ -286,14 +288,14 @@ Bridge.onMessage("editor.scrollToLine", (p) => scrollToLine(p.line));
 
 /* ---------- ⌘+点击链接跳转（FR-2.3 链接交互） ---------- */
 
-// 按住 ⌘ 时链接显示手型与下划线
+// 按住 ⌘ 时链接显示手型与下划线（挂 documentElement：view.dom.className 会被 CM 重建）
 window.addEventListener("keydown", (e) => {
-  if (e.metaKey) view.dom.classList.add("cm-mod-down");
+  if (e.metaKey) document.documentElement.classList.add("cm-mod-down");
 });
 window.addEventListener("keyup", (e) => {
-  if (!e.metaKey) view.dom.classList.remove("cm-mod-down");
+  if (!e.metaKey) document.documentElement.classList.remove("cm-mod-down");
 });
-window.addEventListener("blur", () => view.dom.classList.remove("cm-mod-down"));
+window.addEventListener("blur", () => document.documentElement.classList.remove("cm-mod-down"));
 
 // 从语法树提取覆盖 pos 的 Link 节点的 URL
 function findLinkURLAt(pos) {
