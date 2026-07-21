@@ -62,12 +62,6 @@ open MarkPDF.xcodeproj   # Cmd+R 运行
 
 测试：Swift 单元测试 `xcodebuild -scheme MarkPDF test`；编辑器内核测试 `cd MarkPDF/Resources/Web && npm test`。
 
-## 文档与协作
-
-- [需求文档（PRD）](docs/需求文档.md) · [开发规范](docs/开发规范.md) · [开发进度](docs/进度.md) · [CHANGELOG](CHANGELOG.md)
-- UI 设计基准：[`prototype/index.html`](prototype/index.html)（浏览器打开即可交互预览）
-- 贡献方式：`main` 直推，Conventional Commits；CI 绿为健康线
-
 ## License
 
-待定（建议在发布仓库前补充 LICENSE 文件，如 MIT）。
+[MIT](LICENSE)
