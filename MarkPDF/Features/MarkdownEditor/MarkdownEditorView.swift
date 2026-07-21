@@ -259,6 +259,7 @@ extension MarkdownEditorView {
         focusMode: parent.focusMode
       )
       if lastPushedTypography != typography {
+        Logger.editor.debug("推送排版: tw=\(typography.typewriter), focus=\(typography.focusMode)")
         bridge.notify(.setTypography, payload: [
           "fontCSS": typography.fontCSS,
           "fontSize": typography.fontSize,
