@@ -15,6 +15,8 @@ final class PDFAnnotationStore: ObservableObject {
   @Published var paletteKind: AnnotationKind = .highlight
   /// 有未写回的标注改动
   @Published private(set) var hasUnsavedChanges = false
+  /// 最近一次写回错误（视图据此弹 alert 后置回 nil；NFR-5：文件操作异常须用户可感知）
+  @Published var lastError: String?
   /// 标注结构版本号：增删改即 +1，驱动列表面板实时同步（FR-4.5）
   @Published private(set) var revision = 0
 
@@ -25,6 +27,8 @@ final class PDFAnnotationStore: ObservableObject {
   /// 不能按键频跑；列表最终一致即可
   private let revisionDebouncer = Debouncer(interval: 0.3)
   private weak var document: PDFDocument?
+  /// 写回持续失败只提示一次（防抖窗口内反复重试），写回恢复后复位
+  private var hasReportedWriteFailure = false
 
   init(writer: AnnotationWriter = LiveAnnotationWriter(), defaults: UserDefaults = .standard) {
     self.writer = writer
@@ -218,9 +222,15 @@ final class PDFAnnotationStore: ObservableObject {
     do {
       try writer.writeBack(document: document, to: url)
       hasUnsavedChanges = false
+      hasReportedWriteFailure = false
       Logger.pdf.debug("标注已写回: \(url.lastPathComponent, privacy: .public)")
     } catch {
       Logger.pdf.error("标注写回失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+      // 持续失败只提示一次（每次标注变更都会重试），避免弹窗轰炸
+      if !hasReportedWriteFailure {
+        hasReportedWriteFailure = true
+        lastError = "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)"
+      }
     }
   }
 }

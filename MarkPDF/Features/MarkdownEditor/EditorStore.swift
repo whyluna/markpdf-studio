@@ -16,6 +16,8 @@ final class EditorStore: ObservableObject {
   @Published private(set) var currentFileURL: URL?
   /// 有尚未落盘的改动（工具栏橙点指示；自动保存通常 0.5s 内清除）
   @Published private(set) var hasUnsavedChanges = false
+  /// 最近一次文件读写错误（视图据此弹 alert 后置回 nil；NFR-5：文件操作异常须用户可感知）
+  @Published var lastError: String?
   /// 文档大纲（FR-2.6；内核随内容变更推送）
   @Published var outline: [Heading] = []
   /// 请求内核滚动到指定行（大纲跳转）；由 MarkdownEditorView 消费后清零
@@ -25,6 +27,8 @@ final class EditorStore: ObservableObject {
   private var lastPersistedText: String = EditorStore.welcomeDocument
   /// 防抖中的保存任务
   private var pendingSave: DispatchWorkItem?
+  /// 自动保存持续失败只提示一次（内容每变一次都会重试失败），写盘恢复后复位
+  private var hasReportedSaveFailure = false
 
   /// 自动保存防抖间隔（FR-2.7：停止输入 0.5s 后落盘）
   private static let autosaveDelay: TimeInterval = 0.5
@@ -42,6 +46,7 @@ final class EditorStore: ObservableObject {
       Logger.editor.info("已打开文件: \(url.lastPathComponent, privacy: .public)")
     } catch {
       Logger.editor.error("读取文件失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+      lastError = "无法打开「\(url.lastPathComponent)」：\(error.localizedDescription)"
     }
   }
 
@@ -125,9 +130,15 @@ final class EditorStore: ObservableObject {
       try text.write(to: url, atomically: true, encoding: .utf8)
       lastPersistedText = text
       hasUnsavedChanges = false
+      hasReportedSaveFailure = false
       Logger.editor.debug("自动保存: \(url.lastPathComponent, privacy: .public)")
     } catch {
       Logger.editor.error("自动保存失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+      // 持续失败只提示一次（内容每变一次就重试一次），避免击键级弹窗轰炸
+      if !hasReportedSaveFailure {
+        hasReportedSaveFailure = true
+        lastError = "自动保存失败「\(url.lastPathComponent)」：\(error.localizedDescription)"
+      }
     }
   }
 

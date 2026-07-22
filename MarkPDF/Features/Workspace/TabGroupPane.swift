@@ -113,6 +113,18 @@ struct MarkdownTabView: View {
         }
       }
     )
+    // 文件读写失败提示（NFR-5）：打开失败 / 自动保存失败均经 lastError 上报
+    .alert(
+      "文件操作失败",
+      isPresented: Binding(
+        get: { store.lastError != nil },
+        set: { if !$0 { store.lastError = nil } }
+      )
+    ) {
+      Button("好") { store.lastError = nil }
+    } message: {
+      Text(store.lastError ?? "")
+    }
   }
 }
 

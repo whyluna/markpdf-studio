@@ -133,4 +133,42 @@ final class AnnotationWriterTests: XCTestCase {
     }
     XCTAssertEqual(dashes.count, 6, "虚线段应与标记同组（整体删除/列表合并）")
   }
+
+  // MARK: - 降级路径失败保留救援文件（回归）
+
+  /// 注入用 FileManager：replaceItemAt（经 ObjC 底层 replaceItem(at:...resultingItemURL:)）
+  /// 与 moveItem 强制失败，确定性地驱动写回进入降级路径并在 moveItem 处失败
+  private final class ReplaceAndMoveFailFileManager: FileManager {
+    override func replaceItem(
+      at originalItemURL: URL,
+      withItemAt newItemURL: URL,
+      backupItemName: String?,
+      options: FileManager.ItemReplacementOptions,
+      resultingItemURL: AutoreleasingUnsafeMutablePointer<NSURL?>?
+    ) throws {
+      throw CocoaError(.fileWriteVolumeReadOnly)
+    }
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+      throw CocoaError(.fileWriteVolumeReadOnly)
+    }
+  }
+
+  /// 回归：降级路径 moveItem 失败时必须保留 tmp——原文件已被降级路径移除，
+  /// tmp 是唯一含最新标注的完整副本（此前 defer 无条件清理会连 tmp 一起删掉，标注全部丢失）
+  func testFallbackMoveFailurePreservesTmpRescueFile() throws {
+    let (doc, url) = try makePDF(named: "rescue.pdf")
+    doc.page(at: 0)?.addAnnotation(highlightAnnotation())
+
+    let failingWriter = LiveAnnotationWriter(fileManager: ReplaceAndMoveFailFileManager())
+    XCTAssertThrowsError(try failingWriter.writeBack(document: doc, to: url))
+
+    // 最坏场景：原文件已被降级路径移除，tmp 必须保留且为含标注的完整 PDF（救援文件）
+    let tmpURL = url.deletingLastPathComponent()
+      .appendingPathComponent(".\(url.lastPathComponent).tmp")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: tmpURL.path), "降级失败必须保留 tmp 救援文件")
+    let rescued = PDFDocument(url: tmpURL)
+    XCTAssertEqual(rescued?.page(at: 0)?.annotations.count ?? -1, 1, "tmp 应为含最新标注的完整 PDF")
+  }
 }
