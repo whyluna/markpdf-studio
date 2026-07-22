@@ -227,9 +227,10 @@ function jumpToLine(view, line) {
 }
 
 // 脚注引用上标（FR-2.4）：[^label] → [n]（编号按首次引用顺序）。
-// 单击跳转到对应定义行；双击落光标显露源码（与图片/公式一致的手感）。
-// 不重写 ignoreEvent（默认 true = CM 不拦截）：否则 CM 的 mousedown 先把光标移入
-// 引用范围、widget 被装饰重建销毁，click 跳转根本触发不了（实测点击无反应的根因）
+// 单击跳到定义行；双击（mousedown detail≥2）落光标显露源码。
+// 跳转必须挂 mousedown + preventDefault（CheckboxWidget 同款成熟模式）：click 时机太晚——
+// WebKit 在 mousedown 默认行为里把光标放到 widget 旁的可编辑位置，行变活跃、widget 被
+// 装饰重建销毁，click 到不了（真机点击无反应的根因；合成 click 不走原生落标路径测不出）
 class FootnoteRefWidget extends WidgetType {
   constructor(n, label, defLine) {
     super();
@@ -244,22 +245,22 @@ class FootnoteRefWidget extends WidgetType {
     const el = document.createElement("sup");
     el.className = "cm-footnote-ref";
     el.textContent = `[${this.n}]`;
-    el.addEventListener("click", (e) => {
+    el.addEventListener("mousedown", (e) => {
       e.preventDefault();
-      jumpToLine(view, this.defLine);
-    });
-    el.addEventListener("dblclick", (e) => {
-      e.preventDefault();
-      const pos = view.posAtDOM(el);
-      view.dispatch({ selection: { anchor: pos } });
-      view.focus();
+      if (e.detail >= 2) {
+        const pos = view.posAtDOM(el);
+        view.dispatch({ selection: { anchor: pos } });
+        view.focus();
+      } else {
+        jumpToLine(view, this.defLine);
+      }
     });
     return el;
   }
 }
 
 // 脚注定义行回跳标记（GitHub ↩ 惯例）：定义↔引用按 label 唯一对应，
-// 同一 label 可被多处引用，回跳到第一处引用
+// 同一 label 可被多处引用，回跳到第一处引用。mousedown + preventDefault 同上
 class FootnoteBackRefWidget extends WidgetType {
   constructor(refLine) {
     super();
@@ -272,7 +273,7 @@ class FootnoteBackRefWidget extends WidgetType {
     const el = document.createElement("span");
     el.className = "cm-footnote-backref";
     el.textContent = "↩";
-    el.addEventListener("click", (e) => {
+    el.addEventListener("mousedown", (e) => {
       e.preventDefault();
       jumpToLine(view, this.refLine);
     });
