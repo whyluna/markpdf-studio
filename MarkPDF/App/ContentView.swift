@@ -36,8 +36,10 @@ struct ContentView: View {
     }
     // 启动恢复现场（FR-1.6）与状态记录接线（FR-1.5/1.6）
     .onAppear {
-      stateStore.restoreTabs(into: tabStore)
+      // 顺序不可换：restoreWorkspace 先建立沙盒授权（startAccessingSecurityScopedResource），
+      // restoreTabs 现在会在恢复时预建 store 并立即读文件，先于授权执行必 EPERM（启动竞态实锤）
       stateStore.restoreWorkspace(into: workspaceStore)
+      stateStore.restoreTabs(into: tabStore)
       tabStore.onOpenFile = { url in
         guard let root = workspaceStore.root?.id else { return }
         recentsStore.record(url, forRoot: root)
