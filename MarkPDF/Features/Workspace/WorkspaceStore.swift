@@ -68,6 +68,9 @@ final class WorkspaceStore: ObservableObject {
     self.watcher = watcher
   }
 
+  /// 打开文件夹的拦截钩子（App 层接线为「切换工作区并恢复该工作区标签现场」；未接线则直接打开）
+  var onOpenFolder: ((URL) -> Void)?
+
   /// 弹出系统面板选择工作区文件夹
   func openFolderPanel() {
     let panel = NSOpenPanel()
@@ -79,7 +82,7 @@ final class WorkspaceStore: ObservableObject {
     panel.allowsMultipleSelection = false
     panel.canCreateDirectories = false
     guard panel.runModal() == .OK, let url = panel.url else { return }
-    openFolder(url)
+    if let onOpenFolder { onOpenFolder(url) } else { openFolder(url) }
   }
 
   /// 打开文件夹并后台扫描（避免大目录卡住 UI）；同时启动外部变更监听（FR-1.3）

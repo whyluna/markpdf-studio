@@ -145,11 +145,18 @@ final class TabStore: ObservableObject {
   /// 丢弃内存中 TabGroup 持有的 EditorStore（含草稿正文，快照只有 path 不含正文）
   private var didRestore = false
 
-  /// 从快照重建标签组与激活状态（启动恢复现场）。
+  /// 从快照重建标签组与激活状态（启动恢复现场，只执行一次）。
   /// 空快照保留启动默认的草稿标签；直接操作 TabGroup，不触发打开记录/快照回写之外的副作用。
   func restore(tabStates: [[WorkspaceStateStore.TabState]], activeTabPaths: [String?], activeGroupIndex: Int) {
     guard !didRestore else { return }
     didRestore = true
+    replaceAll(tabStates: tabStates, activeTabPaths: activeTabPaths, activeGroupIndex: activeGroupIndex)
+  }
+
+  /// 用快照整体替换当前标签（切换工作区用，可多次调用）。
+  /// 会丢弃内存中的 EditorStore——调用方须先 flushAll 落盘未保存编辑（草稿不持久，见已知限制）。
+  /// 空快照重置为初始空白草稿组（与 init 同态）。
+  func replaceAll(tabStates: [[WorkspaceStateStore.TabState]], activeTabPaths: [String?], activeGroupIndex: Int) {
     let restored: [TabGroup] = tabStates.map { states in
       let group = makeGroup()
       for state in states {
@@ -162,9 +169,16 @@ final class TabStore: ObservableObject {
       }
       return group
     }
-    // 空组（如退出时残留的空白分栏）不恢复；全空则保留默认草稿
+    // 空组（如退出时残留的空白分栏）不恢复
     let nonEmpty = restored.filter { !$0.tabs.isEmpty }
-    guard !nonEmpty.isEmpty else { return }
+    guard !nonEmpty.isEmpty else {
+      // 无快照：重置为初始空白草稿组
+      let group = makeGroup()
+      groups = [group]
+      activeGroupID = group.id
+      group.openDraft()
+      return
+    }
     groups = nonEmpty
     for (index, group) in groups.enumerated() {
       // 文件标签 id 即路径；草稿不可指认（id 为 UUID），回退到组尾标签

@@ -40,6 +40,11 @@ struct ContentView: View {
       // restoreTabs 现在会在恢复时预建 store 并立即读文件，先于授权执行必 EPERM（启动竞态实锤）
       stateStore.restoreWorkspace(into: workspaceStore)
       stateStore.restoreTabs(into: tabStore)
+      // 切换工作区（⌘O/菜单/空状态按钮统一走此钩子）：保存当前标签现场 → 恢复目标工作区自己的标签
+      workspaceStore.onOpenFolder = { [weak workspaceStore, weak tabStore] url in
+        guard let workspaceStore, let tabStore else { return }
+        stateStore.switchWorkspace(to: url, workspaceStore: workspaceStore, tabStore: tabStore)
+      }
       tabStore.onOpenFile = { url in
         guard let root = workspaceStore.root?.id else { return }
         recentsStore.record(url, forRoot: root)
