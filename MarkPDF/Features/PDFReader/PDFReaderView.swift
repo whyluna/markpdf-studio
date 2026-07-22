@@ -1,3 +1,4 @@
+import os
 import PDFKit
 import SwiftUI
 
@@ -90,7 +91,6 @@ struct PDFReaderView: NSViewRepresentable {
     pdfView.displayMode = settings.pdfViewMode.pdfDisplayMode
     pdfView.displayDirection = .vertical
     pdfView.autoScales = true
-    pdfView.document = PDFDocument(url: url)
     applyReadingTheme(settings.pdfReadingTheme, to: pdfView)
     pdfView.onMagnify = { [weak coordinator = context.coordinator] phase, magnification in
       coordinator?.handleMagnify(phase: phase, magnification: magnification)
@@ -131,33 +131,21 @@ struct PDFReaderView: NSViewRepresentable {
     )
     context.coordinator.pdfView = pdfView
     pdfStore.pdfView = pdfView
-    context.coordinator.syncPageState()
     // 划词浮动工具条（FR-4.1）与标注写回关联（FR-4.6）
     context.coordinator.toolbarController = AnnotationToolbarController(
       pdfView: pdfView,
       store: annotationStore
     )
-    if let document = pdfView.document {
-      annotationStore.attach(document: document, url: url)
-    }
-    // 阅读位置记忆（FR-3.5）：恢复上次页码与缩放
-    context.coordinator.restorePosition(url: url)
-    // 全文搜索命中/回链跳转（FR-6.2/FR-5.3）：优先于位置恢复
-    context.coordinator.jumpToPendingPageIfAny()
+    // 异步解析文档（NFR-1：大 PDF 主线程同步解析整窗卡顿，237 页实测 ~1s）
+    context.coordinator.loadDocumentAsync(url: url)
     return pdfView
   }
 
   func updateNSView(_ pdfView: PDFView, context: Context) {
-    if pdfView.document?.documentURL != url {
-      pdfView.document = PDFDocument(url: url)
-      // 新文档默认自适应宽度；有阅读位置存档则恢复（FR-3.5）
-      pdfView.autoScales = true
-      context.coordinator.syncPageState()
-      if let document = pdfView.document {
-        annotationStore.attach(document: document, url: url)
-      }
-      context.coordinator.restorePosition(url: url)
-      context.coordinator.jumpToPendingPageIfAny()
+    if context.coordinator.requestedURL != url {
+      // 切换文档：清空旧文档并异步解析新文档（同 makeNSView 的异步通道）
+      pdfView.document = nil
+      context.coordinator.loadDocumentAsync(url: url)
       return
     }
     // 既有视图被重新激活：消费待跳转页（回链跳到已打开的 PDF，FR-5.3）
@@ -224,9 +212,69 @@ struct PDFReaderView: NSViewRepresentable {
     /// 缩放锚点：视图中心对应的文档点（保持缩放围绕中心而非角落）
     private var anchorPage: PDFPage?
     private var anchorDocPoint: CGPoint?
+    /// 已请求加载的文档 URL（加载途中重复 updateNSView 不重复解析）
+    private(set) var requestedURL: URL?
+    /// 文档解析代际号：快速连续切换时丢弃过期结果
+    private var loadToken = 0
+    /// 是否有解析在途
+    private var inFlight = false
+    /// 解析中的加载指示
+    private var spinner: NSProgressIndicator?
 
     init(_ parent: PDFReaderView) {
       self.parent = parent
+    }
+
+    /// 异步解析 PDF 文档（NFR-1）：后台线程构造 PDFDocument，完成后回主线程挂载并做
+    /// 标注关联/位置恢复/待跳转页消费；大文档主线程同步解析会整窗卡顿。按代际号防串档。
+    func loadDocumentAsync(url: URL) {
+      if inFlight, requestedURL == url { return }
+      requestedURL = url
+      loadToken += 1
+      let token = loadToken
+      inFlight = true
+      showSpinner(true)
+      Task.detached(priority: .userInitiated) { [weak self] in
+        let document = PDFDocument(url: url)
+        await MainActor.run { [weak self] in
+          guard let self, token == self.loadToken, let pdfView = self.pdfView else { return }
+          self.inFlight = false
+          self.showSpinner(false)
+          guard let document else {
+            Logger.pdf.error("PDF 解析失败: \(url.path, privacy: .public)")
+            return
+          }
+          pdfView.document = document
+          pdfView.autoScales = true
+          self.parent.annotationStore.attach(document: document, url: url)
+          self.syncPageState()
+          // 阅读位置记忆（FR-3.5）；全文搜索/回链跳转（FR-6.2/5.3）优先于位置恢复
+          self.restorePosition(url: url)
+          self.jumpToPendingPageIfAny()
+        }
+      }
+    }
+
+    /// 解析中的旋转指示（完成或失败后移除）
+    private func showSpinner(_ show: Bool) {
+      if show {
+        guard spinner == nil, let pdfView else { return }
+        let indicator = NSProgressIndicator()
+        indicator.style = .spinning
+        indicator.controlSize = .large
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        pdfView.addSubview(indicator)
+        NSLayoutConstraint.activate([
+          indicator.centerXAnchor.constraint(equalTo: pdfView.centerXAnchor),
+          indicator.centerYAnchor.constraint(equalTo: pdfView.centerYAnchor),
+        ])
+        indicator.startAnimation(nil)
+        spinner = indicator
+      } else {
+        spinner?.stopAnimation(nil)
+        spinner?.removeFromSuperview()
+        spinner = nil
+      }
     }
 
     /// 同步页码/总页数到 Store
@@ -364,9 +412,10 @@ struct PDFReaderView: NSViewRepresentable {
       return true
     }
 
-    /// 消费待跳转页（FR-6.2 搜索 / FR-5.3 回链）；pendingFlash 时闪烁页面提示
+    /// 消费待跳转页（FR-6.2 搜索 / FR-5.3 回链）；pendingFlash 时闪烁页面提示。
+    /// 文档未就绪（异步解析中）不消费，待加载完成后统一处理
     func jumpToPendingPageIfAny() {
-      guard let pdfView, let page = parent.pdfStore.pendingPage else { return }
+      guard let pdfView, pdfView.document != nil, let page = parent.pdfStore.pendingPage else { return }
       parent.pdfStore.pendingPage = nil
       let flash = parent.pdfStore.pendingFlash
       parent.pdfStore.pendingFlash = false
