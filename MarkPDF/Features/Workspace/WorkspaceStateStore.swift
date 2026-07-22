@@ -59,6 +59,9 @@ final class WorkspaceStateStore: ObservableObject {
   private var state: Snapshot
   /// 当前工作区根路径（tabsDidChange 的槽位 key；nil 表示尚无工作区）
   private(set) var currentRootPath: String?
+  /// 切换工作区的目标路径（切换编排期间，watcher 仍以旧 root 触发 workspaceDidChange，
+  /// 必须忽略——否则槽位指针被拉回旧工作区，随后的 replaceAll 把空白草稿写进旧槽、清掉真实标签）
+  private var pendingSwitchPath: String?
   /// 恢复时取得的安全作用域资源（保持访问至进程结束，否则工作区授权失效）
   private var accessedRootURL: URL?
 
@@ -95,6 +98,11 @@ final class WorkspaceStateStore: ObservableObject {
 
   /// 工作区变化（打开新文件夹 / 折叠态变化）：根目录存 security-scoped bookmark
   func workspaceDidChange(root: URL?, collapsedFolders: Set<URL>) {
+    // 切换编排期间：watcher 上报的还是旧 root（异步扫描未完成）或折叠态赋值的路过事件，一律忽略
+    if let pending = pendingSwitchPath {
+      guard let root, slotKey(for: root) == pending else { return }
+      pendingSwitchPath = nil  // 新 root 到达，切换落定，走正常流程
+    }
     if let root {
       let key = slotKey(for: root)
       currentRootPath = key
@@ -174,9 +182,11 @@ final class WorkspaceStateStore: ObservableObject {
     if target.path == currentRootPath { return }
     tabStore.flushAll()
     // 同步更新槽位指针：root 是后台扫描完成才异步赋值的，若不先改，
-    // 随后 replaceAll 触发的 tabsDidChange 会把新现场错写进旧槽
+    // 随后 replaceAll 触发的 tabsDidChange 会把新现场错写进旧槽。
+    // pendingSwitchPath 挡住期间 watcher 以旧 root 触发的 workspaceDidChange 回写
     currentRootPath = target.path
     state.lastRootPath = target.path
+    pendingSwitchPath = target.path
     workspaceStore.openFolder(target)
     if let ws = state.workspaces[target.path] {
       workspaceStore.collapsedFolders = Set(ws.collapsedFolders.map { URL(fileURLWithPath: $0) })

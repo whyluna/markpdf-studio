@@ -182,6 +182,84 @@ final class WorkspaceStateStoreTests: XCTestCase {
     XCTAssertEqual(tabStore.groups[0].tabs.map(\.url), [file1])
   }
 
+  /// 端到端：完全按 ContentView 接线（onStructureChange → tabsDidChange），
+  /// 用户经 TabStore.open 打开文件后，槽位必须记录到真实文件标签（而非草稿）
+  @MainActor
+  func testOpeningFileRecordsIntoSlot() throws {
+    let store = WorkspaceStateStore(defaults: defaults)
+    let tabStore = TabStore()
+    store.workspaceDidChange(root: rootA, collapsedFolders: [])
+    // 与 ContentView.onAppear 一致的接线
+    tabStore.onStructureChange = { [weak tabStore] in
+      guard let tabStore else { return }
+      store.tabsDidChange(groups: tabStore.groups, activeGroupID: tabStore.activeGroupID)
+    }
+
+    tabStore.open(FileNode(id: file1, name: "a.md", kind: .markdown))
+    store.flush()
+
+    let data = try XCTUnwrap(defaults.data(forKey: "workspaceSnapshot.v1"))
+    let snapshot = try JSONDecoder().decode(WorkspaceStateStore.Snapshot.self, from: data)
+    let key = rootA.standardizedFileURL.path
+    let paths = snapshot.workspaces[key]?.groups.flatMap { $0 }.compactMap(\.path)
+    XCTAssertEqual(paths, [file1.path], "打开文件后槽位应记录真实文件标签")
+  }
+
+  /// 切换工作区不得清掉旧槽（实机 bug 回归）：切换编排期间 root 仍是旧工作区（异步扫描未完成），
+  /// collapsedFolders 赋值等路过事件会以旧 root 触发 workspaceDidChange——必须把这类事件挡在门外，
+  /// 否则槽位指针被拉回旧工作区，随后的 replaceAll 把空白草稿写进旧槽、真实标签被覆盖丢失
+  @MainActor
+  func testSwitchDoesNotWipeOldSlotViaStaleWatcherEvent() throws {
+    // 沙盒测试运行器只允许在容器临时目录下建目录（/tmp 根会被拒）
+    let base = FileManager.default.temporaryDirectory
+      .appendingPathComponent("WSSwitch-\(UUID().uuidString)", isDirectory: true)
+    let rootA = base.appendingPathComponent("ws-a", isDirectory: true)
+    let rootB = base.appendingPathComponent("ws-b", isDirectory: true)
+    let fm = FileManager.default
+    try fm.createDirectory(at: rootB, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: base) }
+    let store = WorkspaceStateStore(defaults: defaults)
+    let tabStore = TabStore()
+    let ws = WorkspaceStore(watcher: NoopWatcher())
+    // 完整 App 接线（ContentView 同款两条链）
+    tabStore.onStructureChange = { [weak tabStore] in
+      guard let tabStore else { return }
+      store.tabsDidChange(groups: tabStore.groups, activeGroupID: tabStore.activeGroupID)
+    }
+    ws.onStateChange = { [weak ws] in
+      store.workspaceDidChange(root: ws?.root?.id, collapsedFolders: ws?.collapsedFolders ?? [])
+    }
+
+    // 打开 A（含异步扫描置 root）并开一个真实文件标签
+    store.switchWorkspace(to: rootA, workspaceStore: ws, tabStore: tabStore)
+    let deadline = Date().addingTimeInterval(5)
+    while ws.root == nil, Date() < deadline {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+    XCTAssertNotNil(ws.root)
+    tabStore.open(FileNode(id: file1, name: "a.md", kind: .markdown))
+
+    // 切到 B：此间 collapsedFolders 赋值会以旧 root(A) 触发路过事件
+    store.switchWorkspace(to: rootB, workspaceStore: ws, tabStore: tabStore)
+    store.flush()
+
+    let data = try XCTUnwrap(defaults.data(forKey: "workspaceSnapshot.v1"))
+    let snapshot = try JSONDecoder().decode(WorkspaceStateStore.Snapshot.self, from: data)
+    XCTAssertEqual(
+      snapshot.workspaces[rootA.standardizedFileURL.path]?.groups.flatMap { $0 }.compactMap(\.path),
+      [file1.path],
+      "旧工作区槽位必须保留真实标签，不得被切换期间的路过事件覆盖"
+    )
+    XCTAssertEqual(store.currentRootPath, rootB.standardizedFileURL.path)
+
+    // 切回 A：真实标签应恢复（而非只剩空白草稿）
+    store.switchWorkspace(to: rootA, workspaceStore: ws, tabStore: tabStore)
+    XCTAssertTrue(
+      tabStore.groups[0].tabs.contains(where: { $0.url == file1 }),
+      "切回应恢复旧工作区的真实标签"
+    )
+  }
+
   @MainActor
   func testLegacySnapshotMigratesIntoLastRootSlot() throws {
     // 真实目录才能创建/解析 security-scoped bookmark
