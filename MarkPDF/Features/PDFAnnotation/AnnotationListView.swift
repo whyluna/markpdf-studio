@@ -13,7 +13,9 @@ struct AnnotationListView: View {
   @FocusState private var renameFocused: Bool
 
   private var items: [AnnotationItem] {
-    sortOrder.sort(store.annotationItems())
+    // 读 Store 缓存（仅随 revision 重扫，不随色板等无关 @Published 变化重扫）；
+    // 排序是轻操作，留在视图层按当前 sortOrder 即时做
+    sortOrder.sort(store.annotationItemsSnapshot)
   }
 
   var body: some View {

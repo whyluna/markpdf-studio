@@ -22,9 +22,9 @@ struct PDFSidebarView: View {
     VStack(spacing: 0) {
       Picker("面板", selection: $segment) {
         ForEach(Segment.allCases) { segment in
-          // 标注段显示计数（对齐设计稿 "标注 5"）
+          // 标注段显示计数（对齐设计稿 "标注 5"；读 Store 缓存，不在 body 重扫文档）
           if segment == .annotations {
-            Text("标注 \(annotationStore.annotationItems().count)").tag(segment)
+            Text("标注 \(annotationStore.annotationItemsSnapshot.count)").tag(segment)
           } else {
             Text(segment.rawValue).tag(segment)
           }

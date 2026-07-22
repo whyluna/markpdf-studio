@@ -61,8 +61,12 @@ struct ContentView: View {
           root: workspaceStore?.root?.id,
           collapsedFolders: workspaceStore?.collapsedFolders ?? []
         )
-        // 反向链接（FR-5.4）：工作区变化（含 FSEvents 刷新）后重扫，新引用 5s 内出现
+        // 反链解析所需根目录（纯赋值，折叠态变化时同值覆盖无副作用）；
+        // 重扫已分流到 onMarkdownFilesChange，自动保存/折叠不再全量重读 md
         backlinksStore.setWorkspaceRoot(workspaceStore?.root?.id)
+      }
+      // 反向链接（FR-5.4）：仅 md 文件集合实际变化（新增/删除/重命名/外部变更）后重扫，新引用 5s 内出现
+      workspaceStore.onMarkdownFilesChange = {
         backlinksStore.refresh()
       }
       // 全文搜索候选（FR-6.2）：工作区全部文件

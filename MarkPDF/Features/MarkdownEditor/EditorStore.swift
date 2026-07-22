@@ -6,9 +6,9 @@ import os
 final class EditorStore: ObservableObject {
   /// 当前文档文本（内核变更实时同步到这里）
   @Published var text: String = EditorStore.welcomeDocument {
-    didSet { stats = TextStatistics.of(text) }
+    didSet { scheduleStatsRefresh() }
   }
-  /// 文本统计（FR-2.8：字数/字符/阅读时长，随内容实时更新）
+  /// 文本统计（FR-2.8：字数/字符/阅读时长，随内容更新；防抖 0.5s，见 scheduleStatsRefresh）
   @Published private(set) var stats: EditorStats = TextStatistics.of(EditorStore.welcomeDocument)
   /// 编辑模式
   @Published var mode: MarkdownEditorView.EditorMode = .wysiwyg
@@ -31,25 +31,46 @@ final class EditorStore: ObservableObject {
   private var pendingSave: DispatchWorkItem?
   /// 自动保存持续失败只提示一次（内容每变一次都会重试失败），写盘恢复后复位
   private var hasReportedSaveFailure = false
+  /// 统计防抖器（计算在后台串行队列执行，见 scheduleStatsRefresh）
+  private let statsDebouncer = Debouncer(interval: 0.5, queue: EditorStore.statsQueue)
+  /// 文件加载代际号：加载完成前用户切走/再次 loadFile 时丢弃过期结果（PDFReaderView loadToken 同款先例）
+  private var loadToken = 0
+  /// 在途加载的目标（加载完成前 fileWasTrashed / fileDidMove 等场景据此识别并干预）
+  private var inflightLoadURL: URL?
 
   /// 自动保存防抖间隔（FR-2.7：停止输入 0.5s 后落盘）
   private static let autosaveDelay: TimeInterval = 0.5
+  /// 文本统计后台串行队列（计算结果按调度顺序回主线程落地，保证收敛到最新文本）
+  private static let statsQueue = DispatchQueue(label: "markpdf.editor.stats")
+  /// 写盘后台串行队列（全局共享：写按发出顺序执行，同一文件后写覆盖先写）
+  private static let writeQueue = DispatchQueue(label: "markpdf.editor.save")
 
-  /// 打开磁盘上的 Markdown 文件（FR-1.1）；切换前先把旧文件的挂起改动写盘
+  /// 打开磁盘上的 Markdown 文件（FR-1.1）；切换前先把旧文件的挂起改动写盘。
+  /// 后台读盘 + 主线程应用（主线程不做同步 IO）；代际号防止过期结果覆盖新状态。
   func loadFile(_ url: URL) {
-    guard url != currentFileURL else { return }
+    guard url != currentFileURL, url != inflightLoadURL else { return }
     flushPendingSave()
-    do {
-      let content = try String(contentsOf: url, encoding: .utf8)
-      currentFileURL = url
-      trashedFileURL = nil
-      lastPersistedText = content
-      hasUnsavedChanges = false
-      text = content
-      Logger.editor.info("已打开文件: \(url.lastPathComponent, privacy: .public)")
-    } catch {
-      Logger.editor.error("读取文件失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-      lastError = "无法打开「\(url.lastPathComponent)」：\(error.localizedDescription)"
+    loadToken += 1
+    let token = loadToken
+    inflightLoadURL = url
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let result = Result { try String(contentsOf: url, encoding: .utf8) }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, token == self.loadToken else { return }
+        self.inflightLoadURL = nil
+        switch result {
+        case .success(let content):
+          self.currentFileURL = url
+          self.trashedFileURL = nil
+          self.lastPersistedText = content
+          self.hasUnsavedChanges = false
+          self.text = content
+          Logger.editor.info("已打开文件: \(url.lastPathComponent, privacy: .public)")
+        case .failure(let error):
+          Logger.editor.error("读取文件失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+          self.lastError = "无法打开「\(url.lastPathComponent)」：\(error.localizedDescription)"
+        }
+      }
     }
   }
 
@@ -74,16 +95,32 @@ final class EditorStore: ObservableObject {
 
   /// 打开的文件被重命名/移动：跟随更新标识（FR-1.2）；
   /// 移动可能触发磁盘链接修正（FR-2.5），磁盘与上次落盘不一致时以磁盘为准重载
-  ///（重命名无磁盘变化，不影响未落盘编辑）
+  ///（重命名无磁盘变化，不影响未落盘编辑）。重读走后台，主线程只做状态收口。
   func fileDidMove(from oldURL: URL, to newURL: URL) {
+    // 在途加载的目标是旧路径：结果已过期，作废并改从新路径重新加载
+    //（加载未落地，本文件尚无未保存编辑可丢；旧文件的挂起改动由 loadFile 内 flush 保住）
+    if inflightLoadURL == oldURL {
+      inflightLoadURL = nil
+      loadFile(newURL)
+      return
+    }
     guard currentFileURL == oldURL else { return }
     currentFileURL = newURL
-    if let disk = try? String(contentsOf: newURL, encoding: .utf8), disk != lastPersistedText {
-      pendingSave?.cancel()
-      pendingSave = nil
-      lastPersistedText = disk
-      text = disk
-      hasUnsavedChanges = false
+    loadToken += 1
+    let token = loadToken
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      guard let disk = try? String(contentsOf: newURL, encoding: .utf8) else { return }
+      DispatchQueue.main.async { [weak self] in
+        // 重读落地前状态可能已被后续操作（再次移动/切换文件/新改动落盘）改写，逐项校验
+        guard let self, token == self.loadToken, self.currentFileURL == newURL,
+          disk != self.lastPersistedText
+        else { return }
+        self.pendingSave?.cancel()
+        self.pendingSave = nil
+        self.lastPersistedText = disk
+        self.text = disk
+        self.hasUnsavedChanges = false
+      }
     }
   }
 
@@ -91,7 +128,10 @@ final class EditorStore: ObservableObject {
   /// 草稿无落盘目标：取消挂起的自动保存并清掉未保存标记（否则橙点常亮不灭）；
   /// 记下原路径，文件从废纸篓放回原位后重新点击时由 TabGroup 触发重载
   func fileWasTrashed(_ url: URL) {
-    guard currentFileURL == url else { return }
+    guard currentFileURL == url || inflightLoadURL == url else { return }
+    // 作废在途加载（若有），避免加载完成后把已入废纸篓的文件重新认作当前文件
+    loadToken += 1
+    inflightLoadURL = nil
     currentFileURL = nil
     trashedFileURL = url
     pendingSave?.cancel()
@@ -113,11 +153,13 @@ final class EditorStore: ObservableObject {
     scheduleAutosave()
   }
 
-  /// 立即写入挂起的改动（切换文件 / ⌘S / 应用退出前调用）
+  /// 立即写入挂起的改动（切换文件 / ⌘S / 应用退出前调用）。
+  /// 屏障等待写盘队列排空：返回时改动确已落盘（退出/关标签兜底语义与同步写盘一致）
   func flushPendingSave() {
     pendingSave?.cancel()
     pendingSave = nil
     saveNowIfNeeded()
+    EditorStore.writeQueue.sync {}
   }
 
   // MARK: - 自动保存（FR-2.7）
@@ -132,27 +174,59 @@ final class EditorStore: ObservableObject {
     DispatchQueue.main.asyncAfter(deadline: .now() + Self.autosaveDelay, execute: item)
   }
 
-  /// 原子写盘：先写临时文件再替换，避免异常中断产生半截文件
+  /// 原子写盘（String.write atomically：先写临时文件再替换，避免异常中断产生半截文件）。
+  /// 取 text 快照后在后台串行队列写盘（主线程不做同步 IO）；
+  /// hasUnsavedChanges / lastPersistedText 统一在主线程写盘完成回调里收口，保持既有语义：
+  /// 写盘成功才推进 lastPersistedText；写盘期间的新改动保持未保存标记，由下一次调度再写；
+  /// 写失败仍走 lastError 提示路径（持续失败只提示一次）。
   private func saveNowIfNeeded() {
     guard hasUnsavedChanges, let url = currentFileURL else { return }
-    do {
-      try text.write(to: url, atomically: true, encoding: .utf8)
-      lastPersistedText = text
-      hasUnsavedChanges = false
-      hasReportedSaveFailure = false
-      Logger.editor.debug("自动保存: \(url.lastPathComponent, privacy: .public)")
-    } catch {
-      Logger.editor.error("自动保存失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-      // 持续失败只提示一次（内容每变一次就重试一次），避免击键级弹窗轰炸
-      if !hasReportedSaveFailure {
-        hasReportedSaveFailure = true
-        lastError = "自动保存失败「\(url.lastPathComponent)」：\(error.localizedDescription)"
+    let snapshot = text
+    EditorStore.writeQueue.async { [weak self] in
+      do {
+        try snapshot.write(to: url, atomically: true, encoding: .utf8)
+      } catch {
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.currentFileURL == url else { return }
+          Logger.editor.error("自动保存失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+          // 持续失败只提示一次（内容每变一次就重试一次），避免击键级弹窗轰炸
+          if !self.hasReportedSaveFailure {
+            self.hasReportedSaveFailure = true
+            self.lastError = "自动保存失败「\(url.lastPathComponent)」：\(error.localizedDescription)"
+          }
+        }
+        return
+      }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.currentFileURL == url else { return }
+        self.lastPersistedText = snapshot
+        // 写盘期间又有新改动：保持未保存标记，等待下一次调度
+        self.hasUnsavedChanges = self.text != snapshot
+        self.hasReportedSaveFailure = false
+        Logger.editor.debug("自动保存: \(url.lastPathComponent, privacy: .public)")
+      }
+    }
+  }
+
+  // MARK: - 文本统计（FR-2.8）
+
+  /// 统计防抖：击键路径不再逐键 O(n) 全量扫描；停止输入 0.5s 后在后台串行队列计算、
+  /// 回主线程应用。串行队列保证结果按调度顺序落地——连续变更时只有最后一次变更的
+  /// 快照会算到底（先前挂起项被防抖取消；已在算的过期结果随后也会被最新结果覆盖），
+  /// 最终值必收敛到最新文本（防抖只影响刷新时机，不影响统计口径）。
+  private func scheduleStatsRefresh() {
+    let snapshot = text
+    statsDebouncer.schedule { [weak self] in
+      let result = TextStatistics.of(snapshot)
+      DispatchQueue.main.async { [weak self] in
+        self?.stats = result
       }
     }
   }
 
   deinit {
     pendingSave?.cancel()
+    statsDebouncer.cancel()
   }
 
   static let welcomeDocument = """

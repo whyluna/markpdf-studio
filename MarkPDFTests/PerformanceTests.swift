@@ -35,8 +35,10 @@ final class PerformanceTests: XCTestCase {
     let candidates = (1...10000).map { "workspace-dir-\($0)/笔记-\($0).md" }
     let start = Date()
     var hits = 0
+    // 查询预处理一次、全体候选复用（与面板实际调用路径一致）
+    let prepared = FuzzyMatcher.prepare("笔记")
     for name in candidates {
-      if FuzzyMatcher.match(query: "笔记", in: name) != nil { hits += 1 }
+      if FuzzyMatcher.match(prepared, in: name) != nil { hits += 1 }
     }
     let elapsed = Date().timeIntervalSince(start)
     XCTAssertGreaterThan(hits, 0)

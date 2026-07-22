@@ -25,6 +25,11 @@ enum FullTextSearch {
   static let snippetRadius = 40
   /// 跳过的超大文件（2MB；与开发规范 §9.4 编辑器降级阈值一致）
   static let maxFileBytes = 2 * 1024 * 1024
+  /// 跳过的超大 PDF（100MB）：整本扫描件常见几十 MB，不设上限时 PDFDocument 载入 +
+  /// 逐页文本提取会把后台搜索拖死；超出直接跳过（该文件不出现在结果中，与超大 md 同口径）
+  static let maxPDFBytes = 100 * 1024 * 1024
+  /// PDF 页循环的取消检查间隔（页）：兼顾响应速度与每页一次闭包调用的开销
+  static let pdfCancellationCheckInterval = 20
 
   /// 在 files（md/pdf）中搜索 query（大小写不敏感），按相关度（命中数）降序。
   /// isCancelled 每处理一个文件检查一次，返回 true 即中止并返回已收集结果。
@@ -40,7 +45,7 @@ enum FullTextSearch {
       case .markdown:
         result = searchMarkdown(url: url, needle: needle)
       case .pdf:
-        result = searchPDF(url: url, needle: needle)
+        result = searchPDF(url: url, needle: needle, isCancelled: isCancelled)
       default:
         result = nil
       }
@@ -80,12 +85,22 @@ enum FullTextSearch {
 
   // MARK: - PDF
 
-  static func searchPDF(url: URL, needle: String) -> FullTextSearchResult? {
-    guard let document = PDFDocument(url: url) else { return nil }
+  /// PDF 文件大小是否在搜索上限内（纯函数，可测）。
+  /// 读取失败按不超限处理：交由 PDFDocument 载入失败兜底返回 nil。
+  static func isPDFWithinSizeLimit(_ url: URL) -> Bool {
+    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+    return (size ?? 0) <= maxPDFBytes
+  }
+
+  /// 页循环内每 pdfCancellationCheckInterval 页检查一次 isCancelled；
+  /// 取消即放弃该文件（返回 nil），与外层"当前文件不收录"语义一致。
+  static func searchPDF(url: URL, needle: String, isCancelled: () -> Bool = { false }) -> FullTextSearchResult? {
+    guard isPDFWithinSizeLimit(url), let document = PDFDocument(url: url) else { return nil }
     var hits = 0
     var firstPage = 0
     var firstSnippet = ""
     for pageIndex in 0..<document.pageCount {
+      if pageIndex % pdfCancellationCheckInterval == 0, isCancelled() { return nil }
       guard let pageText = document.page(at: pageIndex)?.string, !pageText.isEmpty else { continue }
       var searchRange = pageText.startIndex..<pageText.endIndex
       while let range = pageText.range(of: needle, options: .caseInsensitive, range: searchRange) {

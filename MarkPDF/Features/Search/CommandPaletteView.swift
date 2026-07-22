@@ -36,25 +36,43 @@ struct CommandPaletteView: View {
 
   @State private var query = ""
   @State private var selectedIndex = 0
+  /// 匹配结果缓存：仅在 query 变化时重算——body 单帧内多处读取 results，
+  /// 计算属性写法会对全部命令重复模糊匹配 + 排序。
+  /// commands 在模态面板打开期间不会实质变化（遮罩阻断交互），每次打开都重新构造本视图
+  @State private var results: [AppCommand]
 
   private static let maxResults = 50
 
-  private var results: [AppCommand] {
+  init(commands: [AppCommand], onDismiss: @escaping () -> Void) {
+    self.commands = commands
+    self.onDismiss = onDismiss
+    _results = State(initialValue: Self.computeResults(query: "", commands: commands))
+  }
+
+  /// 结果计算（提纯便于单测）：空查询取前 maxResults 条可用命令；否则按分降序，
+  /// 同分按标题升序 tiebreak（无 tiebreak 时同分元素输入过程中行序抖动）
+  static func computeResults(
+    query: String,
+    commands: [AppCommand],
+    maxResults: Int = Self.maxResults
+  ) -> [AppCommand] {
     let enabled = commands.filter { $0.isEnabled() }
     if query.isEmpty {
-      return Array(enabled.prefix(Self.maxResults))
+      return Array(enabled.prefix(maxResults))
     }
+    // 查询正规化只做一次，全体命令复用
+    let prepared = FuzzyMatcher.prepare(query)
     return
       enabled
       .compactMap { command -> (AppCommand, Int)? in
         // 标题与拼音首字母双通道模糊匹配，取高分
-        let byTitle = FuzzyMatcher.match(query: query, in: command.title)
-        let byPinyin = FuzzyMatcher.match(query: query, in: command.pinyin)
+        let byTitle = FuzzyMatcher.match(prepared, in: command.title)
+        let byPinyin = FuzzyMatcher.match(prepared, in: command.pinyin)
         guard byTitle != nil || byPinyin != nil else { return nil }
         return (command, max(byTitle?.score ?? 0, byPinyin?.score ?? 0))
       }
-      .sorted { $0.1 > $1.1 }
-      .prefix(Self.maxResults)
+      .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.title < $1.0.title }
+      .prefix(maxResults)
       .map { $0.0 }
   }
 
@@ -63,8 +81,8 @@ struct CommandPaletteView: View {
       CommandSearchField(
         text: $query,
         placeholder: "输入命令或拼音首字母…",
-        onMoveUp: { selectedIndex = max(0, selectedIndex - 1) },
-        onMoveDown: { selectedIndex = min(results.count - 1, selectedIndex + 1) },
+        onMoveUp: { selectedIndex = clampedSelectionIndex(selectedIndex - 1, count: results.count) },
+        onMoveDown: { selectedIndex = clampedSelectionIndex(selectedIndex + 1, count: results.count) },
         onSubmit: runSelected,
         onCancel: onDismiss
       )
@@ -104,6 +122,7 @@ struct CommandPaletteView: View {
     .shadow(color: .black.opacity(0.25), radius: 30, y: 10)
     .onChange(of: query) { _ in
       selectedIndex = 0
+      results = Self.computeResults(query: query, commands: commands)
     }
   }
 

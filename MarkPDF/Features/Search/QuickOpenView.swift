@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// 面板光标位置钳制：空结果集钳到 0（此前 min(count - 1, …) 在空集会得到 -1）
+func clampedSelectionIndex(_ index: Int, count: Int) -> Int {
+  min(max(0, count - 1), max(0, index))
+}
+
 /// 快速打开面板（FR-6.1）：文件名模糊搜索，↑↓ 导航、Enter 打开、Esc 关闭。
 struct QuickOpenView: View {
   /// 候选文件（扁平化、仅文件）
@@ -11,20 +16,40 @@ struct QuickOpenView: View {
 
   @State private var query = ""
   @State private var selectedIndex = 0
+  /// 匹配结果缓存：仅在 query/files 变化时重算——body 单帧内多处读取 results，
+  /// 计算属性写法会对全部候选重复模糊匹配 + 排序
+  @State private var results: [FileNode]
 
   private static let maxResults = 50
 
-  private var results: [FileNode] {
+  init(
+    files: [FileNode],
+    rootPath: String,
+    onSelect: @escaping (FileNode) -> Void,
+    onDismiss: @escaping () -> Void
+  ) {
+    self.files = files
+    self.rootPath = rootPath
+    self.onSelect = onSelect
+    self.onDismiss = onDismiss
+    _results = State(initialValue: Self.computeResults(query: "", files: files))
+  }
+
+  /// 结果计算（提纯便于单测）：空查询取前 maxResults 个候选；否则模糊匹配按分降序，
+  /// 同分按路径升序 tiebreak（无 tiebreak 时同分元素输入过程中行序抖动）
+  static func computeResults(query: String, files: [FileNode], maxResults: Int = Self.maxResults) -> [FileNode] {
     if query.isEmpty {
-      return Array(files.prefix(Self.maxResults))
+      return Array(files.prefix(maxResults))
     }
+    // 查询正规化只做一次，全体候选复用
+    let prepared = FuzzyMatcher.prepare(query)
     return
       files
       .compactMap { node in
-        FuzzyMatcher.match(query: query, in: node.name).map { (node, $0.score) }
+        FuzzyMatcher.match(prepared, in: node.name).map { (node, $0.score) }
       }
-      .sorted { $0.1 > $1.1 }
-      .prefix(Self.maxResults)
+      .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.id.path < $1.0.id.path }
+      .prefix(maxResults)
       .map(\.0)
   }
 
@@ -33,8 +58,8 @@ struct QuickOpenView: View {
       CommandSearchField(
         text: $query,
         placeholder: "搜索文件名…",
-        onMoveUp: { selectedIndex = max(0, selectedIndex - 1) },
-        onMoveDown: { selectedIndex = min(results.count - 1, selectedIndex + 1) },
+        onMoveUp: { selectedIndex = clampedSelectionIndex(selectedIndex - 1, count: results.count) },
+        onMoveDown: { selectedIndex = clampedSelectionIndex(selectedIndex + 1, count: results.count) },
         onSubmit: openSelected,
         onCancel: onDismiss
       )
@@ -74,6 +99,11 @@ struct QuickOpenView: View {
     .shadow(color: .black.opacity(0.25), radius: 30, y: 10)
     .onChange(of: query) { _ in
       selectedIndex = 0
+      results = Self.computeResults(query: query, files: files)
+    }
+    .onChange(of: files) { newFiles in
+      // 面板打开期间工作区文件变化（文件监听）时重算
+      results = Self.computeResults(query: query, files: newFiles)
     }
   }
 

@@ -18,7 +18,16 @@ final class PDFAnnotationStore: ObservableObject {
   /// 最近一次写回错误（视图据此弹 alert 后置回 nil；NFR-5：文件操作异常须用户可感知）
   @Published var lastError: String?
   /// 标注结构版本号：增删改即 +1，驱动列表面板实时同步（FR-4.5）
-  @Published private(set) var revision = 0
+  @Published private(set) var revision = 0 {
+    // 列表缓存唯一刷新点：attach 即时 / 变更防抖后各重扫一次
+    didSet { rescanAnnotationItems() }
+  }
+  /// 标注列表条目缓存（FR-4.5）：仅随 revision 刷新。视图 body 读此缓存——
+  /// 全文档重扫含逐标注文本提取，不能随任意 @Published（activeTool/colorsByKind…）
+  /// 变化触发的 body 重估而重跑
+  @Published private(set) var annotationItemsSnapshot: [AnnotationItem] = []
+  /// 全文档重扫（缓存重建）次数（测试钩子：验证重复读缓存、无关 @Published 变化不重扫）
+  private(set) var annotationItemsRescanCount = 0
 
   private var writer: AnnotationWriter
   private let defaults: UserDefaults
@@ -142,9 +151,21 @@ final class PDFAnnotationStore: ObservableObject {
 
   // MARK: - 列表快照（FR-4.5）
 
-  /// 全文档标注条目（同组标注合并，含组内非管理类型成员如批注连接线；
-  /// 无组的非管理类型如 Popup 不进列表）
+  /// 全文档标注条目（实时全扫，开销大；视图请改读 annotationItemsSnapshot 缓存）。
+  /// 导出等需要当下最新结果的调用方保留此入口——防抖窗口内的变更尚未刷新缓存
   func annotationItems() -> [AnnotationItem] {
+    scanAnnotationItems()
+  }
+
+  /// 重扫全文档并刷新列表缓存（计数供测试断言缓存复用）
+  private func rescanAnnotationItems() {
+    annotationItemsRescanCount += 1
+    annotationItemsSnapshot = scanAnnotationItems()
+  }
+
+  /// 全文档标注条目扫描（同组标注合并，含组内非管理类型成员如批注连接线；
+  /// 无组的非管理类型如 Popup 不进列表）
+  private func scanAnnotationItems() -> [AnnotationItem] {
     guard let document else { return [] }
     var grouped: [String: [PDFAnnotation]] = [:]
     var singles: [PDFAnnotation] = []

@@ -45,7 +45,9 @@ final class BacklinksStore: ObservableObject {
     let files = filesProvider()
     isScanning = true
     scanTask = Task.detached(priority: .utility) { [weak self] in
-      let found = BacklinksFinder.find(target: target, in: files, workspaceRoot: workspaceRoot)
+      let found = BacklinksFinder.find(target: target, in: files, workspaceRoot: workspaceRoot) {
+        Task.isCancelled
+      }
       guard !Task.isCancelled else { return }
       await MainActor.run {
         self?.items = found

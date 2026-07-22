@@ -14,7 +14,14 @@ enum BacklinksFinder {
   /// 跳过的超大文件（与全文搜索一致）
   static let maxFileBytes = 2 * 1024 * 1024
 
-  static func find(target: URL, in mdFiles: [URL], workspaceRoot: URL?) -> [Backlink] {
+  /// 逐文件检查 isCancelled，返回 true 即中止并返回已收集结果（取消后调用方本就丢弃，
+  /// 提前退出只是不再把剩余 md 全部读完——保存风暴下取消的旧任务立即释放 IO）。
+  static func find(
+    target: URL,
+    in mdFiles: [URL],
+    workspaceRoot: URL?,
+    isCancelled: () -> Bool = { false }
+  ) -> [Backlink] {
     // dest 二选一：CommonMark 角标形式 `<...>`（允许含空格）或无角标形式（遇空白/`)` 停止）
     let pattern = #"\[([^\]]*)\]\(\s*(<[^>]+>|[^)\s>]+)"#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
@@ -22,6 +29,7 @@ enum BacklinksFinder {
     let targetName = target.lastPathComponent
     var result: [Backlink] = []
     for file in mdFiles {
+      if isCancelled() { break }
       // 排除自引用
       guard file.standardizedFileURL != normalizedTarget,
         let data = try? Data(contentsOf: file), data.count <= maxFileBytes,

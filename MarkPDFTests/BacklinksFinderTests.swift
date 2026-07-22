@@ -109,4 +109,29 @@ final class BacklinksFinderTests: XCTestCase {
     let found = BacklinksFinder.find(target: target, in: [md], workspaceRoot: root)
     XCTAssertEqual(found.first?.text, "e.md")
   }
+
+  /// 取消点（保存风暴修复）：isCancelled 逐文件检查，中止后返回已收集结果
+  func testCancellationStopsScanEarly() {
+    let a = write("notes/x.md", "[论文](../papers/论文.pdf)\n")
+    let b = write("notes/y.md", "[论文](../papers/论文.pdf)\n")
+    var calls = 0
+    let found = BacklinksFinder.find(target: target, in: [a, b], workspaceRoot: root) {
+      calls += 1
+      return calls > 1  // 第一个文件处理后取消
+    }
+    XCTAssertEqual(found.map(\.source), [a])
+    XCTAssertEqual(calls, 2)
+  }
+
+  /// 取消点：首个文件前就取消 → 立即返回空，不再读盘
+  func testCancellationBeforeAnyFileReturnsEmpty() {
+    let a = write("notes/z.md", "[论文](../papers/论文.pdf)\n")
+    var calls = 0
+    let found = BacklinksFinder.find(target: target, in: [a], workspaceRoot: root) {
+      calls += 1
+      return true
+    }
+    XCTAssertTrue(found.isEmpty)
+    XCTAssertEqual(calls, 1)
+  }
 }

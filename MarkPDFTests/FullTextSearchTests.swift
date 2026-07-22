@@ -78,6 +78,47 @@ final class FullTextSearchTests: XCTestCase {
     XCTAssertTrue(results.isEmpty)
   }
 
+  /// PDF 大小上限（保存风暴修复配套）：上限内放行、超限跳过；稀疏文件构造，不占真实磁盘
+  func testPDFSizeLimitPureFunction() throws {
+    let small = write("small.pdf", "%PDF-1.4\n")
+    XCTAssertTrue(FullTextSearch.isPDFWithinSizeLimit(small))
+    let big = tempDir.appendingPathComponent("big.pdf")
+    FileManager.default.createFile(atPath: big.path, contents: nil)
+    let handle = try FileHandle(forWritingTo: big)
+    try handle.truncate(atOffset: UInt64(FullTextSearch.maxPDFBytes + 1))
+    try handle.close()
+    XCTAssertFalse(FullTextSearch.isPDFWithinSizeLimit(big))
+    // 读取不到大小信息时按不超限处理（交由 PDFDocument 载入失败兜底）
+    XCTAssertTrue(FullTextSearch.isPDFWithinSizeLimit(tempDir.appendingPathComponent("missing.pdf")))
+  }
+
+  /// 页循环取消（保存风暴修复配套）：按 pdfCancellationCheckInterval 页节奏检查
+  func testPDFPageLoopChecksCancellationAtInterval() throws {
+    let pdf = try writeBlankPDF("loop.pdf", pages: 100)
+    var checks = 0
+    let result = FullTextSearch.searchPDF(url: pdf, needle: "词") { checks += 1; return false }
+    XCTAssertNil(result)  // 空白 PDF 无文本不命中
+    XCTAssertEqual(checks, 100 / FullTextSearch.pdfCancellationCheckInterval)
+  }
+
+  /// 页循环取消：首个检查点取消即放弃该文件（返回 nil），不再翻后续页
+  func testPDFPageLoopCancelledAtFirstCheckStopsImmediately() throws {
+    let pdf = try writeBlankPDF("cancel.pdf", pages: 100)
+    var checks = 0
+    let result = FullTextSearch.searchPDF(url: pdf, needle: "词") { checks += 1; return true }
+    XCTAssertNil(result)
+    XCTAssertEqual(checks, 1)
+  }
+
+  /// 指定页数的空白 PDF（PDFKit 无法程序化写入文本，仅供循环控制类用例）
+  private func writeBlankPDF(_ name: String, pages: Int) throws -> URL {
+    let url = tempDir.appendingPathComponent(name)
+    let document = PDFDocument()
+    for index in 0..<pages { document.insert(PDFPage(), at: index) }
+    try XCTUnwrap(document.dataRepresentation()).write(to: url)
+    return url
+  }
+
   func testSnippetTrimsAndEllipsizes() {
     let text = String(repeating: "甲", count: 60) + "核心" + String(repeating: "乙", count: 60)
     let range = text.range(of: "核心", options: [])!

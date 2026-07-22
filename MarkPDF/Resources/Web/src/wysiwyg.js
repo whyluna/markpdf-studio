@@ -494,7 +494,31 @@ function buildTableModel(state, tableNode) {
 
 /* ---------- 装饰构建 ---------- */
 
-function buildDecorations(state, alwaysRender) {
+// (doc, 语法树) 级重活：排除范围收集（全树遍历）+ scanExtended（全文字符串化 + 三轮正则扫描）。
+// 结果只依赖 (state.doc, syntaxTree)、与选区无关，故可按引用记忆化（见 wysiwyg() 内 scanOf）：
+// 纯选区交易（方向键/点击）复用缓存，文档变化（doc 引用必变）或后台解析推进（tree 引用变化）时失效重建
+function computeScan(state) {
+  // 收集排除范围。代码区内三种语法不生效；
+  // 图片/表格会被整体 replace，其内部再叠加 replace 会互相重叠，一并排除
+  const excludeRanges = [];
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (
+        node.name === "InlineCode" ||
+        node.name === "FencedCode" ||
+        node.name === "IndentedCode" ||
+        node.name === "Image" ||
+        node.name === "Table"
+      ) {
+        excludeRanges.push({ from: node.from, to: node.to });
+      }
+    },
+  });
+  const ext = scanExtended(state.doc.toString(), excludeRanges);
+  return { doc: state.doc, tree: syntaxTree(state), ext };
+}
+
+function buildDecorations(state, alwaysRender, ext) {
   const decos = [];
   const addMark = (from, to, cls) => {
     if (from < to) decos.push({ from, to, deco: Decoration.mark({ class: cls }) });
@@ -516,26 +540,8 @@ function buildDecorations(state, alwaysRender) {
   const isLineActive = (pos) => !alwaysRender && lineActive(state, pos);
   const isRangeActive = (from, to) => !alwaysRender && rangeActive(state, from, to);
 
-  /* ---- 扩展语法（FR-2.4）：数学公式 / 高亮 / 脚注（正则扫描，跳过代码区） ---- */
+  /* ---- 扩展语法（FR-2.4）：数学公式 / 高亮 / 脚注（扫描结果由调用方按 (doc, 语法树) 记忆化供给） ---- */
 
-  // 第一遍：收集排除范围。代码区内三种语法不生效；
-  // 图片/表格会被整体 replace，其内部再叠加 replace 会互相重叠，一并排除
-  const excludeRanges = [];
-  syntaxTree(state).iterate({
-    enter(node) {
-      if (
-        node.name === "InlineCode" ||
-        node.name === "FencedCode" ||
-        node.name === "IndentedCode" ||
-        node.name === "Image" ||
-        node.name === "Table"
-      ) {
-        excludeRanges.push({ from: node.from, to: node.to });
-      }
-    },
-  });
-
-  const ext = scanExtended(state.doc.toString(), excludeRanges);
   // 扩展语法当前生效的 replace 范围：树装饰落在其中必须抑制（避免 replace 重叠，
   // 如公式块内的强调标记、被识别为 Link 的脚注引用 [^a]）
   const extReplaces = [];
@@ -770,13 +776,21 @@ function buildDecorations(state, alwaysRender) {
  * 必须通过 StateField + EditorView.decorations.from 走状态侧通道。
  */
 export function wysiwyg(alwaysRender) {
+  // (doc, tree) 引用级重活缓存：纯选区交易复用（doc/tree 引用均未变），
+  // 文档变化或语法树推进时引用必变 → 自动失效重建（与下方 update 重建条件同口径）
+  let scan = null;
+  const scanOf = (state) => {
+    const tree = syntaxTree(state);
+    if (!scan || scan.doc !== state.doc || scan.tree !== tree) scan = computeScan(state);
+    return scan.ext;
+  };
   return StateField.define({
     create(state) {
-      return buildDecorations(state, alwaysRender);
+      return buildDecorations(state, alwaysRender, scanOf(state));
     },
     update(deco, tr) {
       if (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
-        return buildDecorations(tr.state, alwaysRender);
+        return buildDecorations(tr.state, alwaysRender, scanOf(tr.state));
       }
       return deco;
     },

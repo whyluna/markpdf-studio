@@ -2,6 +2,21 @@ import XCTest
 
 @testable import MarkPDF
 
+/// 轮询等待异步收口（后台读写 / 防抖结果回主线程）
+private func waitUntil(_ timeout: TimeInterval = 3, _ condition: () -> Bool) -> Bool {
+  let deadline = Date().addingTimeInterval(timeout)
+  while Date() < deadline {
+    if condition() { return true }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+  }
+  return condition()
+}
+
+/// 空转当前 RunLoop，让排队的回主线程回调落地
+private func pump(_ seconds: TimeInterval) {
+  RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+}
+
 /// NFR-5：文件读写失败必须用户可感知（lastError 上报）；自动保存持续失败只提示一次
 final class EditorStoreTests: XCTestCase {
   private var dir: URL!
@@ -19,7 +34,7 @@ final class EditorStoreTests: XCTestCase {
   func testLoadFileFailureSetsLastError() {
     let store = EditorStore()
     store.loadFile(dir.appendingPathComponent("不存在.md"))
-    XCTAssertNotNil(store.lastError, "读取失败必须上报")
+    XCTAssertTrue(waitUntil { store.lastError != nil }, "读取失败必须上报")
     XCTAssertNil(store.currentFileURL, "失败后不应指向该文件")
   }
 
@@ -28,29 +43,31 @@ final class EditorStoreTests: XCTestCase {
     try "初始".write(to: url, atomically: true, encoding: .utf8)
     let store = EditorStore()
     store.loadFile(url)
+    XCTAssertTrue(waitUntil { store.currentFileURL == url }, "后台读盘应完成")
     XCTAssertNil(store.lastError)
 
     // 目录消失 → 原子写盘必失败 → 首次失败上报
     try FileManager.default.removeItem(at: dir)
     store.contentDidChange("改动 1")
     store.flushPendingSave()
-    XCTAssertNotNil(store.lastError, "保存失败必须上报")
+    XCTAssertTrue(waitUntil { store.lastError != nil }, "保存失败必须上报")
 
     // 持续失败不重复上报（内容每变一次都会重试，防击键级弹窗轰炸）
     store.lastError = nil
     store.contentDidChange("改动 2")
     store.flushPendingSave()
+    pump(0.3) // 等失败回调落地
     XCTAssertNil(store.lastError, "持续失败只提示一次")
 
     // 写盘恢复成功后复位；再次失败会再次上报
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     store.contentDidChange("改动 3")
     store.flushPendingSave()
-    XCTAssertFalse(store.hasUnsavedChanges, "恢复后应写盘成功")
+    XCTAssertTrue(waitUntil { !store.hasUnsavedChanges }, "恢复后应写盘成功")
     try FileManager.default.removeItem(at: dir)
     store.contentDidChange("改动 4")
     store.flushPendingSave()
-    XCTAssertNotNil(store.lastError, "恢复后再失败应再次上报")
+    XCTAssertTrue(waitUntil { store.lastError != nil }, "恢复后再失败应再次上报")
   }
 }
 
@@ -178,6 +195,7 @@ final class TrashRestoreTests: XCTestCase {
     try "初始".write(to: url, atomically: true, encoding: .utf8)
     let store = EditorStore()
     store.loadFile(url)
+    XCTAssertTrue(waitUntil { store.currentFileURL == url }, "后台读盘应完成")
     store.contentDidChange("未落盘改动")
     XCTAssertTrue(store.hasUnsavedChanges)
 
@@ -197,7 +215,7 @@ final class TrashRestoreTests: XCTestCase {
     group.open(FileNode(id: url, name: "b.md", kind: .markdown))
     let tab = try XCTUnwrap(group.tabs.first)
     let store = group.editorStore(for: tab)
-    XCTAssertEqual(store.text, "磁盘 v1")
+    XCTAssertTrue(waitUntil { store.currentFileURL == url && store.text == "磁盘 v1" }, "后台读盘应完成")
 
     // 移入废纸篓：转草稿
     group.fileWasTrashed(url)
@@ -211,12 +229,164 @@ final class TrashRestoreTests: XCTestCase {
     // 从废纸篓放回原位（内容以磁盘为准）：重新点击 → 重载并恢复落盘能力
     try "磁盘 v2".write(to: url, atomically: true, encoding: .utf8)
     _ = group.editorStore(for: tab)
-    XCTAssertEqual(store.currentFileURL, url)
-    XCTAssertEqual(store.text, "磁盘 v2")
+    XCTAssertTrue(waitUntil { store.currentFileURL == url && store.text == "磁盘 v2" }, "放回后应重载磁盘内容")
 
     // 恢复后自动保存可正常落盘
     store.contentDidChange("磁盘 v2 追加")
     store.flushPendingSave()
     XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "磁盘 v2 追加")
+  }
+}
+
+/// 批次三·性能：文本统计防抖（FR-2.8 口径不变，只延迟刷新时机；最终值收敛到最新文本）。
+/// 修复前 text didSet 逐键同步 TextStatistics.of（O(n) 全量扫描，长文档主线程毛刺源）
+@MainActor
+final class StatsDebounceTests: XCTestCase {
+  /// 防抖窗口内：text 变更不触发同步统计（击键路径无 O(n) 全量扫描）
+  func testStatsDoNotRecomputeSynchronouslyOnChange() {
+    let store = EditorStore()
+    let before = store.stats
+    store.text = "全新的文档内容"
+    XCTAssertEqual(store.stats, before, "防抖窗口内统计不得逐键刷新")
+  }
+
+  /// 停止输入后：连续变更合并为一次，最终值与 TextStatistics.of(最新文本) 一致
+  func testStatsConvergeToLatestTextAfterDebounce() {
+    let store = EditorStore()
+    let done = expectation(description: "防抖后统计收敛")
+    store.text = "知识管理"
+    store.text = "知识管理 note"
+    store.text = "hello world"
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+      XCTAssertEqual(store.stats, TextStatistics.of("hello world"), "最终值须收敛到最新文本的口径")
+      done.fulfill()
+    }
+    wait(for: [done], timeout: 2)
+  }
+}
+
+/// 批次三·性能：EditorStore 异步读写——后台读盘 + 主线程应用（代际号防串档）、
+/// 快照 + 串行后台队列写盘（hasUnsavedChanges / lastPersistedText 在主线程完成回调收口）
+@MainActor
+final class EditorStoreAsyncIOTests: XCTestCase {
+  private var dir: URL!
+
+  override func setUpWithError() throws {
+    dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("EditorStoreAsyncIOTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+  }
+
+  override func tearDownWithError() throws {
+    try? FileManager.default.removeItem(at: dir)
+  }
+
+  /// 后台读盘：成功后状态收敛（URL/文本/未保存标记），且内核回显不算改动
+  func testLoadFileAppliesContentAfterBackgroundRead() throws {
+    let url = dir.appendingPathComponent("a.md")
+    try "磁盘内容".write(to: url, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(url)
+    XCTAssertTrue(waitUntil { store.currentFileURL == url }, "后台读盘应完成")
+    XCTAssertEqual(store.text, "磁盘内容")
+    XCTAssertFalse(store.hasUnsavedChanges)
+    // setContent 回显（与磁盘一致）不算改动
+    store.contentDidChange("磁盘内容")
+    XCTAssertFalse(store.hasUnsavedChanges)
+  }
+
+  /// 代际号：加载途中再 loadFile 另一文件，先到的旧结果不得覆盖新状态
+  func testStaleLoadResultDoesNotOverrideNewerLoad() throws {
+    let urlA = dir.appendingPathComponent("a.md")
+    let urlB = dir.appendingPathComponent("b.md")
+    try "内容 A".write(to: urlA, atomically: true, encoding: .utf8)
+    try "内容 B".write(to: urlB, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(urlA)
+    store.loadFile(urlB)
+    XCTAssertTrue(waitUntil { store.currentFileURL == urlB })
+    pump(0.3) // 留出让 A 的过期结果（若未被代际号拦截）落地的窗口
+    XCTAssertEqual(store.currentFileURL, urlB, "旧加载结果不得覆盖新文件")
+    XCTAssertEqual(store.text, "内容 B")
+    XCTAssertFalse(store.hasUnsavedChanges)
+  }
+
+  /// 快照写盘：flush 屏障返回时改动确已落盘；写盘完成回调后橙点熄灭
+  func testFlushPersistsSnapshotAndClearsDirty() throws {
+    let url = dir.appendingPathComponent("c.md")
+    try "v1".write(to: url, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(url)
+    XCTAssertTrue(waitUntil { store.currentFileURL == url })
+
+    store.contentDidChange("v2")
+    XCTAssertTrue(store.hasUnsavedChanges)
+    store.flushPendingSave()
+    XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "v2", "flush 返回时改动须已落盘")
+    XCTAssertTrue(waitUntil { !store.hasUnsavedChanges }, "写盘完成回调后橙点熄灭")
+  }
+
+  /// 自动保存防抖链路：不手动 flush 也按时落盘（0.5s 防抖 + 后台写）
+  func testAutosaveWritesAfterDebounceWithoutFlush() throws {
+    let url = dir.appendingPathComponent("d.md")
+    try "v1".write(to: url, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(url)
+    XCTAssertTrue(waitUntil { store.currentFileURL == url })
+
+    store.contentDidChange("自动落盘")
+    XCTAssertTrue(
+      waitUntil { (try? String(contentsOf: url, encoding: .utf8)) == "自动落盘" },
+      "防抖后应自动写回磁盘"
+    )
+    XCTAssertTrue(waitUntil { !store.hasUnsavedChanges })
+  }
+
+  /// fileDidMove：磁盘被修正（FR-2.5 链接重写）时以磁盘为准重载（后台重读）
+  func testFileDidMoveReloadsFromDiskWhenChanged() throws {
+    let oldURL = dir.appendingPathComponent("old.md")
+    let newURL = dir.appendingPathComponent("new.md")
+    try "原文".write(to: oldURL, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(oldURL)
+    XCTAssertTrue(waitUntil { store.currentFileURL == oldURL })
+
+    // 模拟移动 + 磁盘修正
+    try "修正后".write(to: newURL, atomically: true, encoding: .utf8)
+    try FileManager.default.removeItem(at: oldURL)
+    store.fileDidMove(from: oldURL, to: newURL)
+    XCTAssertEqual(store.currentFileURL, newURL, "标识应立即跟随新路径")
+    XCTAssertTrue(waitUntil { store.text == "修正后" }, "磁盘与上次落盘不一致应以磁盘为准")
+    XCTAssertFalse(store.hasUnsavedChanges)
+  }
+
+  /// fileDidMove：纯重命名（磁盘内容不变）不影响未落盘编辑
+  func testFileDidMoveKeepsUnsavedEditsWhenDiskUnchanged() throws {
+    let oldURL = dir.appendingPathComponent("old2.md")
+    let newURL = dir.appendingPathComponent("new2.md")
+    try "原文".write(to: oldURL, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(oldURL)
+    XCTAssertTrue(waitUntil { store.currentFileURL == oldURL })
+
+    store.contentDidChange("未落盘")
+    try FileManager.default.moveItem(at: oldURL, to: newURL)
+    store.fileDidMove(from: oldURL, to: newURL)
+    pump(0.3) // 等后台重读落地（磁盘一致 → 不得覆盖未落盘编辑）
+    XCTAssertEqual(store.text, "未落盘", "磁盘无变化不得覆盖未落盘编辑")
+    XCTAssertTrue(store.hasUnsavedChanges)
+  }
+
+  /// 在途加载期间文件被移入废纸篓：加载结果不得把已删文件重新认作当前文件
+  func testTrashDuringInflightLoadDiscardsResult() throws {
+    let url = dir.appendingPathComponent("e.md")
+    try "内容".write(to: url, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(url)
+    store.fileWasTrashed(url) // 加载未完成即进废纸篓
+    pump(0.3) // 等加载结果落地窗口
+    XCTAssertNil(store.currentFileURL, "在途加载结果不得复活已入废纸篓的文件")
+    XCTAssertEqual(store.trashedFileURL, url)
+    XCTAssertFalse(store.hasUnsavedChanges)
   }
 }

@@ -34,7 +34,9 @@ struct BacklinksPanelView: View {
     } else {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
-          ForEach(backlinksStore.items, id: \.source) { item in
+          // 同一 md 可有多条链接指向目标（source 重复），\.source 作 id 会触发
+          // SwiftUI 重复 ID 警告/渲染错乱——改用位置序号（结果按路径排序，帧内稳定）
+          ForEach(Array(backlinksStore.items.enumerated()), id: \.offset) { _, item in
             row(item)
           }
         }

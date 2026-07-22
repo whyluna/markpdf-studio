@@ -23,7 +23,7 @@ final class PinyinInitialsTests: XCTestCase {
   func testFuzzyMatchByPinyin() {
     // 命令面板核心场景：拼音首字母命中命令
     let pinyin = PinyinInitials.of("导出全部标注为 Markdown")
-    XCTAssertNotNil(FuzzyMatcher.match(query: "dc", in: pinyin))
-    XCTAssertNotNil(FuzzyMatcher.match(query: "dcbz", in: pinyin))
+    XCTAssertNotNil(FuzzyMatcher.match(FuzzyMatcher.prepare("dc"), in: pinyin))
+    XCTAssertNotNil(FuzzyMatcher.match(FuzzyMatcher.prepare("dcbz"), in: pinyin))
   }
 }

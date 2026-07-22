@@ -1,7 +1,7 @@
 import XCTest
 @testable import MarkPDF
 
-/// WorkspaceStore 撤销链回归测试（Bug A1/A2）：
+/// WorkspaceStore 回归测试：撤销链（Bug A1/A2）、md 集合变化分流（保存风暴修复）。
 /// 真实 FileOperations + 空 Watcher，UndoManager 驱动撤销/重做。
 final class WorkspaceStoreTests: XCTestCase {
   private var dir: URL!
@@ -100,5 +100,31 @@ final class WorkspaceStoreTests: XCTestCase {
     var isDir: ObjCBool = false
     XCTAssertTrue(FileManager.default.fileExists(atPath: file.path, isDirectory: &isDir))
     XCTAssertFalse(isDir.boolValue)
+  }
+
+  /// md 集合分流（保存风暴修复）：仅 md 路径集合实际变化时触发 onMarkdownFilesChange；
+  /// 折叠态切换、内容未变的例行重扫（自动保存链路）都不触发
+  func testMarkdownFilesChangeFiresOnlyWhenSetChanges() async throws {
+    try ops.createFile(at: dir.appendingPathComponent("a.md"))
+
+    // 1) 打开工作区：md 集合 ∅ → {a.md}，触发一次
+    let opened = expectation(description: "打开后 md 集合变化触发")
+    store.onMarkdownFilesChange = { opened.fulfill() }
+    store.openFolder(dir)
+    await fulfillment(of: [opened], timeout: 5)
+
+    // 2) 折叠态切换 + 无变化重扫：均不应触发
+    let silent = expectation(description: "纯 UI 态与无变化重扫不触发")
+    silent.isInverted = true
+    store.onMarkdownFilesChange = { silent.fulfill() }
+    store.toggleFolderCollapsed(dir)
+    store.refresh()
+    await fulfillment(of: [silent], timeout: 1)
+
+    // 3) 新增 md 文件：集合变化，再次触发
+    let added = expectation(description: "新增 md 触发")
+    store.onMarkdownFilesChange = { added.fulfill() }
+    _ = store.createMarkdown(in: dir, undo: nil)
+    await fulfillment(of: [added], timeout: 5)
   }
 }

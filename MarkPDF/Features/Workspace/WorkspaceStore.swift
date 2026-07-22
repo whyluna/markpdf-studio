@@ -8,7 +8,10 @@ import os
 final class WorkspaceStore: ObservableObject {
   /// 已打开的工作区根节点（nil = 尚未打开）
   @Published private(set) var root: FileNode? {
-    didSet { onStateChange?() }
+    didSet {
+      onStateChange?()
+      notifyMarkdownFilesChangeIfNeeded()
+    }
   }
   /// 文件树当前选中节点（ContentView 据此分发中间栏内容）
   @Published var selection: FileNode?
@@ -28,6 +31,10 @@ final class WorkspaceStore: ObservableObject {
   }
   /// 工作区状态变化回调（FR-1.6 快照保存；根节点切换与折叠态变化时触发）
   var onStateChange: (() -> Void)?
+  /// md 文件集合（路径集合）变化回调（FR-5.4 反链重扫分流）：
+  /// 仅重扫后 md 集合实际变化时触发——自动保存引发的例行重扫、collapsedFolders 等
+  /// 纯 UI 态变化都不触发，避免每次保存全量重读所有 md。
+  var onMarkdownFilesChange: (() -> Void)?
   /// 文件被重命名/移动回调（FR-1.2 联动：由 App 接线到 TabStore.fileDidMove）。
   /// 在 WorkspaceStore 成功路径统一触发（含撤销/重做链），
   /// 避免撤销绕过视图层导致标签仍指向旧路径、自动保存重建出分叉文件。
@@ -49,10 +56,11 @@ final class WorkspaceStore: ObservableObject {
   /// 递归深度上限，防御符号链接环 / 异常目录
   private static let maxDepth = 12
   /// 跳过的大型依赖/版本控制目录（FR-1.1 性能：node_modules 动辄上万文件，
-  /// 全量扫描 + 全文/反向链接扫描会卡死——真机踩坑）
-  private static let excludedDirectoryNames: Set<String> = [
-    "node_modules", ".git", ".svn", ".hg", ".build", ".xcodeproj", "DerivedData",
-  ]
+  /// 全量扫描 + 全文/反向链接扫描会卡死——真机踩坑）。
+  /// 名单与 FSEvents 事件过滤共用 WorkspaceExcludedDirectories（勿另写一份）。
+  private static let excludedDirectoryNames = WorkspaceExcludedDirectories.names
+  /// 上次扫描出的 md 文件路径集合（onMarkdownFilesChange 对比用）
+  private var lastMarkdownPaths: Set<String> = []
   private var scanTask: Task<Void, Never>?
 
   init(ops: FileOperations = LiveFileOperations(), watcher: FileWatcher = LiveFileWatcher()) {
@@ -116,6 +124,14 @@ final class WorkspaceStore: ObservableObject {
     }
     walk(root)
     return result
+  }
+
+  /// 重扫完成后对比前后 md 路径集合，变化才触发 onMarkdownFilesChange（反链重扫分流）
+  private func notifyMarkdownFilesChangeIfNeeded() {
+    let paths = Set(allFiles.filter { $0.kind == .markdown }.map(\.id.path))
+    guard paths != lastMarkdownPaths else { return }
+    lastMarkdownPaths = paths
+    onMarkdownFilesChange?()
   }
 
   // MARK: - 文件操作（FR-1.2）
