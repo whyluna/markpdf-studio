@@ -20,9 +20,10 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
   @Published var scale: CGFloat = 1.0
   /// 当前 PDFView 实例（弱引用，供缩略图/大纲/书签跳转共享；非发布属性）
   weak var pdfView: PDFView?
-  /// 待跳转页（FR-6.2 全文搜索命中跳转；PDFReaderView 创建后消费一次）
-  var pendingPage: Int?
-  /// 跳转后是否闪烁页面（FR-5.3 回链跳转短暂高亮）
+  /// 待跳转页（FR-6.2 全文搜索 / FR-5.3 回链）：携带目标文件 URL——分栏双 PDF 时
+  /// 只有目标文档所在视图可消费（否则先挂载文档的视图会抢跳到自己文档的第 N 页）
+  var pendingJump: (url: URL, page: Int)?
+  /// 跳转后是否闪烁页面（FR-5.3 回链跳转短暂高亮；随 pendingJump 一并消费）
   var pendingFlash = false
   /// 当前是否有文本选区（FR-5.2 菜单启用条件；PDFReaderView 监听选区通知回写）
   @Published var hasSelection = false
@@ -60,6 +61,18 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
   /// 跳转到文档大纲目标位置（FR-3.3）
   func go(to destination: PDFDestination) {
     pdfView?.go(to: destination)
+  }
+
+  /// 消费指向 url 的待跳转页：仅目标文档所在视图可消费（URL 标准化比较），
+  /// 匹配时连同闪烁标记一并取出；不匹配则原样保留，等目标视图来取
+  func consumePendingJump(for url: URL) -> (page: Int, flash: Bool)? {
+    guard let jump = pendingJump,
+      jump.url.standardizedFileURL == url.standardizedFileURL
+    else { return nil }
+    pendingJump = nil
+    let flash = pendingFlash
+    pendingFlash = false
+    return (jump.page, flash)
   }
 
   // MARK: - 页内搜索（FR-3.4）

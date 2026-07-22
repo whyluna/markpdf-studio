@@ -167,4 +167,53 @@ final class PDFAnnotationStoreTests: XCTestCase {
       FileManager.default.fileExists(atPath: url.appendingPathExtension("bak").path),
       "挂起改动应在切换前写回 PDF 本体")
   }
+
+  // MARK: - 分栏焦点切换 attach（Bug 回归：共享 Store 把 A 窗标注写进 B 文档）
+
+  /// attach 替换目标前必须先落盘旧文档的挂起改动：分栏双 PDF 焦点在 A/B 间切换时，
+  /// A 的标注改动必须写回 A 的文件，不能随 store 指向切换写进 B 或静默丢失
+  func testAttachFlushesPendingWritesOfPreviousDocument() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("PDFAnnotationStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let urlA = dir.appendingPathComponent("a.pdf")
+    let urlB = dir.appendingPathComponent("b.pdf")
+    let docA = makePDFDocument()
+    let docB = makePDFDocument()
+    XCTAssertTrue(docA.write(to: urlA))
+    XCTAssertTrue(docB.write(to: urlB))
+
+    let store = makeStore()
+    store.attach(document: docA, url: urlA)
+    store.add(makeHighlight(), to: docA.page(at: 0)!)
+    XCTAssertTrue(store.hasUnsavedChanges, "变更后应处于待写回状态（防抖窗口内）")
+
+    // 焦点切到 B：attach 替换目标前 flush A
+    store.attach(document: docB, url: urlB)
+    XCTAssertEqual(store.currentFileURL, urlB)
+    XCTAssertFalse(store.hasUnsavedChanges, "attach 替换目标前必须落盘旧文档的挂起改动")
+    XCTAssertEqual(
+      PDFDocument(url: urlA)?.page(at: 0)?.annotations.count, 1,
+      "A 的挂起标注必须写回 A 的文件")
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: urlB.appendingPathExtension("bak").path),
+      "B 无任何改动，不应被写回")
+  }
+
+  /// 重复 attach 同一文档是 no-op：分栏焦点认领每次点击都会调用 attach，
+  /// 不得吞掉防抖窗口内的脏标记，也不得触发标注列表刷新
+  func testReattachSameDocumentIsNoOp() throws {
+    let (dir, url, doc) = try makePDFFixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = makeStore()
+    store.attach(document: doc, url: url)
+    store.add(makeHighlight(), to: doc.page(at: 0)!)
+    let revisionBefore = store.revision
+
+    store.attach(document: doc, url: url)
+    XCTAssertTrue(store.hasUnsavedChanges, "同一文档重复 attach 不得吞掉挂起改动")
+    XCTAssertEqual(store.revision, revisionBefore, "同一文档重复 attach 不得触发列表刷新")
+  }
 }

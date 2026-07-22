@@ -370,7 +370,8 @@ struct ContentView: View {
             // 内核未就绪时滚动请求排队，就绪后补发（不丢）
             tabStore.activeEditorStore?.scrollTo(line: result.location)
           case .pdf:
-            pdfStore.pendingPage = result.location
+            // 跳转携带目标文件 URL：分栏双 PDF 时仅目标文档所在视图可消费
+            pdfStore.pendingJump = (url: result.url, page: result.location)
           default:
             break
           }

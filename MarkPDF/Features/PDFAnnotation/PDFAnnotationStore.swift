@@ -50,8 +50,13 @@ final class PDFAnnotationStore: ObservableObject {
     "annotationColor.\(kind.rawValue)"
   }
 
-  /// 关联当前文档（打开/切换 PDF 时调用）
+  /// 关联当前文档（打开/切换 PDF、分栏焦点切换时调用）。
+  /// 替换目标前先落盘旧 (document, url) 的挂起改动：分栏双 PDF 时防止 A 窗标注
+  /// 随指向切换写进 B 文档（调用方须保证旧 document 仍有强引用，pdfView.document 在就成立）。
+  /// 重复 attach 同一文档是 no-op——焦点认领每次点击都会调用，重跑会无谓 flush、
+  /// 全页扫描屏蔽 Popup 并触发标注列表刷新
   func attach(document: PDFDocument, url: URL) {
+    guard self.document !== document || currentFileURL != url else { return }
     flushPendingWrites()
     self.document = document
     currentFileURL = url

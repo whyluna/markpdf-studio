@@ -108,7 +108,8 @@ struct MarkdownTabView: View {
       onOpenFileLink: { url, page in
         tabStore.open(url: url)
         if let page {
-          pdfStore.pendingPage = page
+          // 跳转携带目标文件 URL：分栏双 PDF 时仅目标文档所在视图可消费
+          pdfStore.pendingJump = (url: url, page: page)
           pdfStore.pendingFlash = true
         }
       }

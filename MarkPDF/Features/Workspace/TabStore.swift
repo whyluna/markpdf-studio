@@ -54,8 +54,25 @@ final class TabStore: ObservableObject {
     activeGroup.activeEditorStore
   }
 
-  /// 在当前组打开文件
+  /// 在所有组中查找已打开该文件的标签（草稿 url 为 nil，不参与匹配）
+  private func findOpenTab(url: URL) -> (group: TabGroup, tab: EditorTab)? {
+    for group in groups {
+      if let tab = group.tabs.first(where: { $0.url == url }) {
+        return (group, tab)
+      }
+    }
+    return nil
+  }
+
+  /// 打开文件：已在任一组打开则激活该组该标签（分栏时同一文件只允许一个实例，
+  /// 否则两套 EditorStore 各自自动保存同一磁盘文件会互相覆盖），否则在当前组新建
   func open(_ node: FileNode) {
+    if let found = findOpenTab(url: node.id) {
+      activeGroupID = found.group.id
+      found.group.activate(found.tab)
+      onOpenFile?(node.id)
+      return
+    }
     activeGroup.open(node)
     onOpenFile?(node.id)
   }

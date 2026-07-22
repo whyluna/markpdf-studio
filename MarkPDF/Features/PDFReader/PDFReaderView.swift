@@ -26,6 +26,10 @@ final class ZoomablePDFView: PDFView {
   /// keyDown 与 cancelOperation 双通道覆盖（PDFView 内部视图的键盘处理路径不一）
   var onEscape: (() -> Bool)?
 
+  /// 焦点认领回调（分栏双 PDF）：mouseDown 即认领——划词拖拽位移超出点击手势
+  /// 容差不触发识别，若只靠点击手势，「选中 → 浮动工具条标注」全程不产生焦点认领
+  var onFocusClaim: (() -> Void)?
+
   override func keyDown(with event: NSEvent) {
     if event.keyCode == 53, onEscape?() == true { return }  // 53 = Esc
     super.keyDown(with: event)
@@ -41,6 +45,8 @@ final class ZoomablePDFView: PDFView {
   }
 
   override func mouseDown(with event: NSEvent) {
+    // 任何直接按下先认领焦点（须在批注标记拦截与 PDFKit 处理之前）
+    onFocusClaim?()
     let point = convert(event.locationInWindow, from: nil)
     if let handler = onCommentMarkerMouseDown, handler(point) {
       return
@@ -99,10 +105,15 @@ struct PDFReaderView: NSViewRepresentable {
     pdfView.onEscape = { [weak coordinator = context.coordinator] in
       coordinator?.handleEscape() ?? false
     }
+    // mouseDown 层认领焦点（划词拖拽不触发下面的点击手势，见 onFocusClaim 注释）
+    pdfView.onFocusClaim = { [weak coordinator = context.coordinator] in
+      coordinator?.claimFocus()
+    }
 
     // 点击认领焦点：分栏双 PDF 时，缩放/搜索作用于最近点击的视图（FR-1.4）。
     // delaysPrimaryMouseButtonEvents=false：不拦截鼠标事件，否则 PDFView 收不到
-    // mouseDown，文本选区点击别处无法取消
+    // mouseDown，文本选区点击别处无法取消。
+    // 子视图（浮动工具条/删除按钮）上的点击也会路由到此识别器，作为 mouseDown 之外的补充
     let click = NSClickGestureRecognizer(
       target: context.coordinator,
       action: #selector(Coordinator.claimFocus(_:))
@@ -253,7 +264,11 @@ struct PDFReaderView: NSViewRepresentable {
           }
           pdfView.document = document
           pdfView.autoScales = true
-          self.parent.annotationStore.attach(document: document, url: url)
+          // 分栏双 PDF：仅本 pane 当前持有焦点时才关联标注 Store——否则后加载完成的
+          // 视图会覆盖先加载视图的关联，把 A 窗标注写进 B 文档（焦点切换由 claimFocus 补关联）
+          if self.parent.pdfStore.pdfView === pdfView {
+            self.parent.annotationStore.attach(document: document, url: url)
+          }
           self.syncPageState()
           // 阅读位置记忆（FR-3.5）；全文搜索/回链跳转（FR-6.2/5.3）优先于位置恢复
           self.restorePosition(url: url)
@@ -409,7 +424,17 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     @objc func claimFocus(_ sender: Any) {
+      claimFocus()
+    }
+
+    /// 认领焦点（FR-1.4 分栏仲裁：缩放/搜索/标注作用于最近交互的视图）。
+    /// 标注 Store 跟随焦点指向本窗文档：attach 替换目标前会先落盘旧文档的挂起改动；
+    /// 划词/工具条/批注等交互总是先产生焦点，写回目的地因此始终是用户正在操作的文档
+    func claimFocus() {
       parent.pdfStore.pdfView = pdfView
+      if let pdfView, let document = pdfView.document {
+        parent.annotationStore.attach(document: document, url: parent.url)
+      }
     }
 
     /// Esc 退出查找（FR-3.4）：查找栏开启时关闭并消费；焦点在 PDF 上（非查找框）也生效
@@ -419,15 +444,17 @@ struct PDFReaderView: NSViewRepresentable {
       return true
     }
 
-    /// 消费待跳转页（FR-6.2 搜索 / FR-5.3 回链）；pendingFlash 时闪烁页面提示。
+    /// 消费指向本窗文档的待跳转页（FR-6.2 搜索 / FR-5.3 回链）；pendingFlash 时闪烁页面提示。
     /// 文档未就绪（异步解析中）不消费，待加载完成后统一处理
     func jumpToPendingPageIfAny() {
-      guard let pdfView, pdfView.document != nil, let page = parent.pdfStore.pendingPage else { return }
-      parent.pdfStore.pendingPage = nil
-      let flash = parent.pdfStore.pendingFlash
-      parent.pdfStore.pendingFlash = false
-      parent.pdfStore.goTo(page: page)
-      if flash, let target = pdfView.document?.page(at: page - 1) {
+      guard let pdfView, let document = pdfView.document,
+        let (page, flash) = parent.pdfStore.consumePendingJump(for: parent.url)
+      else { return }
+      // 直接导航本视图：不经 store.goTo——其 pdfView 是分栏焦点视图，可能指向另一窗格
+      guard page >= 1, page <= document.pageCount, let target = document.page(at: page - 1)
+      else { return }
+      pdfView.go(to: target)
+      if flash {
         // 等 PDFKit 完成跳转布局后再放覆盖层（位置才准）
         DispatchQueue.main.async {
           AnnotationFlasher.flashPage(target, in: pdfView)

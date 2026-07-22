@@ -74,6 +74,89 @@ final class TabStoreRestoreTests: XCTestCase {
   }
 }
 
+/// B4 回归：分栏时同一文件只允许打开一个实例——对已在另一组打开的文件再 open，
+/// 应激活该组已有标签，不得在当前组重复开标签
+/// （两套 EditorStore 各自自动保存同一磁盘文件，后写覆盖先写，编辑互相吞）
+@MainActor
+final class TabStoreCrossGroupOpenTests: XCTestCase {
+  private var dir: URL!
+
+  override func setUpWithError() throws {
+    dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("TabStoreCrossGroupOpenTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+  }
+
+  override func tearDownWithError() throws {
+    try? FileManager.default.removeItem(at: dir)
+  }
+
+  private func makeMarkdown(_ name: String, _ text: String) throws -> URL {
+    let url = dir.appendingPathComponent(name)
+    try text.write(to: url, atomically: true, encoding: .utf8)
+    return url
+  }
+
+  /// 左组开 a.md → 分栏激活右组开 b.md → 再 open a.md：标签总数不变，切回左组激活已有标签
+  func testOpenExistingFileActivatesItsGroupInsteadOfDuplicating() throws {
+    let aURL = try makeMarkdown("a.md", "# a")
+    let bURL = try makeMarkdown("b.md", "# b")
+    let store = TabStore()
+
+    store.open(FileNode(id: aURL, name: "a.md", kind: .markdown))
+    let leftID = store.activeGroupID
+
+    store.toggleSplit()
+    XCTAssertEqual(store.groups.count, 2)
+    let rightID = store.groups[1].id
+    store.activeGroupID = rightID
+    store.open(FileNode(id: bURL, name: "b.md", kind: .markdown))
+    XCTAssertEqual(store.groups[1].tabs.map(\.url), [bURL])
+
+    let totalBefore = store.groups.reduce(0) { $0 + $1.tabs.count }
+    store.open(FileNode(id: aURL, name: "a.md", kind: .markdown))
+
+    XCTAssertEqual(store.groups.reduce(0) { $0 + $1.tabs.count }, totalBefore, "同一文件不得重复开标签")
+    XCTAssertEqual(store.groups[1].tabs.map(\.url), [bURL], "右组不应新增 a.md 标签")
+    XCTAssertEqual(store.activeGroupID, leftID, "应切回已有标签所在组")
+    XCTAssertEqual(store.activeGroup.activeTab?.url, aURL, "应激活已有的 a.md 标签")
+  }
+
+  /// open(url:) 重载同样跨组去重（导出笔记后打开、最近打开等入口）
+  func testOpenByURLDeduplicatesAcrossGroups() throws {
+    let aURL = try makeMarkdown("a.md", "# a")
+    let store = TabStore()
+
+    store.open(url: aURL)
+    let leftID = store.activeGroupID
+    store.toggleSplit()
+    store.activeGroupID = store.groups[1].id
+
+    let totalBefore = store.groups.reduce(0) { $0 + $1.tabs.count }
+    store.open(url: aURL)
+
+    XCTAssertEqual(store.groups.reduce(0) { $0 + $1.tabs.count }, totalBefore, "url 重载同样不得重复开标签")
+    XCTAssertEqual(store.activeGroupID, leftID)
+    XCTAssertEqual(store.activeGroup.activeTab?.url, aURL)
+  }
+
+  /// url=nil 的草稿标签不参与匹配：另一组有草稿时 open 文件仍正常新建文件标签
+  func testDraftTabsNeverMatchFileURL() throws {
+    let aURL = try makeMarkdown("a.md", "# a")
+    let store = TabStore()
+    store.toggleSplit()
+    let rightID = store.groups[1].id
+    store.activeGroupID = rightID
+    store.groups[1].openDraft()
+
+    store.open(FileNode(id: aURL, name: "a.md", kind: .markdown))
+
+    XCTAssertEqual(store.activeGroupID, rightID, "无匹配文件标签时仍在当前组打开")
+    XCTAssertEqual(store.groups[1].tabs.count, 2, "草稿保留，新文件标签正常新建")
+    XCTAssertEqual(store.activeGroup.activeTab?.url, aURL)
+  }
+}
+
 /// B3 回归：文件被移入废纸篓 → 标签转草稿（清橙点、取消挂起保存）；
 /// 从废纸篓放回原位后重新点击 → 重载磁盘内容恢复落盘能力
 @MainActor
