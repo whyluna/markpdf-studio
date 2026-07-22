@@ -13,8 +13,10 @@ final class FavoritesRecentsTests: XCTestCase {
 
   override func setUp() {
     super.setUp()
-    suiteName = "FavoritesRecentsTests.\(UUID().uuidString)"
+    // 固定 suite 名 + 用前清场：避免 UUID 随机名在磁盘堆积 plist（cfprefsd 不保证删文件）
+    suiteName = "FavoritesRecentsTests"
     defaults = UserDefaults(suiteName: suiteName)
+    defaults.removePersistentDomain(forName: suiteName)
     // 真实临时文件（最近打开列表会按存在性自动清理，不能用虚构路径）
     tempDir = FileManager.default.temporaryDirectory
       .appendingPathComponent("FavoritesRecentsTests.\(UUID().uuidString)")
@@ -29,7 +31,7 @@ final class FavoritesRecentsTests: XCTestCase {
   }
 
   override func tearDown() {
-    defaults.removePersistentDomain(forName: suiteName)
+    removeTestDefaultsSuite(suiteName, using: defaults)
     try? FileManager.default.removeItem(at: tempDir)
     super.tearDown()
   }

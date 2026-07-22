@@ -116,9 +116,11 @@ final class SidecarAnnotationTests: XCTestCase {
 
   @MainActor
   func testSidecarModePersistsPerFile() throws {
-    let suite = "SidecarAnnotationTests.\(UUID().uuidString)"
+    // 固定 suite 名 + 用前清场：避免 UUID 随机名在磁盘堆积 plist
+    let suite = "SidecarAnnotationTests"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    defer { removeTestDefaultsSuite(suite, using: defaults) }
     let (url, document) = try makePDFFile()
     let store = PDFAnnotationStore(defaults: defaults)
     store.attach(document: document, url: url)

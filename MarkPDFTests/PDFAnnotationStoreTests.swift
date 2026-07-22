@@ -10,12 +10,14 @@ final class PDFAnnotationStoreTests: XCTestCase {
   private var defaults: UserDefaults!
 
   override func setUpWithError() throws {
-    suiteName = "PDFAnnotationStoreTests-\(UUID().uuidString)"
+    // 固定 suite 名 + 用前清场：避免 UUID 随机名在磁盘堆积 plist
+    suiteName = "PDFAnnotationStoreTests"
     defaults = UserDefaults(suiteName: suiteName)
+    defaults.removePersistentDomain(forName: suiteName)
   }
 
   override func tearDownWithError() throws {
-    defaults.removePersistentDomain(forName: suiteName)
+    removeTestDefaultsSuite(suiteName, using: defaults)
   }
 
   private func makeStore() -> PDFAnnotationStore {

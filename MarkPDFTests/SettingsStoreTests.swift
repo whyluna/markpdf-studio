@@ -8,12 +8,14 @@ final class SettingsStoreTests: XCTestCase {
 
   override func setUp() {
     super.setUp()
-    suiteName = "SettingsStoreTests.\(UUID().uuidString)"
+    // 固定 suite 名 + 用前清场：避免 UUID 随机名在磁盘堆积 plist
+    suiteName = "SettingsStoreTests"
     defaults = UserDefaults(suiteName: suiteName)
+    defaults.removePersistentDomain(forName: suiteName)
   }
 
   override func tearDown() {
-    defaults.removePersistentDomain(forName: suiteName)
+    removeTestDefaultsSuite(suiteName, using: defaults)
     super.tearDown()
   }
 

@@ -5,17 +5,22 @@ import XCTest
 /// FR-4.5 标注列表单测：子类型映射、同组合并、排序逻辑、revision 同步
 @MainActor
 final class AnnotationListTests: XCTestCase {
+  private let suiteName = "AnnotationListTests"
   private var dir: URL!
   private var store: PDFAnnotationStore!
+  private var defaults: UserDefaults!
 
   override func setUpWithError() throws {
     dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("AnnotationListTests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    store = PDFAnnotationStore(defaults: UserDefaults(suiteName: "AnnotationListTests")!)
+    defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+    store = PDFAnnotationStore(defaults: defaults)
   }
 
   override func tearDownWithError() throws {
+    removeTestDefaultsSuite(suiteName, using: defaults)
     try? FileManager.default.removeItem(at: dir)
   }
 
