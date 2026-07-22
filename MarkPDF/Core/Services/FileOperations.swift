@@ -53,8 +53,12 @@ final class LiveFileOperations: FileOperations {
     }
     let target = url.deletingLastPathComponent().appendingPathComponent(name)
     guard target != url else { return url }
-    guard !fm.fileExists(atPath: target.path) else {
-      throw FileOperationError.alreadyExists(name)
+    // 仅大小写变化的重命名（Note.md → note.md）：大小写不敏感文件系统上
+    // fileExists 会把文件自身误判为已存在，跳过 alreadyExists 检查直接改名
+    if target.path.caseInsensitiveCompare(url.path) != .orderedSame {
+      guard !fm.fileExists(atPath: target.path) else {
+        throw FileOperationError.alreadyExists(name)
+      }
     }
     try fm.moveItem(at: url, to: target)
     return target

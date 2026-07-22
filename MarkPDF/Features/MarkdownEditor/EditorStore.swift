@@ -14,6 +14,8 @@ final class EditorStore: ObservableObject {
   @Published var mode: MarkdownEditorView.EditorMode = .wysiwyg
   /// 当前打开的磁盘文件（nil = 欢迎页草稿）
   @Published private(set) var currentFileURL: URL?
+  /// 被移入废纸篓前的文件 URL（转草稿后据此识别「从废纸篓恢复」场景；成功载入后清空）
+  private(set) var trashedFileURL: URL?
   /// 有尚未落盘的改动（工具栏橙点指示；自动保存通常 0.5s 内清除）
   @Published private(set) var hasUnsavedChanges = false
   /// 最近一次文件读写错误（视图据此弹 alert 后置回 nil；NFR-5：文件操作异常须用户可感知）
@@ -40,6 +42,7 @@ final class EditorStore: ObservableObject {
     do {
       let content = try String(contentsOf: url, encoding: .utf8)
       currentFileURL = url
+      trashedFileURL = nil
       lastPersistedText = content
       hasUnsavedChanges = false
       text = content
@@ -84,10 +87,16 @@ final class EditorStore: ObservableObject {
     }
   }
 
-  /// 打开的文件被移入废纸篓：转为草稿态、停止自动保存（内容保留在编辑器与废纸篓）
+  /// 打开的文件被移入废纸篓：转为草稿态、停止自动保存（内容保留在编辑器与废纸篓）。
+  /// 草稿无落盘目标：取消挂起的自动保存并清掉未保存标记（否则橙点常亮不灭）；
+  /// 记下原路径，文件从废纸篓放回原位后重新点击时由 TabGroup 触发重载
   func fileWasTrashed(_ url: URL) {
     guard currentFileURL == url else { return }
     currentFileURL = nil
+    trashedFileURL = url
+    pendingSave?.cancel()
+    pendingSave = nil
+    hasUnsavedChanges = false
   }
 
   /// 内核内容变更入口：更新文本并按需调度自动保存（FR-2.7）

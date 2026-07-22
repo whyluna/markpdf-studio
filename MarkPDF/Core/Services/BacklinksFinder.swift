@@ -15,7 +15,8 @@ enum BacklinksFinder {
   static let maxFileBytes = 2 * 1024 * 1024
 
   static func find(target: URL, in mdFiles: [URL], workspaceRoot: URL?) -> [Backlink] {
-    let pattern = #"\[([^\]]*)\]\(\s*<?([^)\s>]+)>?"#
+    // dest 二选一：CommonMark 角标形式 `<...>`（允许含空格）或无角标形式（遇空白/`)` 停止）
+    let pattern = #"\[([^\]]*)\]\(\s*(<[^>]+>|[^)\s>]+)"#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     let normalizedTarget = target.standardizedFileURL
     let targetName = target.lastPathComponent
@@ -26,8 +27,15 @@ enum BacklinksFinder {
         let data = try? Data(contentsOf: file), data.count <= maxFileBytes,
         let content = String(data: data, encoding: .utf8)
       else { continue }
-      // 预筛：不含目标文件名的直接跳过（大工作区下避免全文正则 + 逐链接 resolve 的 syscall 开销）
-      guard content.contains(targetName) else { continue }
+      // 预筛：不含目标文件名的直接跳过（大工作区下避免全文正则 + 逐链接 resolve 的 syscall 开销）。
+      // App 自产回链会把空格等字符 percent 编码（%20）写入 md，原文与编码变体任一命中即放行；
+      // 大小写不敏感与 APFS 默认行为一致（[x](Note.MD) 指向 note.md 不应被漏掉）。
+      let targetNameEncoded =
+        targetName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? targetName
+      guard [targetName, targetNameEncoded].contains(where: {
+        content.range(of: $0, options: .caseInsensitive) != nil
+      })
+      else { continue }
       let nsRange = NSRange(content.startIndex..., in: content)
       for match in regex.matches(in: content, range: nsRange) {
         guard let matchRange = Range(match.range, in: content) else { continue }
@@ -41,14 +49,20 @@ enum BacklinksFinder {
         guard let textRange = Range(match.range(at: 1), in: content),
           let destRange = Range(match.range(at: 2), in: content)
         else { continue }
-        let dest = String(content[destRange])
+        var dest = String(content[destRange])
+        // 角标形式 <dest> 剥离角标后再解析（无角标 dest 不含 < >，不受影响）
+        if dest.hasPrefix("<"), dest.hasSuffix(">") {
+          dest = String(dest.dropFirst().dropLast())
+        }
         guard let link = MarkdownFileLink.parse(dest),
           let resolved = MarkdownFileLink.resolve(
             path: link.path,
             documentDir: file.deletingLastPathComponent(),
             workspaceRoot: workspaceRoot
           ),
-          resolved.standardizedFileURL == normalizedTarget
+          // APFS 默认大小写不敏感，终比对按路径忽略大小写（Note.MD 与 note.md 是同一文件）
+          resolved.standardizedFileURL.path.caseInsensitiveCompare(normalizedTarget.path)
+            == .orderedSame
         else { continue }
         let text = String(content[textRange])
         result.append(Backlink(source: file, text: text.isEmpty ? file.lastPathComponent : text))

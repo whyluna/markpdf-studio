@@ -143,6 +143,10 @@ struct PDFReaderView: NSViewRepresentable {
 
   func updateNSView(_ pdfView: PDFView, context: Context) {
     if context.coordinator.requestedURL != url {
+      // 切换文档前先落盘挂起的标注写回（Bug C1）：store 对 document 是弱引用，
+      // 下面清空 pdfView.document 后旧文档强引用归零，flush 会静默失败，
+      // 500ms 防抖窗口内的标注改动将无提示丢失
+      annotationStore.flushPendingWrites()
       // 切换文档：清空旧文档并异步解析新文档（同 makeNSView 的异步通道）
       pdfView.document = nil
       context.coordinator.loadDocumentAsync(url: url)
@@ -191,6 +195,9 @@ struct PDFReaderView: NSViewRepresentable {
   static func dismantleNSView(_ pdfView: PDFView, coordinator: Coordinator) {
     NotificationCenter.default.removeObserver(coordinator)
     coordinator.flushPositionSave()
+    // 关窗/关标签前同样落盘挂起的标注写回（Bug C1）：此处 document 仍在，
+    // 不 flush 则防抖窗口内的改动随视图拆除静默丢失
+    coordinator.parent.annotationStore.flushPendingWrites()
   }
 
   @MainActor

@@ -92,6 +92,9 @@ final class PDFAnnotationStore: ObservableObject {
   /// 逐文件切换只读模式（持久化；切换只影响写回目的地，不迁移既有标注）
   func setSidecarMode(_ enabled: Bool) {
     guard let url = currentFileURL, enabled != isSidecarMode else { return }
+    // 切换写回通道前先落盘挂起改动（Bug C1 同类）：否则防抖窗口内的变更
+    // 会在下一次防抖触发时被写进新目的地
+    flushPendingWrites()
     var paths = Self.persistedSidecarPaths(defaults: defaults)
     if enabled {
       paths.insert(url.path)

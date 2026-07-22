@@ -124,9 +124,15 @@ final class TabStore: ObservableObject {
 
   // MARK: - 状态恢复（FR-1.6）
 
+  /// restore 只执行一次：onAppear 每次进窗都触发，重复 restore 会用快照整体替换 groups、
+  /// 丢弃内存中 TabGroup 持有的 EditorStore（含草稿正文，快照只有 path 不含正文）
+  private var didRestore = false
+
   /// 从快照重建标签组与激活状态（启动恢复现场）。
   /// 空快照保留启动默认的草稿标签；直接操作 TabGroup，不触发打开记录/快照回写之外的副作用。
   func restore(tabStates: [[WorkspaceStateStore.TabState]], activeTabPaths: [String?], activeGroupIndex: Int) {
+    guard !didRestore else { return }
+    didRestore = true
     let restored: [TabGroup] = tabStates.map { states in
       let group = makeGroup()
       for state in states {

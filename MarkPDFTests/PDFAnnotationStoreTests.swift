@@ -112,4 +112,59 @@ final class PDFAnnotationStoreTests: XCTestCase {
     store.flushPendingWrites()
     XCTAssertNotNil(store.lastError, "恢复后再失败应再次上报")
   }
+
+  // MARK: - 防抖窗口内 flush 写回（Bug C1 回归）
+
+  /// 建临时目录 + 落盘一页 PDF，返回 (目录, 文件 URL, 文档)
+  private func makePDFFixture() throws -> (URL, URL, PDFDocument) {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("PDFAnnotationStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("a.pdf")
+    let doc = makePDFDocument()
+    XCTAssertTrue(doc.write(to: url))
+    return (dir, url, doc)
+  }
+
+  private func makeHighlight() -> PDFAnnotation {
+    PDFAnnotation(
+      bounds: CGRect(x: 10, y: 10, width: 40, height: 20),
+      forType: .highlight, withProperties: nil)
+  }
+
+  /// 切档/关窗路径依赖：标注变更后未过 500ms 防抖期即 flushPendingWrites，
+  /// 写回必须立即执行（此前仅靠防抖触发，视图清空 document 后弱引用失效会静默丢失）
+  func testFlushPendingWritesWithinDebounceWindow() throws {
+    let (dir, url, doc) = try makePDFFixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = makeStore()
+    store.attach(document: doc, url: url)
+    store.add(makeHighlight(), to: doc.page(at: 0)!)
+    XCTAssertTrue(store.hasUnsavedChanges, "变更后应处于待写回状态（防抖窗口内）")
+
+    store.flushPendingWrites()
+    XCTAssertFalse(store.hasUnsavedChanges, "flush 后不应有未写回改动")
+    XCTAssertNil(store.lastError)
+    XCTAssertTrue(
+      FileManager.default.fileExists(atPath: url.appendingPathExtension("bak").path),
+      "flush 必须立即执行写回（.bak 在首次写回前创建）")
+  }
+
+  /// 切换只读模式前先落盘挂起改动（Bug C1 同类）：否则变更会被写进新目的地
+  func testSetSidecarModeFlushesPendingWritesBeforeSwitch() throws {
+    let (dir, url, doc) = try makePDFFixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = makeStore()
+    store.attach(document: doc, url: url)
+    store.add(makeHighlight(), to: doc.page(at: 0)!)
+
+    store.setSidecarMode(true)
+    XCTAssertTrue(store.isSidecarMode)
+    XCTAssertFalse(store.hasUnsavedChanges, "切换写回通道前必须落盘挂起改动")
+    XCTAssertTrue(
+      FileManager.default.fileExists(atPath: url.appendingPathExtension("bak").path),
+      "挂起改动应在切换前写回 PDF 本体")
+  }
 }

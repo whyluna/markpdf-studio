@@ -28,6 +28,10 @@ final class WorkspaceStore: ObservableObject {
   }
   /// 工作区状态变化回调（FR-1.6 快照保存；根节点切换与折叠态变化时触发）
   var onStateChange: (() -> Void)?
+  /// 文件被重命名/移动回调（FR-1.2 联动：由 App 接线到 TabStore.fileDidMove）。
+  /// 在 WorkspaceStore 成功路径统一触发（含撤销/重做链），
+  /// 避免撤销绕过视图层导致标签仍指向旧路径、自动保存重建出分叉文件。
+  var onFileMoved: ((URL, URL) -> Void)?
 
   /// 点击文件夹行：切换展开/收起
   func toggleFolderCollapsed(_ url: URL) {
@@ -123,7 +127,7 @@ final class WorkspaceStore: ObservableObject {
     do {
       try ops.createFile(at: url)
       refresh(selecting: url)
-      registerCreateUndo(url, undo: undo)
+      registerCreateUndo(url, isFolder: false, undo: undo)
       return url
     } catch {
       lastError = error.localizedDescription
@@ -138,7 +142,7 @@ final class WorkspaceStore: ObservableObject {
     do {
       try ops.createFolder(at: url)
       refresh(selecting: url)
-      registerCreateUndo(url, undo: undo)
+      registerCreateUndo(url, isFolder: true, undo: undo)
       return url
     } catch {
       lastError = error.localizedDescription
@@ -153,6 +157,7 @@ final class WorkspaceStore: ObservableObject {
       let newURL = try ops.rename(at: node.id, to: newName)
       if newURL != node.id {
         refresh(selecting: newURL)
+        onFileMoved?(node.id, newURL)
         undo?.registerUndo(withTarget: self) { target in
           target.rename(FileNode(id: newURL, name: newURL.lastPathComponent, kind: node.kind), to: node.name, undo: undo)
         }
@@ -185,6 +190,7 @@ final class WorkspaceStore: ObservableObject {
           rewriteImageLinksAfterMove(from: node.id, to: newURL)
         }
         refresh(selecting: newURL)
+        onFileMoved?(node.id, newURL)
         undo?.registerUndo(withTarget: self) { target in
           target.move(
             FileNode(id: newURL, name: node.name, kind: node.kind),
@@ -230,27 +236,32 @@ final class WorkspaceStore: ObservableObject {
 
   // MARK: - 撤销辅助
 
-  private func registerCreateUndo(_ url: URL, undo: UndoManager?) {
+  /// 记录创建类型（file/folder），重做时按类型重建——否则文件夹会被重做成空文件
+  private func registerCreateUndo(_ url: URL, isFolder: Bool, undo: UndoManager?) {
     undo?.registerUndo(withTarget: self) { target in
-      target.trashCreated(url, undo: undo)
+      target.trashCreated(url, isFolder: isFolder, undo: undo)
     }
     undo?.setActionName("新建")
   }
 
   /// 「新建」的撤销 = 入废纸篓；并注册重做
-  private func trashCreated(_ url: URL, undo: UndoManager?) {
+  private func trashCreated(_ url: URL, isFolder: Bool, undo: UndoManager?) {
     try? ops.trash(at: url)
     refresh()
     undo?.registerUndo(withTarget: self) { target in
-      target.recreate(url, undo: undo)
+      target.recreate(url, isFolder: isFolder, undo: undo)
     }
   }
 
-  private func recreate(_ url: URL, undo: UndoManager?) {
-    try? ops.createFile(at: url)
+  private func recreate(_ url: URL, isFolder: Bool, undo: UndoManager?) {
+    if isFolder {
+      try? ops.createFolder(at: url)
+    } else {
+      try? ops.createFile(at: url)
+    }
     refresh(selecting: url)
     undo?.registerUndo(withTarget: self) { target in
-      target.trashCreated(url, undo: undo)
+      target.trashCreated(url, isFolder: isFolder, undo: undo)
     }
   }
 

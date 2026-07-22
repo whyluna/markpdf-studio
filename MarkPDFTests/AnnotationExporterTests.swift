@@ -126,4 +126,41 @@ final class AnnotationExporterTests: XCTestCase {
     XCTAssertEqual(content, "# vllm 标注\n\n- [p.3] 用户改过的文本\n\n- [p.3](a.pdf#page=3) 摘录\n")
     XCTAssertEqual(added, 1)
   }
+
+  // MARK: - 既有文件读取（Bug C2 回归）
+
+  private func makeTempFile(name: String) throws -> URL {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AnnotationExporterTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir.appendingPathComponent(name)
+  }
+
+  /// 既有文件为非 UTF-8 编码（如 UTF-16）时读取必须抛错——导出流程据此中止，
+  /// 不能把「读不出」当「不存在」走全新分支整体覆盖
+  func testReadExistingContentThrowsForUTF16File() throws {
+    let url = try makeTempFile(name: "笔记.md")
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let original = "# 既有笔记\n\n- 重要内容\n"
+    try original.write(to: url, atomically: true, encoding: .utf16)
+
+    XCTAssertThrowsError(try AnnotationExportFlow.readExistingContent(at: url))
+    XCTAssertEqual(
+      try String(contentsOf: url, encoding: .utf16), original,
+      "读取失败后原内容必须保持原样（导出流程中止、不写盘）")
+  }
+
+  /// 文件不存在返回 nil（走全新写入分支）
+  func testReadExistingContentReturnsNilWhenAbsent() throws {
+    let url = try makeTempFile(name: "不存在.md")
+    XCTAssertNil(try AnnotationExportFlow.readExistingContent(at: url))
+  }
+
+  /// UTF-8 既有文件正常读出（走合并去重分支）
+  func testReadExistingContentReadsUTF8File() throws {
+    let url = try makeTempFile(name: "笔记.md")
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    try "# 既有笔记\n".write(to: url, atomically: true, encoding: .utf8)
+    XCTAssertEqual(try AnnotationExportFlow.readExistingContent(at: url), "# 既有笔记\n")
+  }
 }

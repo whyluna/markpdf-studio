@@ -31,7 +31,16 @@ enum AnnotationExportFlow {
     let lines = AnnotationMarkdownExporter.lines(for: items) { page in
       "\(pdfRelative)#page=\(page)"
     }
-    let existing = try? String(contentsOf: target, encoding: .utf8)
+    let existing: String?
+    do {
+      existing = try Self.readExistingContent(at: target)
+    } catch {
+      // 文件存在但读不出（如 UTF-16 编码）：必须中止——按「不存在」走全新分支
+      // 会整体覆盖原文件，造成数据丢失（Bug C2）
+      Logger.pdf.error("导出标注失败：目标文件读取失败 \(target.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+      alert(title: "导出失败", message: "目标文件已存在但无法读取，已中止导出以避免覆盖原内容：\(error.localizedDescription)")
+      return nil
+    }
     let (content, addedCount) = AnnotationMarkdownExporter.mergedContent(
       existing: existing, pdfBaseName: pdfBaseName, newLines: lines)
     guard addedCount > 0 else {
@@ -48,6 +57,14 @@ enum AnnotationExportFlow {
       alert(title: "导出失败", message: error.localizedDescription)
       return nil
     }
+  }
+
+  /// 读取导出目标既有内容：文件不存在返回 nil（走全新写入）；
+  /// 存在但读取失败（如非 UTF-8 编码）抛错，由调用方中止导出——
+  /// 两者混同会把既有文件当新文件整体覆盖（Bug C2 数据丢失根因）
+  nonisolated static func readExistingContent(at target: URL) throws -> String? {
+    guard FileManager.default.fileExists(atPath: target.path) else { return nil }
+    return try String(contentsOf: target, encoding: .utf8)
   }
 
   private static func alert(title: String, message: String) {

@@ -201,10 +201,25 @@ let notifyTimer = null;
 function scheduleContentNotify() {
   clearTimeout(notifyTimer);
   notifyTimer = setTimeout(() => {
+    notifyTimer = null;
     Bridge.notify("editor.contentChanged", { text: view.state.doc.toString() });
     Bridge.notify("editor.outline", { items: collectOutline() });
   }, 300);
 }
+
+// 页面隐藏/卸载前立即发出挂起的内容变更：防抖 300ms 窗口内的尾巴不丢（FR-2.7）。
+// 切标签/关标签时 SwiftUI 直接销毁 webView，等不到防抖触发
+function flushPendingNotify() {
+  if (notifyTimer == null) return;
+  clearTimeout(notifyTimer);
+  notifyTimer = null;
+  Bridge.notify("editor.contentChanged", { text: view.state.doc.toString() });
+  Bridge.notify("editor.outline", { items: collectOutline() });
+}
+window.addEventListener("pagehide", flushPendingNotify);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushPendingNotify();
+});
 
 /* ---------- 光标行上报（防抖 500ms，FR-1.6 编辑位置记忆） ---------- */
 

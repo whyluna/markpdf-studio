@@ -78,6 +78,32 @@ final class FileOperationsTests: XCTestCase {
     XCTAssertEqual(try ops.rename(at: url, to: "a.md"), url)
   }
 
+  /// Bug A3 回归：仅大小写变化的重命名（Note.md → note.md）在大小写不敏感
+  /// 文件系统上不得误报 alreadyExists
+  func testRenameCaseOnlyChange() throws {
+    let url = dir.appendingPathComponent("Note.md")
+    try ops.createFile(at: url)
+    try "内容".write(to: url, atomically: true, encoding: .utf8)
+    let newURL = try ops.rename(at: url, to: "note.md")
+    XCTAssertEqual(newURL.lastPathComponent, "note.md")
+    XCTAssertEqual(try String(contentsOf: newURL, encoding: .utf8), "内容")
+  }
+
+  /// Bug A3 回归边界：豁免仅限自身——与「另一个已存在文件」仅大小写不同仍应拒绝
+  func testRenameCaseVariantOfOtherFileStillRejected() throws {
+    let a = dir.appendingPathComponent("a.md")
+    let b = dir.appendingPathComponent("b.md")
+    try ops.createFile(at: a)
+    try ops.createFile(at: b)
+    // 大小写敏感文件系统上 B.md 与 b.md 并不冲突，此用例不适用
+    let caseInsensitive = FileManager.default.fileExists(
+      atPath: dir.appendingPathComponent("B.md").path)
+    try XCTSkipUnless(caseInsensitive, "仅适用于大小写不敏感文件系统")
+    XCTAssertThrowsError(try ops.rename(at: a, to: "B.md")) { error in
+      XCTAssertEqual(error as? FileOperationError, .alreadyExists("B.md"))
+    }
+  }
+
   func testMove() throws {
     let file = dir.appendingPathComponent("a.md")
     let folder = dir.appendingPathComponent("sub")

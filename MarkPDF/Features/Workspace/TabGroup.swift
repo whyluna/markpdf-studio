@@ -32,7 +32,16 @@ final class TabGroup: ObservableObject, Identifiable {
 
   /// 取标签的编辑状态（惰性创建；文件标签创建即载入磁盘内容）
   func editorStore(for tab: EditorTab) -> EditorStore {
-    if let store = editorStores[tab.id] { return store }
+    if let store = editorStores[tab.id] {
+      // 文件被移入废纸篓后标签转草稿；从废纸篓放回原处再点击时重新载入磁盘内容，
+      // 恢复落盘能力（否则自动保存永远静默跳过）。文件不在原位（仍在废纸篓）时跳过，避免误报
+      if let url = tab.url, store.trashedFileURL == url,
+        FileManager.default.fileExists(atPath: url.path)
+      {
+        store.loadFile(url)
+      }
+      return store
+    }
     let store = EditorStore()
     store.onCursorLineChange = { [weak self] url, line in
       self?.onEditorCursorLine?(url, line)

@@ -285,9 +285,8 @@ struct FileTreeView: View {
     if (name as NSString).pathExtension.isEmpty, !ext.isEmpty {
       name += "." + ext
     }
-    if let newURL = store.rename(state.node, to: name, undo: undoManager) {
-      tabStore.fileDidMove(from: state.node.id, to: newURL)
-    }
+    // 标签迁移由 store.onFileMoved 统一回调（覆盖撤销/重做链），视图层不再重复通知
+    _ = store.rename(state.node, to: name, undo: undoManager)
   }
 
   private func cancelNaming() {
@@ -305,9 +304,8 @@ struct FileTreeView: View {
       guard let url = object as? NSURL as URL? else { return }
       DispatchQueue.main.async {
         guard let dragged = store.node(for: url) else { return }
-        if let newURL = store.move(dragged, toFolder: folder.id, undo: undoManager) {
-          tabStore.fileDidMove(from: url, to: newURL)
-        }
+        // 标签迁移由 store.onFileMoved 统一回调，视图层不再重复通知
+        _ = store.move(dragged, toFolder: folder.id, undo: undoManager)
       }
     }
     return true

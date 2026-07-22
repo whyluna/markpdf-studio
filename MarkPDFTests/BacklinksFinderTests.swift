@@ -74,6 +74,36 @@ final class BacklinksFinderTests: XCTestCase {
     XCTAssertTrue(found.isEmpty)
   }
 
+  /// 回归：App 自产回链把空格编码为 %20，预筛不得漏报（原 contains(targetName) 直接跳过）
+  func testFindsPercentEncodedLinkToSpacedName() {
+    let spaced = root.appendingPathComponent("papers/vllm paper.pdf")
+    try? Data().write(to: spaced)
+    let md = write("notes/pc.md", "[量化](../papers/vllm%20paper.pdf)\n")
+    let found = BacklinksFinder.find(target: spaced, in: [md], workspaceRoot: root)
+    XCTAssertEqual(found.count, 1)
+    XCTAssertEqual(found.first?.text, "量化")
+  }
+
+  /// 回归：APFS 默认大小写不敏感，[x](Note.MD) 指向 note.md 不得被预筛/终比对漏掉
+  func testFindsCaseVariantLink() {
+    let note = root.appendingPathComponent("papers/note.md")
+    try? Data().write(to: note)
+    let md = write("notes/case.md", "[笔记](../papers/Note.MD)\n")
+    let found = BacklinksFinder.find(target: note, in: [md], workspaceRoot: root)
+    XCTAssertEqual(found.count, 1)
+    XCTAssertEqual(found.first?.text, "笔记")
+  }
+
+  /// 回归：CommonMark 角标形式 <dest 含空格> 不得截断在首个空格
+  func testFindsAngleBracketDestinationWithSpaces() {
+    let spaced = root.appendingPathComponent("papers/my note.md")
+    try? Data().write(to: spaced)
+    let md = write("notes/angle.md", "[摘录](<../papers/my note.md>)\n")
+    let found = BacklinksFinder.find(target: spaced, in: [md], workspaceRoot: root)
+    XCTAssertEqual(found.count, 1)
+    XCTAssertEqual(found.first?.text, "摘录")
+  }
+
   func testEmptyLinkTextFallsBackToFileName() {
     let md = write("notes/e.md", "[](../papers/论文.pdf)\n")
     let found = BacklinksFinder.find(target: target, in: [md], workspaceRoot: root)

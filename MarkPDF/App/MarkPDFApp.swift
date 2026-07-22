@@ -58,6 +58,13 @@ struct MarkPDFApp: App {
         .environmentObject(searchStore)
         .environmentObject(backlinksStore)
         .frame(minWidth: 1080, minHeight: 640)
+        .onAppear {
+          // 重命名/移动成功（含撤销/重做链）→ 标签页路径跟随；
+          // 撤销在 WorkspaceStore 内闭环、不经过视图层，需在 Store 层统一通知
+          workspaceStore.onFileMoved = { [weak tabStore] oldURL, newURL in
+            tabStore?.fileDidMove(from: oldURL, to: newURL)
+          }
+        }
     }
     .defaultSize(width: 1380, height: 900)
     .commands {

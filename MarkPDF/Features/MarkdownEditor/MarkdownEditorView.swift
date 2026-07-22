@@ -176,6 +176,12 @@ struct MarkdownEditorView: NSViewRepresentable {
       }
     }
   }
+
+  static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+    // 销毁前兜底取回内核全文（FR-2.7）：内核 300ms 防抖窗口内未上报的尾巴，
+    // 取回后与宿主文本比对，不同则以内核为准走正常 contentDidChange（含自动保存）
+    coordinator.fetchContentBeforeDismantle(retaining: nsView)
+  }
 }
 
 // MARK: - Coordinator
@@ -308,6 +314,20 @@ extension MarkdownEditorView {
       bridge.request(.getContent) { result in
         if case .success(let payload) = result, let text = payload["text"] as? String {
           completion(text)
+        }
+      }
+    }
+
+    /// 视图销毁前兜底取回内核全文（防抖窗口内未上报的尾巴，FR-2.7）。
+    /// 请求往返期间强引用 webView：dismantle 返回后若无强引用，JS 求值会随销毁被丢弃
+    func fetchContentBeforeDismantle(retaining webView: WKWebView) {
+      guard isReady else { return }
+      let baseline = parent.text
+      fetchContent { [weak self] fetched in
+        withExtendedLifetime(webView) {}
+        Task { @MainActor [weak self] in
+          guard let self, fetched != baseline else { return }
+          self.parent.onContentChanged?(fetched)
         }
       }
     }
