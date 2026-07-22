@@ -38,7 +38,20 @@ class CheckboxWidget extends WidgetType {
   }
 }
 
-// 代码块起始 fence 行 → 语言徽标
+// 语言选择白名单（与 main.js codeLanguages 高亮子集同步；空值 = 纯文本）
+const FENCE_LANGS = [
+  "", "python", "javascript", "typescript", "json", "yaml", "bash",
+  "c", "cpp", "java", "rust", "go", "swift", "sql", "html", "css",
+];
+
+// 复制按钮图标（经典双矩形）与点击后的对勾反馈；用 currentColor 跟随主题色
+const COPY_ICON =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8.5" rx="1.5"/><path d="M3 10.2V3.2A1.7 1.7 0 0 1 4.7 1.5H11"/></svg>';
+const CHECK_ICON =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6.5"/></svg>';
+
+// 代码块起始 fence 行 → 语言栏：左侧语言选择（label + 隐形 select 覆盖），右侧复制按钮。
+// 选择语言改写 fence 的语言标识（高亮随 CodeInfo 即时切换）；复制提取本块正文写剪贴板
 class FenceBadgeWidget extends WidgetType {
   constructor(lang) {
     super();
@@ -47,12 +60,100 @@ class FenceBadgeWidget extends WidgetType {
   eq(o) {
     return o.lang === this.lang;
   }
-  toDOM() {
+  toDOM(view) {
     const el = document.createElement("span");
     el.className = "cm-fence-badge";
-    el.textContent = this.lang || "code";
+
+    // 左：语言选择（label 展示 + 覆盖其上的隐形原生 select）
+    const langWrap = document.createElement("span");
+    langWrap.className = "cm-fence-lang-wrap";
+    const label = document.createElement("span");
+    label.className = "cm-fence-label";
+    label.textContent = `${this.lang || "plain text"} ▾`;
+    const select = document.createElement("select");
+    select.className = "cm-fence-lang";
+    // 文档里的非白名单语言（如 vue）也保留为可选项，避免 select 值失配
+    const langs = FENCE_LANGS.includes(this.lang) ? FENCE_LANGS : [this.lang, ...FENCE_LANGS];
+    for (const lang of langs) {
+      const option = document.createElement("option");
+      option.value = lang;
+      option.textContent = lang || "plain text";
+      select.append(option);
+    }
+    select.value = this.lang;
+    select.addEventListener("change", () => {
+      // 位置动态解析（文档可能已变，不能用构造时的偏移）
+      const pos = view.posAtDOM(el);
+      const line = view.state.doc.lineAt(pos);
+      const m = /^(\s*(?:`{3,}|~{3,})\s*)/.exec(line.text);
+      if (!m) return;
+      view.dispatch({
+        changes: { from: line.from + m[1].length, to: line.to, insert: select.value },
+      });
+    });
+    langWrap.append(label, select);
+
+    // 右：复制按钮（图标；提取本 fence 块正文）
+    const copy = document.createElement("button");
+    copy.className = "cm-fence-copy";
+    copy.title = "复制代码";
+    copy.innerHTML = COPY_ICON;
+    copy.addEventListener("click", (e) => {
+      e.preventDefault();
+      const code = fenceCodeText(view, el);
+      if (code == null) return;
+      copyToClipboard(code);
+      copy.innerHTML = CHECK_ICON;
+      copy.classList.add("copied");
+      setTimeout(() => {
+        copy.innerHTML = COPY_ICON;
+        copy.classList.remove("copied");
+      }, 1200);
+    });
+
+    el.append(langWrap, copy);
     return el;
   }
+}
+
+// 从 badge 所在 fence 首行定位整个代码块，返回正文（不含首尾 fence 行）
+function fenceCodeText(view, badgeEl) {
+  const doc = view.state.doc;
+  const firstLine = doc.lineAt(view.posAtDOM(badgeEl));
+  const fenceRe = /^(\s*)(`{3,}|~{3,})/;
+  const open = fenceRe.exec(firstLine.text);
+  if (!open) return null;
+  const lines = [];
+  for (let n = firstLine.number + 1; n <= doc.lines; n++) {
+    const ln = doc.line(n);
+    const close = fenceRe.exec(ln.text);
+    // 结束 fence：同种围栏字符且长度不短于起始
+    if (close && close[2][0] === open[2][0] && close[2].length >= open[2].length) break;
+    lines.push(ln.text);
+  }
+  return lines.join("\n");
+}
+
+// 写剪贴板：优先 Clipboard API（WKWebView file:// 为安全上下文），失败降级 execCommand
+function copyToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => execCommandCopy(text));
+  } else {
+    execCommandCopy(text);
+  }
+}
+function execCommandCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.append(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+  } catch {
+    /* 剪贴板不可用时静默 */
+  }
+  ta.remove();
 }
 
 // 代码块结束 fence 行 → 收起为细线

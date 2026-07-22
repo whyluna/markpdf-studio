@@ -10,7 +10,7 @@
   --border:#e2e2e6; --sel:rgba(10,132,255,.15); --accent:#0a84ff; --code-bg:#f6f8fa;
   --tok-k:#af3ad4; --tok-s:#c9352b; --tok-c:#8e8e93; --tok-f:#0a84ff; --tok-n:#b05c00;
   --editor-font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","PingFang SC",sans-serif;
-  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   --hl:rgba(255,212,59,.4);
 }
 [data-theme="dark"]{
@@ -63,24 +63,54 @@ body{display:flex;flex-direction:column}
   border-left:3px solid var(--accent);background:var(--code-bg);
   color:var(--text2);padding-left:14px;
 }
-/* 代码块：圆角盒子（对齐设计稿 .codeblock）。行元素禁用垂直 margin，间距走 padding */
+/* 代码块：四周描边 + 浅灰底（对齐表格边框风格）。
+   底色必须半透明：不透明底色会盖住 drawSelection 选层高亮（框内看不到选区） */
 .cm-codeblock-line{
-  font-family:var(--mono);font-size:13px;line-height:1.65;background:var(--code-bg);
+  font-family:var(--mono);font-size:14px;line-height:1.6;background:rgba(175,184,193,.16);
   border-left:1px solid var(--border);border-right:1px solid var(--border);
   padding-left:16px;padding-right:16px;
 }
-/* 首行底边框即顶栏分隔线（贯通盒子宽度，编辑态下 fence 行同样成立） */
+[data-theme="dark"] .cm-codeblock-line{background:rgba(110,118,129,.18)}
+/* 头部语言栏：badge 固定高度决定栏高（消除真机 CJK 字体行盒把栏撑高的不确定性）；
+   左右 15px 使内容对齐代码 16px（边框 box-sizing 占 1px） */
 .cm-codeblock-first{
   border-top:1px solid var(--border);border-bottom:1px solid var(--border);
-  border-radius:10px 10px 0 0;padding-top:8px;
+  border-radius:6px 6px 0 0;padding:0 15px;
 }
-.cm-codeblock-last{border-bottom:1px solid var(--border);border-radius:0 0 10px 10px;padding-bottom:8px}
-/* 语言徽标顶栏：左对齐小字（对齐设计稿 cb-h） */
+/* 末尾 fence 行：渲染态被 .cm-fence-end widget 收起为底部留白；编辑态 ``` 源码行正常显示。
+   零行高只对渲染态生效——否则编辑态 ``` 被压成 0 高、与上一行重叠（:has 区分两态） */
+.cm-codeblock-last{
+  border-bottom:1px solid var(--border);border-radius:0 0 6px 6px;
+}
+.cm-codeblock-last:has(.cm-fence-end){padding-top:14px;padding-bottom:0;line-height:0}
+.cm-codeblock-last:not(:has(.cm-fence-end)){padding-bottom:8px}
+/* 语言栏：固定 28px 高，左 python▾ 语言选择、右复制图标按钮，垂直居中、两端对齐 */
 .cm-fence-badge{
-  display:block;text-align:left;font-family:var(--mono);font-size:11.5px;
-  line-height:1.4;color:var(--text3);padding-bottom:6px;
+  display:inline-flex;align-items:center;justify-content:space-between;width:100%;height:28px;
 }
-.cm-fence-end{display:block;height:6px}
+.cm-fence-lang-wrap{position:relative;display:inline-flex;align-items:center}
+.cm-fence-label{
+  font-family:var(--editor-font);font-size:13.5px;font-weight:500;line-height:1;
+  color:var(--text2);background:transparent;border-radius:5px;padding:3px 8px;cursor:pointer;
+}
+.cm-fence-lang-wrap:hover .cm-fence-label{color:var(--text);background:var(--sel)}
+/* 隐形原生 select 覆盖 label；font-size 决定弹出 option 菜单的字号（此前默认过小） */
+.cm-fence-lang{
+  position:absolute;inset:0;opacity:0;cursor:pointer;
+  appearance:none;-webkit-appearance:none;border:none;font-size:14px;
+}
+/* 复制：图标按钮（无文字），低调灰、hover 浅底、已复制态显强调色对勾 */
+.cm-fence-copy{
+  display:inline-flex;align-items:center;justify-content:center;
+  color:var(--text2);background:transparent;border:none;border-radius:5px;
+  padding:4px;cursor:pointer;
+}
+.cm-fence-copy:hover{color:var(--text);background:var(--sel)}
+.cm-fence-copy.copied{color:var(--accent)}
+.cm-fence-copy svg{display:block}
+.cm-fence-end{display:inline-block;height:0;vertical-align:top}
+/* 代码首行与语言栏的间距 */
+.cm-codeblock-first + .cm-codeblock-line{padding-top:10px}
 .cm-task-checkbox{
   width:15px;height:15px;margin-right:7px;accent-color:var(--accent);
   vertical-align:-2px;cursor:pointer;
@@ -111,6 +141,8 @@ body{display:flex;flex-direction:column}
 .cm-panels .cm-search [name=close]:hover{background:var(--sel);color:var(--text)}
 .cm-searchMatch{background:rgba(255,212,59,.45);border-radius:2px}
 .cm-searchMatch-selected{background:rgba(255,150,50,.55)}
+/* 文本级选区高亮（替代 drawSelection 整行色块）：只覆盖实际文字 */
+.cm-sel-text{background:var(--sel)}
 /* 渲染图片（FR-2.3）：不留内边距，紧凑排布 */
 .cm-rendered-image{max-width:100%;border-radius:6px;display:block;padding:0}
 .cm-image-broken{color:var(--text3);font-size:13px;padding:0}
