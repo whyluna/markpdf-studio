@@ -26,6 +26,18 @@ struct ContentView: View {
       annotationStore.flushPendingWrites()
       stateStore.flush()
     }
+    // 标注写回失败提示（NFR-5；全局唯一挂载点，分栏时不重复呈现）
+    .alert(
+      "文件操作失败",
+      isPresented: Binding(
+        get: { annotationStore.lastError != nil },
+        set: { if !$0 { annotationStore.lastError = nil } }
+      )
+    ) {
+      Button("好") { annotationStore.lastError = nil }
+    } message: {
+      Text(annotationStore.lastError ?? "")
+    }
     // 启动恢复现场（FR-1.6）与状态记录接线（FR-1.5/1.6）
     .onAppear {
       stateStore.restoreTabs(into: tabStore)
@@ -146,13 +158,16 @@ struct ContentView: View {
       PDFSidebarView(url: url)
         .frame(minWidth: 266)
     } else {
-      VStack(spacing: 0) {
+      // 大纲 / 反向链接分界线可拖动（VSplitView）；ideal 高度引导首次分配——反向链接默认占较小空间。
+      // 限制：拖动后的比例不持久（macOS 13 SplitView 无比例观测 API，同 FR-1.6 已知偏差）
+      VSplitView {
         OutlinePanelView(items: tabStore.activeEditorStore?.outline ?? []) { heading in
           tabStore.activeEditorStore?.scrollTo(line: heading.line)
         }
-        .frame(maxHeight: .infinity)
+        .frame(minHeight: 120, idealHeight: 1000, maxHeight: .infinity)
         BacklinksPanelView(target: tabStore.activeGroup.activeTab?.url)
-          .frame(maxHeight: .infinity)
+          // 初始限制最大高度：反向链接默认只占底部小块（idealHeight 软引导对 VSplitView 布局无效，改用 maxHeight 硬约束）
+          .frame(minHeight: 60, idealHeight: 90, maxHeight: 190)
       }
       .frame(minWidth: 266)
     }
