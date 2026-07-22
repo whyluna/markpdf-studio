@@ -1,5 +1,5 @@
 // MarkPDF Markdown 编辑器内核入口（FR-2.1 / FR-2.2 / FR-2.7）
-import { EditorState, Compartment, StateField } from "@codemirror/state";
+import { EditorState, Compartment, StateField, Transaction } from "@codemirror/state";
 import { EditorView, keymap, placeholder, drawSelection, Decoration } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { search, searchKeymap, getSearchQuery } from "@codemirror/search";
@@ -15,7 +15,8 @@ const mdHighlight = HighlightStyle.define([
   { tag: t.heading, textDecoration: "none", fontWeight: "600" },
   { tag: t.keyword, color: "var(--tok-k)" },
   { tag: [t.string, t.special(t.string)], color: "var(--tok-s)" },
-  { tag: t.comment, color: "var(--tok-c)", fontStyle: "italic" },
+  // 注释不用斜体：CJK 无真斜体字形，伪斜体变形观感差（GitHub 渲染同样不斜体）
+  { tag: t.comment, color: "var(--tok-c)" },
   { tag: [t.function(t.variableName), t.propertyName, t.typeName], color: "var(--tok-f)" },
   { tag: [t.number, t.atom, t.bool], color: "var(--tok-n)" },
   { tag: t.link, textDecoration: "none" },
@@ -65,6 +66,10 @@ import { matchHeadingLine } from "./extended.js";
 
 const modeConf = new Compartment();
 
+// 撤销历史放 Compartment：切换文档时整体重置——单 WebView 换档架构下，
+// 跨文档 ⌘Z 会把上一文件的内容写进当前文件/清空文件（恶性数据丢失）
+const historyConf = new Compartment();
+
 // 打字机/专注模式（FR-2.10）：默认关，native 推送开关
 const typewriterConf = new Compartment();
 const focusConf = new Compartment();
@@ -94,6 +99,26 @@ function focusDecorations(state) {
   return Decoration.set([Decoration.line({ class: "cm-focus-line" }).range(line.from)]);
 }
 
+// 文本级选区高亮：mark 装饰只包裹实际文字（CM6 drawSelection 对整行选区会画满行宽色块，
+// 无内建「贴合文字」选项；mark 跨行时按行截断、只覆盖文字，选区即所见即所得）
+const selTextField = StateField.define({
+  create(state) {
+    return selTextDecos(state);
+  },
+  update(_deco, tr) {
+    return tr.selection || tr.docChanged ? selTextDecos(tr.state) : _deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+function selTextDecos(state) {
+  const marks = [];
+  for (const r of state.selection.ranges) {
+    if (!r.empty) marks.push(Decoration.mark({ class: "cm-sel-text" }).range(r.from, r.to));
+  }
+  return Decoration.set(marks, true);
+}
+
 function modeExtension(mode) {
   if (mode === "source") {
     return [EditorView.editable.of(true), EditorState.readOnly.of(false)];
@@ -121,12 +146,17 @@ const baseTheme = EditorView.theme({
   },
   "&.cm-focused": { outline: "none" },
   ".cm-cursor": { borderLeft: "2px solid var(--accent)" },
+  // drawSelection 的整行选区色块关闭——改用 selTextField 的文本级高亮。
+  // 必须覆盖 CM 内建聚焦态全路径规则（5 类选择器 .cm-focused > .cm-scroller > .cm-selectionLayer …），
+  // 否则焦点态被 #d7d4f0 色块打败，与文本级高亮叠出双层（实测注入 CSS 确认）
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    backgroundColor: "var(--sel) !important",
+    backgroundColor: "transparent",
+  },
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
+    backgroundColor: "transparent",
   },
   ".cm-placeholder": { color: "var(--text3)" },
 });
-
 /* ---------- 编辑器实例 ---------- */
 
 // 基础扩展：主实例与导出实例（FR-2.9 离屏渲染）共用，避免配置漂移
@@ -145,7 +175,7 @@ const view = new EditorView({
     // App 内初始为空（防 setContent 丢失时误显示 demo 内容）；浏览器调试才用示例文档
     doc: new URLSearchParams(location.search).has("app") ? "" : DEMO_DOC,
     extensions: [
-      history(),
+      historyConf.of(history()),
       // 自绘光标/选区：替代 WebKit 原生光标（原生按 line-height 1.8 的行框绘制，显得过长）
       drawSelection(),
       search({ top: true }),
@@ -156,6 +186,7 @@ const view = new EditorView({
       // 打字机/专注模式（FR-2.10）：默认关，经 editor.setTypewriter/setFocusMode 重配置
       typewriterConf.of([]),
       focusConf.of([]),
+      selTextField,
       EditorView.updateListener.of((u) => {
         if (u.docChanged) scheduleContentNotify();
         if (u.selectionSet || u.docChanged) scheduleCursorNotify();
@@ -209,9 +240,13 @@ function collectOutline() {
 Bridge.onMessage("editor.setContent", (p) => {
   // 记录文档基准目录（md 文件所在目录），供图片相对路径解析（FR-2.3）
   docContext.baseURL = p.baseURL ?? null;
+  // 换档替换全文不入撤销栈，且随后清空整个历史：
+  // 否则 ⌘Z 会撤销「换档」本身 → 内核回退到上一文档 → 经 contentChanged + 自动保存写坏当前文件
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: p.text ?? "" },
+    annotations: Transaction.addToHistory.of(false),
   });
+  view.dispatch({ effects: historyConf.reconfigure(history()) });
   // FR-1.6：载入即恢复上次编辑位置（不抢焦点）
   if (typeof p.initialLine === "number") scrollToLine(p.initialLine, false);
 });
