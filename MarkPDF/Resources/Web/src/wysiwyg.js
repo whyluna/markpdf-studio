@@ -218,19 +218,18 @@ class MathWidget extends WidgetType {
   }
 }
 
-// 跳转到指定行行首并居中滚动（脚注引用/回跳共用）
+// 跳转到指定行并居中滚动（脚注引用/回跳共用）。
+// 只滚动、不动光标：光标落进定义行会使该行变「活跃」显露源码、↩ 回跳标记被隐藏（回跳失灵的根因）
 function jumpToLine(view, line) {
   if (line == null || line < 1 || line > view.state.doc.lines) return;
   const pos = view.state.doc.line(line).from;
-  view.dispatch({
-    selection: { anchor: pos },
-    effects: EditorView.scrollIntoView(pos, { y: "center" }),
-  });
-  view.focus();
+  view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "center" }) });
 }
 
 // 脚注引用上标（FR-2.4）：[^label] → [n]（编号按首次引用顺序）。
-// 单击跳转到对应定义行；双击落光标显露源码（与图片/公式一致的手感）
+// 单击跳转到对应定义行；双击落光标显露源码（与图片/公式一致的手感）。
+// 不重写 ignoreEvent（默认 true = CM 不拦截）：否则 CM 的 mousedown 先把光标移入
+// 引用范围、widget 被装饰重建销毁，click 跳转根本触发不了（实测点击无反应的根因）
 class FootnoteRefWidget extends WidgetType {
   constructor(n, label, defLine) {
     super();
@@ -256,9 +255,6 @@ class FootnoteRefWidget extends WidgetType {
       view.focus();
     });
     return el;
-  }
-  ignoreEvent() {
-    return false;
   }
 }
 
