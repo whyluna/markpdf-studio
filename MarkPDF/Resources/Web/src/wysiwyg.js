@@ -218,21 +218,37 @@ class MathWidget extends WidgetType {
   }
 }
 
-// 脚注引用上标（FR-2.4）：[^label] → [n]（编号按首次引用顺序；不做点击跳转）
+// 跳转到指定行行首并居中滚动（脚注引用/回跳共用）
+function jumpToLine(view, line) {
+  if (line == null || line < 1 || line > view.state.doc.lines) return;
+  const pos = view.state.doc.line(line).from;
+  view.dispatch({
+    selection: { anchor: pos },
+    effects: EditorView.scrollIntoView(pos, { y: "center" }),
+  });
+  view.focus();
+}
+
+// 脚注引用上标（FR-2.4）：[^label] → [n]（编号按首次引用顺序）。
+// 单击跳转到对应定义行；双击落光标显露源码（与图片/公式一致的手感）
 class FootnoteRefWidget extends WidgetType {
-  constructor(n, label) {
+  constructor(n, label, defLine) {
     super();
     this.n = n;
     this.label = label;
+    this.defLine = defLine;
   }
   eq(o) {
-    return o.n === this.n && o.label === this.label;
+    return o.n === this.n && o.label === this.label && o.defLine === this.defLine;
   }
   toDOM(view) {
     const el = document.createElement("sup");
     el.className = "cm-footnote-ref";
     el.textContent = `[${this.n}]`;
-    // 双击落光标显露源码（与图片/公式一致的手感）
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      jumpToLine(view, this.defLine);
+    });
     el.addEventListener("dblclick", (e) => {
       e.preventDefault();
       const pos = view.posAtDOM(el);
@@ -243,6 +259,28 @@ class FootnoteRefWidget extends WidgetType {
   }
   ignoreEvent() {
     return false;
+  }
+}
+
+// 脚注定义行回跳标记（GitHub ↩ 惯例）：定义↔引用按 label 唯一对应，
+// 同一 label 可被多处引用，回跳到第一处引用
+class FootnoteBackRefWidget extends WidgetType {
+  constructor(refLine) {
+    super();
+    this.refLine = refLine;
+  }
+  eq(o) {
+    return o.refLine === this.refLine;
+  }
+  toDOM(view) {
+    const el = document.createElement("span");
+    el.className = "cm-footnote-backref";
+    el.textContent = "↩";
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      jumpToLine(view, this.refLine);
+    });
+    return el;
   }
 }
 
@@ -473,6 +511,9 @@ function buildDecorations(state, alwaysRender) {
   const addWidgetReplace = (from, to, widget) => {
     decos.push({ from, to, deco: Decoration.replace({ widget }) });
   };
+  const addWidget = (from, widget) => {
+    decos.push({ from, to: from, deco: Decoration.widget({ widget, side: 1 }) });
+  };
 
   // active 判定：阅读模式（alwaysRender）下永不显露源码
   const isLineActive = (pos) => !alwaysRender && lineActive(state, pos);
@@ -538,7 +579,10 @@ function buildDecorations(state, alwaysRender) {
 
   for (const r of ext.footnoteRefs) {
     if (isRangeActive(r.from, r.to)) continue;
-    addWidgetReplace(r.from, r.to, new FootnoteRefWidget(r.n, r.label));
+    // 定义行号（可能缺失——悬空引用不跳转）
+    const def = ext.footnoteDefs.find((d) => d.label === r.label);
+    const defLine = def ? state.doc.lineAt(def.markerFrom).number : null;
+    addWidgetReplace(r.from, r.to, new FootnoteRefWidget(r.n, r.label, defLine));
     extReplaces.push({ from: r.from, to: r.to });
   }
 
@@ -549,6 +593,11 @@ function buildDecorations(state, alwaysRender) {
       // 定义行可能被语法树解析为 Paragraph+Link（前缀 [^label] 的 [ ] 会被 Link 分支隐藏），
       // 标记隐藏范围同样需抑制树装饰
       extReplaces.push({ from: d.markerFrom, to: d.markerTo });
+      // 行尾回跳标记 ↩：跳回第一处引用（多对一取首个）
+      const firstRef = ext.footnoteRefs.find((r) => r.label === d.label);
+      if (firstRef) {
+        addWidget(state.doc.lineAt(d.markerFrom).to, new FootnoteBackRefWidget(state.doc.lineAt(firstRef.from).number));
+      }
     }
   }
 
