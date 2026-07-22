@@ -63,9 +63,11 @@ enum SidecarAnnotationStorage {
 
   // MARK: - 反序列化（data → annotations）
 
-  /// 从 sidecar 数据重建标注（返回 (页码, 标注) 对，按页分组插入）
-  static func annotations(from data: Data) -> [(page: Int, annotation: PDFAnnotation)] {
-    guard let file = try? JSONDecoder().decode(SidecarFile.self, from: data) else { return [] }
+  /// 从 sidecar 数据重建标注（返回 (页码, 标注) 对，按页分组插入）。
+  /// 解码失败抛错（Bug 修复 6）：损坏的 sidecar 不得静默吞成空列表——
+  /// 那会让用户标注无声消失（违反 NFR-5），调用方需据此提示并保护原文件
+  static func annotations(from data: Data) throws -> [(page: Int, annotation: PDFAnnotation)] {
+    let file = try JSONDecoder().decode(SidecarFile.self, from: data)
     return file.annotations.compactMap { entry in
       guard entry.bounds.count == 4,
         let subtype = PDFAnnotationSubtype(rawValue: "/\(entry.type)") as PDFAnnotationSubtype?

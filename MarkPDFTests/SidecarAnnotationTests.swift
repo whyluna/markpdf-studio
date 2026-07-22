@@ -57,7 +57,7 @@ final class SidecarAnnotationTests: XCTestCase {
     // 重开新文档并从 sidecar 重建
     let reloaded = try XCTUnwrap(PDFDocument(url: url))
     let data = try Data(contentsOf: sidecarURL)
-    let pairs = SidecarAnnotationStorage.annotations(from: data)
+    let pairs = try SidecarAnnotationStorage.annotations(from: data)
     XCTAssertEqual(pairs.count, 2)
     for (pageIndex, annotation) in pairs {
       reloaded.page(at: pageIndex)?.addAnnotation(annotation)
@@ -97,9 +97,9 @@ final class SidecarAnnotationTests: XCTestCase {
   }
 
   @MainActor
-  func testCorruptSidecarReturnsEmpty() {
-    let pairs = SidecarAnnotationStorage.annotations(from: Data([0xFF, 0x00]))
-    XCTAssertTrue(pairs.isEmpty)
+  func testCorruptSidecarThrows() {
+    // Bug 修复 6：解码失败必须抛错（调用方据此提示用户），不得静默吞成空列表
+    XCTAssertThrowsError(try SidecarAnnotationStorage.annotations(from: Data([0xFF, 0x00])))
   }
 
   @MainActor
@@ -132,5 +132,84 @@ final class SidecarAnnotationTests: XCTestCase {
     let reopened = PDFAnnotationStore(defaults: defaults)
     reopened.attach(document: try XCTUnwrap(PDFDocument(url: url)), url: url)
     XCTAssertTrue(reopened.isSidecarMode)
+  }
+
+  // MARK: - sidecar 损坏（Bug 修复 6，NFR-5）
+
+  /// 开启只读模式并落一个损坏的 sidecar，返回 (测试 defaults, pdfURL, sidecarURL, 损坏数据)
+  @MainActor
+  private func makeCorruptSidecarFixture() throws -> (UserDefaults, URL, URL, Data) {
+    // 固定 suite 名 + 用前清场：避免 UUID 随机名在磁盘堆积 plist
+    let suite = "SidecarAnnotationTests"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defaults.removePersistentDomain(forName: suite)
+    let (url, document) = try makePDFFile()
+    let setup = PDFAnnotationStore(defaults: defaults)
+    setup.attach(document: document, url: url)
+    setup.setSidecarMode(true)
+    let sidecarURL = SidecarAnnotationStorage.sidecarURL(for: url)
+    let corrupt = Data([0xFF, 0x00])
+    try corrupt.write(to: sidecarURL)
+    return (defaults, url, sidecarURL, corrupt)
+  }
+
+  /// sidecar 损坏：attach 必须经 lastError 上报（不得静默吞成「无标注」），
+  /// 且后续写回被抑制——内存标注不完整，写回会用残缺数据覆盖原文件
+  @MainActor
+  func testCorruptSidecarReportsErrorAndProtectsFile() throws {
+    let (defaults, url, sidecarURL, corrupt) = try makeCorruptSidecarFixture()
+    defer { removeTestDefaultsSuite("SidecarAnnotationTests", using: defaults) }
+
+    // 重新 attach（模拟重开）触发 sidecar 加载
+    let store = PDFAnnotationStore(defaults: defaults)
+    let doc = try XCTUnwrap(PDFDocument(url: url))
+    store.attach(document: doc, url: url)
+    XCTAssertTrue(store.isSidecarMode)
+    XCTAssertNotNil(store.lastError, "sidecar 损坏必须经 lastError 上报（NFR-5）")
+
+    // 写回被抑制：标注变更 + flush 后原文件字节不变
+    store.add(
+      PDFAnnotation(bounds: CGRect(x: 1, y: 1, width: 10, height: 10), forType: .highlight, withProperties: nil),
+      to: try XCTUnwrap(doc.page(at: 0)))
+    store.flushPendingWrites()
+    XCTAssertEqual(try Data(contentsOf: sidecarURL), corrupt, "加载失败后不得写回覆盖原 sidecar")
+  }
+
+  /// 持续失败只提示一次（attach 随分栏焦点切换反复发生）；修复文件后重开：
+  /// 加载成功、提示标志复位、写回恢复
+  @MainActor
+  func testCorruptSidecarReportsOnceAndRecoversAfterFix() throws {
+    let (defaults, url, sidecarURL, _) = try makeCorruptSidecarFixture()
+    defer { removeTestDefaultsSuite("SidecarAnnotationTests", using: defaults) }
+    // 第二个正常文件（无 sidecar），用于「切走再切回」的重复 attach
+    let otherDoc = PDFDocument()
+    otherDoc.insert(PDFPage(), at: 0)
+    let otherURL = tempDir.appendingPathComponent("b.pdf")
+    try XCTUnwrap(otherDoc.dataRepresentation()).write(to: otherURL)
+
+    let store = PDFAnnotationStore(defaults: defaults)
+    let docA = try XCTUnwrap(PDFDocument(url: url))
+    store.attach(document: docA, url: url)
+    XCTAssertNotNil(store.lastError, "首次加载损坏 sidecar 必须提示")
+
+    // 模拟用户关掉弹窗；焦点切走再切回（再次 attach 同一损坏文件）不得重复提示
+    store.lastError = nil
+    store.attach(document: try XCTUnwrap(PDFDocument(url: otherURL)), url: otherURL)
+    XCTAssertNil(store.lastError, "正常文件（无 sidecar）attach 不报错")
+    store.attach(document: docA, url: url)
+    XCTAssertNil(store.lastError, "同一损坏文件持续失败只提示一次")
+
+    // 修复 sidecar 后重开：加载成功，写回恢复
+    let valid = SidecarAnnotationStorage.SidecarFile(
+      version: SidecarAnnotationStorage.currentVersion, annotations: [])
+    try JSONEncoder().encode(valid).write(to: sidecarURL)
+    let fixedDoc = try XCTUnwrap(PDFDocument(url: url))
+    store.attach(document: fixedDoc, url: url)
+    XCTAssertNil(store.lastError)
+    store.add(
+      PDFAnnotation(bounds: CGRect(x: 1, y: 1, width: 10, height: 10), forType: .highlight, withProperties: nil),
+      to: try XCTUnwrap(fixedDoc.page(at: 0)))
+    store.flushPendingWrites()
+    XCTAssertFalse(store.hasUnsavedChanges, "修复后写回必须恢复")
   }
 }

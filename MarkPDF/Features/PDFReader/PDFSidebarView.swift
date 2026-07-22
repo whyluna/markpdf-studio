@@ -65,6 +65,9 @@ struct PDFSidebarView: View {
         }
         sectionTitle("我的书签")
         Button {
+          // 加载窗口期（异步解析未完成）currentPage 为 0：0 页书签永远跳不到
+          //（goTo 有 page>=1 防护），不得产生死书签（Bug 修复 4）
+          guard Self.isBookmarkablePage(pdfStore.currentPage) else { return }
           bookmarksStore.toggle(page: pdfStore.currentPage, for: url)
         } label: {
           Label(
@@ -77,6 +80,7 @@ struct PDFSidebarView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(Color.accentColor)
+        .disabled(!Self.isBookmarkablePage(pdfStore.currentPage))
         let pages = bookmarksStore.pages(for: url)
         if pages.isEmpty {
           Text("暂无书签")
@@ -106,6 +110,12 @@ struct PDFSidebarView: View {
       .padding(.horizontal, 6)
       .padding(.top, 6)
       .padding(.bottom, 4)
+  }
+
+  /// 可加书签的页码判定（Bug 修复 4）：异步加载完成前 currentPage == 0，
+  /// 0 页书签永远跳不到（goTo 有 page>=1 防护）
+  static func isBookmarkablePage(_ page: Int) -> Bool {
+    page >= 1
   }
 }
 

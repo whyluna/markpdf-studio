@@ -105,7 +105,8 @@ final class FavoritesRecentsTests: XCTestCase {
 
   @MainActor
   func testRecentsAutoCleansDeletedFiles() throws {
-    // 真实临时文件：记录后删除其一，读取时自动清理并回写存储
+    // 真实临时文件：记录后删除其一。清理挪到写入路径（record）——读取为纯读，
+    // 不在视图 body 求值期发布（展示层的存在性过滤由 FileTreeView.collectionSection 负责）
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("RecentFilesTests.\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -120,8 +121,11 @@ final class FavoritesRecentsTests: XCTestCase {
     store.record(dead, forRoot: rootA)
     try FileManager.default.removeItem(at: dead)
 
+    // 纯读路径不再清理：原样返回（含已删除项）
+    XCTAssertEqual(store.files(forRoot: rootA), [dead, alive])
+    // 下一次写入顺带清理并回写存储：新实例读到的也是清理后的列表
+    store.record(alive, forRoot: rootA)
     XCTAssertEqual(store.files(forRoot: rootA), [alive])
-    // 已回写存储：新实例读到的也是清理后的列表
     let reopened = RecentFilesStore(defaults: defaults)
     XCTAssertEqual(reopened.files(forRoot: rootA), [alive])
   }

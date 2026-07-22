@@ -17,6 +17,13 @@ describe("extractTitle", () => {
   it("无标题回退默认名", () => {
     expect(extractTitle("只有正文")).toBe("Markdown 导出");
   });
+  it("闭合 # 序列须前导空格（CommonMark）：# C# 的 # 属标题文本", () => {
+    expect(extractTitle("# C#\n")).toBe("C#");
+    expect(extractTitle("# C# 笔记\n")).toBe("C# 笔记");
+    // 合法闭合序列照常剥离
+    expect(extractTitle("# 标题 ##\n")).toBe("标题");
+    expect(extractTitle("# 标题 #  \n")).toBe("标题");
+  });
 });
 
 describe("rewriteImgSrc", () => {
@@ -62,5 +69,21 @@ describe("buildExportHTML", () => {
       contentHTML: "",
     });
     expect(html).toContain("<title>a&lt;b&gt;&amp;c</title>");
+  });
+  it("双引号转义（属性插值安全）：title/theme/class/href 全覆盖", () => {
+    const html = buildExportHTML({
+      title: '他说"你好"',
+      theme: 'dark"onload="x',
+      inlineStyles: [],
+      cssHrefs: ['file:///a"b/editor.css'],
+      contentHTML: "",
+      classes: { content: 'cm-content"evil' },
+    });
+    expect(html).toContain("<title>他说&quot;你好&quot;</title>");
+    expect(html).toContain('data-theme="dark&quot;onload=&quot;x"');
+    expect(html).toContain('href="file:///a&quot;b/editor.css"');
+    expect(html).toContain('<div class="cm-content&quot;evil">');
+    // 裸双引号不得出现在属性插值结果中
+    expect(html).not.toContain('class="cm-content"evil"');
   });
 });

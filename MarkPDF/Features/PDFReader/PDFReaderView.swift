@@ -158,6 +158,10 @@ struct PDFReaderView: NSViewRepresentable {
       // 下面清空 pdfView.document 后旧文档强引用归零，flush 会静默失败，
       // 500ms 防抖窗口内的标注改动将无提示丢失
       annotationStore.flushPendingWrites()
+      // Bug 修复 1/2：查找状态整体复位（findMatches 是旧文档的 PDFSelection，
+      // ⌘G/回车会作用于新文档，行为未定义）；缩放归位 100%，避免旧倍率在加载窗口期
+      // 误关 autoScales（存档缩放由加载完成后的 restorePosition 恢复，不受影响）
+      pdfStore.resetForDocumentSwitch()
       // 切换文档：清空旧文档并异步解析新文档（同 makeNSView 的异步通道）
       pdfView.document = nil
       context.coordinator.loadDocumentAsync(url: url)
@@ -171,11 +175,23 @@ struct PDFReaderView: NSViewRepresentable {
     }
     // FR-3.6：阅读主题即时生效
     applyReadingTheme(settings.pdfReadingTheme, to: pdfView)
-    // 外部驱动的目标缩放（按钮/快捷键）；手动缩放时脱离自适应
-    if abs(pdfView.scaleFactor - pdfStore.scale) > 0.001 {
+    // 外部驱动的目标缩放（按钮/快捷键）；手动缩放时脱离自适应。
+    // 加载窗口期不同步（Bug 修复 2）：document 未挂载时 scaleFactor 仍是初值 1.0，
+    // 若此时按 store 残留倍率同步会误关 autoScales，新文档失去自适应宽度
+    if Self.shouldSyncScale(
+      hasDocument: pdfView.document != nil,
+      scaleFactor: pdfView.scaleFactor,
+      targetScale: pdfStore.scale
+    ) {
       pdfView.autoScales = false
       pdfView.scaleFactor = PDFReaderStore.clamped(pdfStore.scale)
     }
+  }
+
+  /// 缩放同步判定（Bug 修复 2）：加载窗口期（document 未挂载）一律不同步；
+  /// 文档就绪后按目标倍率与当前值的差异决定（容差 0.001 防抖）
+  static func shouldSyncScale(hasDocument: Bool, scaleFactor: CGFloat, targetScale: CGFloat) -> Bool {
+    hasDocument && abs(scaleFactor - targetScale) > 0.001
   }
 
   func makeCoordinator() -> Coordinator {
@@ -238,6 +254,8 @@ struct PDFReaderView: NSViewRepresentable {
     private var inFlight = false
     /// 解析中的加载指示
     private var spinner: NSProgressIndicator?
+    /// 解析失败占位视图（Bug 修复 3：重试入口）
+    private var failureHosting: NSHostingView<PDFLoadFailureView>?
 
     init(_ parent: PDFReaderView) {
       self.parent = parent
@@ -252,6 +270,9 @@ struct PDFReaderView: NSViewRepresentable {
       let token = loadToken
       inFlight = true
       showSpinner(true)
+      // 新一次加载尝试：清掉上次的失败占位与错误（Bug 修复 3）
+      showLoadFailure(false)
+      parent.pdfStore.lastError = nil
       Task.detached(priority: .userInitiated) { [weak self] in
         let document = PDFDocument(url: url)
         await MainActor.run { [weak self] in
@@ -260,6 +281,10 @@ struct PDFReaderView: NSViewRepresentable {
           self.showSpinner(false)
           guard let document else {
             Logger.pdf.error("PDF 解析失败: \(url.path, privacy: .public)")
+            // Bug 修复 3：解析失败须用户可感知（NFR-5）——记录错误并展示带重试的占位，
+            // 否则 requestedURL 已置为当前 url，updateNSView 不会再触发加载，用户面对永久空白
+            self.parent.pdfStore.reportLoadFailure(for: url)
+            self.showLoadFailure(true)
             return
           }
           pdfView.document = document
@@ -297,6 +322,34 @@ struct PDFReaderView: NSViewRepresentable {
         spinner?.removeFromSuperview()
         spinner = nil
       }
+    }
+
+    /// 解析失败占位（Bug 修复 3）：说明 + 重试按钮；重试/切换文档/加载成功时移除
+    private func showLoadFailure(_ show: Bool) {
+      if show {
+        guard failureHosting == nil, let pdfView else { return }
+        let hosting = NSHostingView(rootView: PDFLoadFailureView(
+          message: parent.pdfStore.lastError ?? "无法打开 PDF",
+          onRetry: { [weak self] in self?.retryLoad() }
+        ))
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        pdfView.addSubview(hosting)
+        NSLayoutConstraint.activate([
+          hosting.centerXAnchor.constraint(equalTo: pdfView.centerXAnchor),
+          hosting.centerYAnchor.constraint(equalTo: pdfView.centerYAnchor),
+        ])
+        failureHosting = hosting
+      } else {
+        failureHosting?.removeFromSuperview()
+        failureHosting = nil
+      }
+    }
+
+    /// 解析失败后的重试（Bug 修复 3）：requestedURL 未变，updateNSView 不会自发重试，
+    /// 必须显式重走异步解析通道（loadDocumentAsync 起始处会清失败状态）
+    func retryLoad() {
+      guard let url = requestedURL else { return }
+      loadDocumentAsync(url: url)
     }
 
     /// 同步页码/总页数到 Store
@@ -461,6 +514,27 @@ struct PDFReaderView: NSViewRepresentable {
         }
       }
     }
+  }
+}
+
+/// 解析失败占位视图（Bug 修复 3）：图标 + 说明 + 重试按钮，
+/// 文字风格对齐既有空状态（"暂无标注"等：.callout + secondary）
+private struct PDFLoadFailureView: View {
+  let message: String
+  let onRetry: () -> Void
+
+  var body: some View {
+    VStack(spacing: 8) {
+      Image(systemName: "doc.questionmark")
+        .font(.system(size: 28))
+        .foregroundStyle(.secondary)
+      Text(message)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+      Button("重试", action: onRetry)
+    }
+    .padding(16)
   }
 }
 

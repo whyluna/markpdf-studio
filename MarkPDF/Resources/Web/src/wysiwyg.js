@@ -345,8 +345,9 @@ class TableWidget extends WidgetType {
         if (seg.marks.includes("b")) el.style.fontWeight = "650";
         if (seg.marks.includes("i")) el.style.fontStyle = "italic";
         if (seg.marks.includes("s")) el.style.textDecoration = "line-through";
-        if (seg.marks.includes("c")) el.className = "cm-inline-code";
-        if (seg.marks.includes("a")) el.className = "cm-link";
+        if (seg.marks.includes("c")) el.classList.add("cm-inline-code");
+        // classList.add 累加：单元格同时是 code+link 时两类都要保留（className 二次赋值会覆盖）
+        if (seg.marks.includes("a")) el.classList.add("cm-link");
         cellEl.appendChild(el);
       }
     };
@@ -381,7 +382,9 @@ class TableWidget extends WidgetType {
     wrap.addEventListener("mousedown", (e) => {
       e.preventDefault();
       const tr = e.target.closest("tr");
-      const idx = tr ? Number(tr.dataset.row) : this.model.rowOffsets.length - 1;
+      // 点在表格 padding 等非行区域（无 tr）：落首行（表头），而非回退最后一行——
+      // 从上方点击表格时光标跳表尾违和，表头是更自然的入口
+      const idx = tr ? Number(tr.dataset.row) : 0;
       const base = view.posAtDOM(wrap);
       const pos = base + this.model.rowOffsets[Math.min(idx, this.model.rowOffsets.length - 1)];
       view.dispatch({ selection: { anchor: pos } });
@@ -501,6 +504,10 @@ function computeScan(state) {
   // 收集排除范围。代码区内三种语法不生效；
   // 图片/表格会被整体 replace，其内部再叠加 replace 会互相重叠，一并排除
   const excludeRanges = [];
+  // 带 URL 子节点的 Link（如 `[^a](x)`：lezer 整体解析为 Link）：仅脚注扫描排除——
+  // 该写法按链接渲染，前缀 `[^a]` 不得再生成脚注 widget（与 Link 隐藏装饰 replace 相交，
+  // CM 明令禁止、行为未定义）；纯脚注引用 `[^a]`（无 URL 子节点）不在此列，照常渲染上标
+  const footnoteExcludes = [];
   syntaxTree(state).iterate({
     enter(node) {
       if (
@@ -511,10 +518,19 @@ function computeScan(state) {
         node.name === "Table"
       ) {
         excludeRanges.push({ from: node.from, to: node.to });
+        return;
+      }
+      if (node.name === "Link") {
+        for (let c = node.node.firstChild; c; c = c.nextSibling) {
+          if (c.name === "URL") {
+            footnoteExcludes.push({ from: node.from, to: node.to });
+            break;
+          }
+        }
       }
     },
   });
-  const ext = scanExtended(state.doc.toString(), excludeRanges);
+  const ext = scanExtended(state.doc.toString(), excludeRanges, footnoteExcludes);
   return { doc: state.doc, tree: syntaxTree(state), ext };
 }
 

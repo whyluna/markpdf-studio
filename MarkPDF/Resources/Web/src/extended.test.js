@@ -175,6 +175,15 @@ describe("脚注", () => {
     expect(refs).toHaveLength(0);
   });
 
+  it("带目标的写法 [^a](x) 按链接处理：footnoteExcludes 排除后不生成引用（批次四）", () => {
+    // lezer 将 [^注](2024) 整体解析为 Link；footnoteExcludes 由语法树 Link（含 URL）范围供给
+    const text = "[^注](2024) 与 [^a]";
+    const r = scanExtended(text, [], [{ from: 0, to: 10 }]);
+    expect(r.footnoteRefs.map((x) => x.label)).toEqual(["a"]);
+    // 对照：不传入排除时前缀会被误扫为引用（修复前行为）
+    expect(scanExtended(text).footnoteRefs).toHaveLength(2);
+  });
+
   it("非行首的 [^a]: 不是定义", () => {
     const { defs } = scanFootnotes("文字 [^a]: 并非定义");
     expect(defs).toHaveLength(0);

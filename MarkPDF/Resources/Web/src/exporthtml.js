@@ -30,7 +30,8 @@ export function extractTitle(docText) {
       continue;
     }
     if (inFence) continue;
-    const atx = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
+    // CommonMark：闭合 # 序列须前导空格、且之后只允许空白（"# C#" 的 # 属标题文本）
+    const atx = /^\s{0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
     if (atx) return plainText(atx[1]) || "Markdown 导出";
     // Setext：文本行 + === / --- 下划线
     if (line.trim() && i + 1 < lines.length && /^\s{0,3}(=+|-+)\s*$/.test(lines[i + 1])) {
@@ -81,7 +82,9 @@ export function collectPageStyles(doc = document) {
   return { inlineStyles, cssHrefs };
 }
 
-const escapeHTML = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// 双引号也要转义：本函数用于 href/data-theme/class 等属性值插值，裸 " 会截断属性
+const escapeHTML = (s) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
  * 包成独立 HTML 文档。cm-editor/cm-scroller/cm-content 外壳让收集到的

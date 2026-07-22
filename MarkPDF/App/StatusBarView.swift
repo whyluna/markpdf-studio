@@ -27,11 +27,11 @@ struct StatusBarView: View {
         Text("图片 · 查看")
         zoomControls(scale: imageStore.scale, onZoomIn: imageStore.zoomIn, onZoomOut: imageStore.zoomOut)
       default:
-        if let stats = tabStore.activeEditorStore?.stats {
-          // FR-2.8：字数 / 字符 / 预计阅读时长
-          Text("\(stats.words.formatted()) 字 · \(stats.characters.formatted()) 字符 · 约 \(stats.readingMinutes) 分钟")
+        if let store = tabStore.activeEditorStore {
+          MarkdownStatusView(store: store)
+        } else {
+          Text("Markdown · 所见即所得")
         }
-        Text("Markdown · \(tabStore.activeEditorStore?.mode.title ?? "所见即所得")")
       }
       Text("UTF-8")
     }
@@ -62,6 +62,19 @@ struct StatusBarView: View {
       }
     }
     .buttonStyle(.plain)
+  }
+}
+
+/// Markdown 状态区（FR-2.8 字数 / 字符 / 预计阅读时长 + 编辑模式）：
+/// 显式 @ObservedObject 注入 EditorStore——嵌套 ObservableObject 的变化不向上冒泡，
+/// 由真正读它的子视图持有观测，击键后字数 / 切模式后文案即时刷新
+private struct MarkdownStatusView: View {
+  @ObservedObject var store: EditorStore
+
+  var body: some View {
+    // FR-2.8：字数 / 字符 / 预计阅读时长
+    Text("\(store.stats.words.formatted()) 字 · \(store.stats.characters.formatted()) 字符 · 约 \(store.stats.readingMinutes) 分钟")
+    Text("Markdown · \(store.mode.title)")
   }
 }
 

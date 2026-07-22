@@ -5,10 +5,16 @@ import Foundation
 /// 目录扫描（WorkspaceStore）与 FSEvents 事件过滤（LiveFileWatcher）共用同一份名单与判定，
 /// 避免两处手写漂移。
 enum WorkspaceExcludedDirectories {
-  /// 跳过的大型依赖/版本控制目录
+  /// 跳过的大型依赖/版本控制/构建产物目录。
+  /// 保持原始大小写：WorkspaceStore 扫描按 lastPathComponent 精确匹配使用该名单（语义不变）；
+  /// isExcluded 的大小写不敏感判定走 lowercasedNames。
   static let names: Set<String> = [
     "node_modules", ".git", ".svn", ".hg", ".build", ".xcodeproj", "DerivedData",
+    "Pods", "Carthage", ".venv", "__pycache__", "target", "dist", "build", ".next", "vendor",
   ]
+
+  /// 小写副本：事件过滤判定大小写不敏感（Node_Modules 这类写法也挡）
+  private static let lowercasedNames = Set(names.map { $0.lowercased() })
 
   /// 事件路径是否落在排除目录子树内（相对监听根目录判定，与扫描排除语义一致）。
   /// 只判定根目录以下的相对部分：根目录自身路径若恰含同名目录（如 DerivedData）不影响监听。
@@ -23,7 +29,7 @@ enum WorkspaceExcludedDirectories {
       // 根目录自身的变更事件：不过滤
       return false
     }
-    return (relative as NSString).pathComponents.contains { names.contains($0) }
+    return (relative as NSString).pathComponents.contains { lowercasedNames.contains($0.lowercased()) }
   }
 }
 

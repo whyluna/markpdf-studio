@@ -89,3 +89,49 @@ describe("wysiwyg 装饰层（FR-2.4 扩展语法集成）", () => {
     }
   });
 });
+
+// 批次四·P1 回归：`[^a](x)` 被 lezer 整体解析为 Link，前缀不得再生成脚注 widget
+// （修复前：脚注 replace 与 Link 隐藏装饰 replace 相交——CM 明令禁止、行为未定义）
+describe("脚注引用与带目标链接的装饰重叠（[^注](2024)）", () => {
+  const DOC2 = "见 [^注](2024) 与纯引用 [^a]。\n\n[^a]: 定义\n";
+  const field2 = wysiwyg(false);
+  const state2 = EditorState.create({
+    doc: DOC2,
+    extensions: [markdown({ base: markdownLanguage }), field2],
+  });
+  const linkFrom = DOC2.indexOf("[^注]");
+  const linkTo = linkFrom + "[^注](2024)".length;
+
+  it("replace 装饰无重叠", () => {
+    expectNoOverlap(state2, field2);
+    // 光标逐行移动后同样无重叠
+    let s = state2;
+    for (let n = 1; n <= state2.doc.lines; n++) {
+      s = s.update({ selection: { anchor: state2.doc.line(n).from } }).state;
+      expectNoOverlap(s, field2);
+    }
+  });
+
+  it("[^注](2024) 整体按链接渲染：无 FootnoteRefWidget，带 cm-link 标记", () => {
+    let footnoteOnLink = false;
+    let linkMark = false;
+    state2.field(field2).between(0, 1e9, (from, to, v) => {
+      if (v.isReplace && v.spec?.widget?.constructor?.name === "FootnoteRefWidget") {
+        if (from < linkTo && to > linkFrom) footnoteOnLink = true;
+      }
+      if (!v.isReplace && v.spec?.class === "cm-link" && from <= linkFrom && to >= linkTo) {
+        linkMark = true;
+      }
+    });
+    expect(footnoteOnLink).toBe(false);
+    expect(linkMark).toBe(true);
+  });
+
+  it("纯脚注引用 [^a]（无括号后缀）仍渲染为上标", () => {
+    let count = 0;
+    state2.field(field2).between(0, 1e9, (_f, _t, v) => {
+      if (v.isReplace && v.spec?.widget?.constructor?.name === "FootnoteRefWidget") count++;
+    });
+    expect(count).toBe(1);
+  });
+});

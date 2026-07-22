@@ -4,7 +4,9 @@
 //   - 数学公式整体不得与排除范围相交；
 //   - 高亮仅两侧 == 标记不得落在排除范围内（内容区允许包含代码/公式）；
 //   - 脚注引用整体不得与排除范围相交，且不得紧跟 !（图片 alt）；
-//   - 脚注定义标记不得落在排除范围内。
+//   - 脚注定义标记不得落在排除范围内；
+//   - 脚注引用另不得落在 footnoteExcludes 内（带 URL 的 Link：`[^a](x)` 整体是链接，
+//     其前缀不得再生成脚注 widget——与 Link 的隐藏装饰 replace 相交，CM 明令禁止）。
 
 /* ---------- 工具 ---------- */
 
@@ -203,12 +205,16 @@ export function scanFootnotes(text, excludeRanges = []) {
 /**
  * 扫描全部扩展语法。公式优先：高亮/脚注扫描时把公式范围一并排除
  * （公式内的 == 与 [^a] 不算数，避免 replace 装饰互相重叠）。
+ * @param footnoteExcludes 仅脚注引用附加排除的范围（带 URL 的 Link 节点）：
+ * `[^a](x)` 被 lezer 整体解析为 Link，应按链接渲染、不生成脚注上标；
+ * 纯脚注引用 `[^a]`（无括号后缀，无 URL 子节点）不受影响。公式/高亮不在此排除——
+ * 链接文字内的 $x$ 等仍须生效（见 wysiwyg.test.js 普查）。
  */
-export function scanExtended(text, excludeRanges = []) {
+export function scanExtended(text, excludeRanges = [], footnoteExcludes = []) {
   const maths = scanMath(text, excludeRanges);
   const excl = [...excludeRanges, ...maths];
   const highlights = scanHighlights(text, excl);
-  const { refs, defs } = scanFootnotes(text, excl);
+  const { refs, defs } = scanFootnotes(text, [...excl, ...footnoteExcludes]);
   return { maths, highlights, footnoteRefs: refs, footnoteDefs: defs };
 }
 

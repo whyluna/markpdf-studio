@@ -27,6 +27,8 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
   var pendingFlash = false
   /// 当前是否有文本选区（FR-5.2 菜单启用条件；PDFReaderView 监听选区通知回写）
   @Published var hasSelection = false
+  /// 最近一次文档解析失败信息（Bug 修复 3；视图据此展示占位 + 重试按钮，NFR-5 用户可感知）
+  @Published var lastError: String?
 
   static let minScale: CGFloat = 0.5
   static let maxScale: CGFloat = 4.0
@@ -73,6 +75,23 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
     let flash = pendingFlash
     pendingFlash = false
     return (jump.page, flash)
+  }
+
+  // MARK: - 文档切换 / 加载失败
+
+  /// 切换文档时重置会话状态（Bug 修复 1/2）：
+  /// - 查找状态整体复位：findMatches 持有旧文档的 PDFSelection，不清理则切文档后
+  ///   ⌘G/回车会把旧 selection setCurrentSelection 到新文档（行为未定义），查找栏还显示旧命中数；
+  /// - 缩放归位 100%：避免旧文档倍率（如 2.0）在加载窗口期经 updateNSView 误关 autoScales，
+  ///   新文档失去自适应宽度（有存档缩放时由加载完成后的位置恢复重新设置）
+  func resetForDocumentSwitch() {
+    closeFindBar()
+    scale = 1.0
+  }
+
+  /// 上报文档解析失败（Bug 修复 3）：重试/再次加载成功前由视图层占位展示
+  func reportLoadFailure(for url: URL) {
+    lastError = "无法打开 PDF「\(url.lastPathComponent)」：文件可能已损坏或格式不受支持"
   }
 
   // MARK: - 页内搜索（FR-3.4）

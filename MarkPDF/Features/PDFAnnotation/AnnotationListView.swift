@@ -107,11 +107,20 @@ struct AnnotationListView: View {
 
   /// 改名提交：写入组内全部标注的 contents（标准属性，第三方阅读器可见）
   private func commitRename(_ item: AnnotationItem) {
+    // 仅仍处于该条目的改名状态才提交（Bug 修复 7）：Esc 取消已清 renamingID，
+    // 随后输入框移除引发的失焦回调不得把已取消的文本写回
+    guard Self.shouldCommitRename(renamingID: renamingID, itemID: item.id) else { return }
     let text = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
     for annotation in item.annotations {
       store.update(annotation) { $0.contents = text }
     }
     renamingID = nil
+  }
+
+  /// 改名提交守卫（Bug 修复 7）：仅仍处于该条目改名状态时才提交——
+  /// Esc 取消会先清 renamingID，之后 TextField 移除触发的失焦回调不得误提交
+  static func shouldCommitRename(renamingID: String?, itemID: String) -> Bool {
+    renamingID == itemID
   }
 
   private func delete(_ item: AnnotationItem) {
@@ -155,6 +164,12 @@ private struct AnnotationRow: View {
             .focused(renameFocused)
             .onSubmit(onRenameCommit)
             .onExitCommand(perform: onRenameCancel)
+            // 失焦提交（Bug 修复 7）：点击别处不丢弃已输入的名字
+            //（对齐 FileTreeView 命名框手感）；Esc 取消时父层已清 renamingID，
+            // commitRename 的守卫会拦截这次失焦回调
+            .onChange(of: renameFocused.wrappedValue) { focused in
+              if !focused { onRenameCommit() }
+            }
         } else {
           Text(item.displayText.isEmpty ? "（无文本）" : item.displayText)
             .font(.system(size: 13))

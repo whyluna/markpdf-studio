@@ -38,6 +38,11 @@ final class PDFAnnotationStore: ObservableObject {
   private weak var document: PDFDocument?
   /// 写回持续失败只提示一次（防抖窗口内反复重试），写回恢复后复位
   private var hasReportedWriteFailure = false
+  /// sidecar 读取/解码失败（Bug 修复 6）：内存标注不完整，禁止写回覆盖原文件；
+  /// 每次 attach 按加载结果重估（修复文件后重开即恢复写回）
+  private var sidecarLoadFailed = false
+  /// sidecar 加载持续失败只提示一次（attach 随分栏焦点切换反复发生），加载恢复后复位
+  private var hasReportedSidecarLoadFailure = false
 
   init(writer: AnnotationWriter = LiveAnnotationWriter(), defaults: UserDefaults = .standard) {
     self.writer = writer
@@ -73,12 +78,9 @@ final class PDFAnnotationStore: ObservableObject {
     let sidecar = Self.persistedSidecarPaths(defaults: defaults).contains(url.path)
     isSidecarMode = sidecar
     writer = sidecar ? SidecarAnnotationWriter(pdfURL: url) : LiveAnnotationWriter()
-    if sidecar, let data = try? Data(contentsOf: SidecarAnnotationStorage.sidecarURL(for: url)) {
-      // 只读模式：从 sidecar JSON 重建标注到页面
-      for (pageIndex, annotation) in SidecarAnnotationStorage.annotations(from: data) {
-        guard let page = document.page(at: pageIndex) else { continue }
-        page.addAnnotation(annotation)
-      }
+    if sidecar {
+      // 只读模式：从 sidecar JSON 重建标注到页面（失败经 lastError 上报，Bug 修复 6）
+      restoreSidecarAnnotations(into: document, url: url)
     }
     hasUnsavedChanges = false
     revision += 1
@@ -118,6 +120,33 @@ final class PDFAnnotationStore: ObservableObject {
     defaults.set(Array(paths), forKey: Self.sidecarPathsKey)
     isSidecarMode = enabled
     writer = enabled ? SidecarAnnotationWriter(pdfURL: url) : LiveAnnotationWriter()
+  }
+
+  /// 从 sidecar JSON 重建标注到页面（只读模式）。
+  /// 读取/解码失败经 lastError 上报（Bug 修复 6，NFR-5：不得静默吞成「无标注」），
+  /// 并标记 sidecarLoadFailed 禁止后续写回——内存标注不完整，写回会用残缺数据覆盖原文件
+  private func restoreSidecarAnnotations(into document: PDFDocument, url: URL) {
+    sidecarLoadFailed = false
+    let sidecarURL = SidecarAnnotationStorage.sidecarURL(for: url)
+    // 文件不存在是常态（开启只读模式后尚未产生任何标注写回），不算失败；
+    // 存在但读不出/解不开才是用户须感知的损坏
+    guard FileManager.default.fileExists(atPath: sidecarURL.path) else { return }
+    do {
+      let data = try Data(contentsOf: sidecarURL)
+      for (pageIndex, annotation) in try SidecarAnnotationStorage.annotations(from: data) {
+        guard let page = document.page(at: pageIndex) else { continue }
+        page.addAnnotation(annotation)
+      }
+      hasReportedSidecarLoadFailure = false
+    } catch {
+      sidecarLoadFailed = true
+      Logger.pdf.error("sidecar 标注加载失败 \(sidecarURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+      // 持续失败只提示一次（attach 随分栏焦点切换反复发生），避免弹窗轰炸
+      if !hasReportedSidecarLoadFailure {
+        hasReportedSidecarLoadFailure = true
+        lastError = "标注文件「\(sidecarURL.lastPathComponent)」读取失败：\(error.localizedDescription)。标注未加载；为保护原文件，本次不会向它写回。"
+      }
+    }
   }
 
   // MARK: - 标注变更
@@ -248,6 +277,12 @@ final class PDFAnnotationStore: ObservableObject {
 
   private func writeBackNow() {
     guard hasUnsavedChanges, let document, let url = currentFileURL else { return }
+    // sidecar 加载失败后禁止写回（Bug 修复 6）：内存标注不完整，写回会用残缺数据
+    // 覆盖原 sidecar；用户已在加载失败提示中被告知（修复/删除损坏文件后重开即恢复写回）
+    if isSidecarMode, sidecarLoadFailed {
+      Logger.pdf.error("sidecar 加载失败后跳过写回，避免覆盖原文件: \(url.path, privacy: .public)")
+      return
+    }
     do {
       try writer.writeBack(document: document, to: url)
       hasUnsavedChanges = false

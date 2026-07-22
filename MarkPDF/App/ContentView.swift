@@ -20,12 +20,8 @@ struct ContentView: View {
       splitView
       StatusBarView()
     }
-    // 退出前兜底落盘（FR-2.7）：全部标签 + PDF 标注写回（FR-4.6 防抖窗口内退出不丢）+ 工作区快照（FR-1.6）
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-      tabStore.flushAll()
-      annotationStore.flushPendingWrites()
-      stateStore.flush()
-    }
+    // 退出前兜底落盘（FR-2.7）已挪到 App 级（MarkPDFApp.init 注册 willTerminate）：
+    // 挂在视图上时，红钮关窗后再 ⌘Q 无人接收，防抖窗口内的保存/快照会丢
     // 标注写回失败提示（NFR-5；全局唯一挂载点，分栏时不重复呈现）
     .alert(
       "文件操作失败",
@@ -107,16 +103,7 @@ struct ContentView: View {
               // PDF 标注工具组（FR-4.4，对齐设计稿 #pdfTools）
               PDFToolsView()
             } else if let store = tabStore.activeEditorStore {
-              Picker("编辑模式", selection: Binding(
-                get: { store.mode },
-                set: { store.mode = $0 }
-              )) {
-                ForEach(MarkdownEditorView.EditorMode.allCases) { mode in
-                  Text(mode.title).tag(mode)
-                }
-              }
-              .pickerStyle(.segmented)
-              .frame(width: 260)
+              EditorModePicker(store: store)
             }
           }
           ToolbarItem(placement: .primaryAction) {
@@ -410,6 +397,25 @@ struct ContentView: View {
       )
       .padding(.top, 80)
     }
+  }
+}
+
+/// 编辑模式选择器（工具栏）：显式 @ObservedObject 注入 EditorStore——
+/// 嵌套 ObservableObject 的变化不向上冒泡，命令面板等外部入口切模式后选择器即时跟随
+private struct EditorModePicker: View {
+  @ObservedObject var store: EditorStore
+
+  var body: some View {
+    Picker("编辑模式", selection: Binding(
+      get: { store.mode },
+      set: { store.mode = $0 }
+    )) {
+      ForEach(MarkdownEditorView.EditorMode.allCases) { mode in
+        Text(mode.title).tag(mode)
+      }
+    }
+    .pickerStyle(.segmented)
+    .frame(width: 260)
   }
 }
 

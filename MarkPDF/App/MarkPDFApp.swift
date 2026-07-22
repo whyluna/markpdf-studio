@@ -4,18 +4,39 @@ import os
 @main
 struct MarkPDFApp: App {
   @StateObject private var workspaceStore = WorkspaceStore()
-  @StateObject private var tabStore = TabStore()
+  @StateObject private var tabStore: TabStore
   @StateObject private var pdfStore = PDFReaderStore()
   @StateObject private var pdfBookmarksStore = PDFBookmarksStore()
   @StateObject private var imageStore = ImagePreviewStore()
-  @StateObject private var annotationStore = PDFAnnotationStore()
+  @StateObject private var annotationStore: PDFAnnotationStore
   @StateObject private var readingPositionStore = PDFReadingPositionStore()
   @StateObject private var favoritesStore = FavoritesStore()
   @StateObject private var recentsStore = RecentFilesStore()
-  @StateObject private var stateStore = WorkspaceStateStore()
+  @StateObject private var stateStore: WorkspaceStateStore
   @StateObject private var settingsStore = SettingsStore()
   @StateObject private var searchStore = SearchStore()
   @StateObject private var backlinksStore = BacklinksStore()
+
+  init() {
+    let tabStore = TabStore()
+    let annotationStore = PDFAnnotationStore()
+    let stateStore = WorkspaceStateStore()
+    _tabStore = StateObject(wrappedValue: tabStore)
+    _annotationStore = StateObject(wrappedValue: annotationStore)
+    _stateStore = StateObject(wrappedValue: stateStore)
+    // 退出前兜底落盘（FR-2.7 全部标签 + FR-4.6 标注写回 + FR-1.6 快照）挂在 App 级：
+    // 红钮关窗后再 ⌘Q 时 ContentView 已销毁、无人接收通知，防抖窗口内的保存/快照会丢。
+    // 三个 store 均为 App 级单例，观察者随进程生命周期存续，无循环引用
+    NotificationCenter.default.addObserver(
+      forName: NSApplication.willTerminateNotification,
+      object: nil,
+      queue: .main
+    ) { _ in
+      tabStore.flushAll()
+      annotationStore.flushPendingWrites()
+      stateStore.flush()
+    }
+  }
 
   /// 当前标签是否可缩放（PDF / 图片）
   private var zoomable: Bool {

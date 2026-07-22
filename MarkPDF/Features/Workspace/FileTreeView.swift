@@ -139,8 +139,8 @@ struct FileTreeView: View {
     }
     .contextMenu { nodeMenu(node) }
     .onDrag { NSItemProvider(object: node.id as NSURL) }
-    .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-      node.isFolder ? handleDrop(providers, toFolder: node) : false
+    .onDrop(of: [.fileURL], isTargeted: nil) { _ in
+      node.isFolder ? handleDrop(toFolder: node) : false
     }
   }
 
@@ -298,15 +298,21 @@ struct FileTreeView: View {
     tabStore.fileWasTrashed(node.id)
   }
 
-  private func handleDrop(_ providers: [NSItemProvider], toFolder folder: FileNode) -> Bool {
-    guard let provider = providers.first else { return false }
-    provider.loadObject(ofClass: NSURL.self) { object, _ in
-      guard let url = object as? NSURL as URL? else { return }
-      DispatchQueue.main.async {
-        guard let dragged = store.node(for: url) else { return }
-        // 标签迁移由 store.onFileMoved 统一回调，视图层不再重复通知
-        _ = store.move(dragged, toFolder: folder.id, undo: undoManager)
-      }
+  private func handleDrop(toFolder folder: FileNode) -> Bool {
+    // performDrop 必须同步返回接受/拒绝，而 NSItemProvider 只能异步取 URL——
+    // 改从拖拽 pasteboard 同步读文件 URL 先校验（同一次拖拽会话内有效）：
+    // 查不到 node（工作区外文件）明确拒绝，原实现静默丢弃却显示拖放成功
+    guard let objects = NSPasteboard(name: .drag).readObjects(forClasses: [NSURL.self], options: nil),
+      !objects.isEmpty
+    else { return false }
+    // 去重后逐个解析为树节点（原实现只处理 providers.first，多选拖入会丢其余项）
+    var seen = Set<URL>()
+    let nodes = objects.compactMap { $0 as? URL }.filter { seen.insert($0).inserted }
+      .compactMap { store.node(for: $0) }
+    guard !nodes.isEmpty else { return false }
+    for node in nodes {
+      // 标签迁移由 store.onFileMoved 统一回调，视图层不再重复通知
+      _ = store.move(node, toFolder: folder.id, undo: undoManager)
     }
     return true
   }

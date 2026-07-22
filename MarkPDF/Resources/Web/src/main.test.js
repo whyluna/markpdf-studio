@@ -3,6 +3,7 @@
 // 内容变更经 300ms 防抖上报；pagehide / visibilitychange(→hidden) 时
 // 挂起的 contentChanged 必须立即发出（切标签/关标签销毁 webView 不丢尾巴）。
 import { describe, it, expect, vi, beforeAll } from "vitest";
+import { setSearchQuery, SearchQuery } from "@codemirror/search";
 
 // mock 桥接层：直接断言 notify 调用（bridge.js 的 console mock 无法区分消息类型断言）
 vi.mock("./bridge.js", () => ({
@@ -74,5 +75,90 @@ describe("main.js 防抖窗口兜底（B1）", () => {
     Bridge.notify.mockClear();
     window.dispatchEvent(new Event("pagehide"));
     expect(contentChangedCalls()).toHaveLength(0);
+  });
+});
+
+// 批次四：editor.scrollToLine 对非整数/NaN/越界行号的防御（修复前 doc.line(0.5) 抛 RangeError）
+describe("scrollToLine 行号防御", () => {
+  const handler = () =>
+    Bridge.onMessage.mock.calls.find(([type]) => type === "editor.scrollToLine")?.[1];
+
+  beforeAll(() => {
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "一\n二\n三\n四\n五" } });
+  });
+
+  it("非整数/NaN/负数/越界：截尾取整后 clamp，不抛异常", () => {
+    const h = handler();
+    expect(h).toBeTruthy();
+    expect(() => h({ line: 0.5 })).not.toThrow();
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(1);
+    h({ line: NaN });
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(1);
+    h({ line: 3.9 });
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(3);
+    h({ line: 9999 });
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(5);
+    h({ line: -5 });
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(1);
+  });
+});
+
+// 批次四：查找面板 ↑↓ 步进到末/首命中后回绕（修复前越过末命中即停）
+describe("查找面板 ↑↓ 回绕", () => {
+  // 构造面板内目标元素并派发按键（监听器要求 target 在 .cm-search 内）
+  function pressSearchArrow(key) {
+    const panel = document.createElement("div");
+    panel.className = "cm-search";
+    const input = document.createElement("input");
+    panel.append(input);
+    view.dom.append(panel);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    panel.remove();
+  }
+
+  beforeAll(() => {
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "a x b x c" } });
+    view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: "x" })) });
+  });
+
+  it("末命中后 ↓ 回绕到首个；首命中前 ↑ 回绕到末个", () => {
+    // 文档 "a x b x c"：两个命中 [2,3] 与 [6,7]
+    view.dispatch({ selection: { anchor: 6, head: 7 } });
+    pressSearchArrow("ArrowDown");
+    expect([view.state.selection.main.anchor, view.state.selection.main.head]).toEqual([2, 3]);
+
+    pressSearchArrow("ArrowUp");
+    expect([view.state.selection.main.anchor, view.state.selection.main.head]).toEqual([6, 7]);
+  });
+
+  it("中间命中正常步进（不触发回绕）", () => {
+    view.dispatch({ selection: { anchor: 2, head: 3 } });
+    pressSearchArrow("ArrowDown");
+    expect([view.state.selection.main.anchor, view.state.selection.main.head]).toEqual([6, 7]);
+  });
+});
+
+// 批次四：图片粘贴失败（桥超时/FileReader 错误）经 console.error 留诊断（修复前完全静默）
+describe("图片粘贴失败上报", () => {
+  it("桥请求 reject → console.error 留诊断信息", async () => {
+    Bridge.request.mockRejectedValueOnce(new Error("bridge timeout: editor.saveImage"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const e = new Event("paste", { bubbles: true, cancelable: true });
+      e.clipboardData = {
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => new File(["x"], "a.png", { type: "image/png" }),
+          },
+        ],
+      };
+      view.dom.dispatchEvent(e);
+      await vi.waitFor(() => expect(errSpy).toHaveBeenCalled());
+      expect(String(errSpy.mock.calls[0][1])).toContain("editor.saveImage");
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

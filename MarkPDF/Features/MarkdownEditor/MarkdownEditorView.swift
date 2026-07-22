@@ -309,12 +309,15 @@ extension MarkdownEditorView {
       bridge.notify(.setContent, payload: contentPayload(text))
     }
 
-    /// 从内核取回最新文本（保存快捷键等场景）
-    func fetchContent(completion: @escaping (String) -> Void) {
+    /// 从内核取回最新文本（视图销毁前兜底取回用）。
+    /// 失败/异常载荷也回调（nil）：调用方在回调里收口 webView 强引用，失败路径不得静默悬挂
+    func fetchContent(completion: @escaping (String?) -> Void) {
       bridge.request(.getContent) { result in
-        if case .success(let payload) = result, let text = payload["text"] as? String {
-          completion(text)
+        guard case .success(let payload) = result, let text = payload["text"] as? String else {
+          completion(nil)
+          return
         }
+        completion(text)
       }
     }
 
@@ -326,7 +329,8 @@ extension MarkdownEditorView {
       fetchContent { [weak self] fetched in
         withExtendedLifetime(webView) {}
         Task { @MainActor [weak self] in
-          guard let self, fetched != baseline else { return }
+          // 取回失败（nil）或与宿主一致：无需回写
+          guard let self, let fetched, fetched != baseline else { return }
           self.parent.onContentChanged?(fetched)
         }
       }

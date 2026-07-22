@@ -326,7 +326,10 @@ Bridge.onMessage("editor.exportHTML", (_p, id) => {
 
 // 大纲跳转（FR-2.6）：滚动到指定行并落光标
 function scrollToLine(line, focus = true) {
-  const clamped = Math.max(1, Math.min(line ?? 1, view.state.doc.lines));
+  // 非整数/NaN/Infinity 防御：doc.line 要求 1..doc.lines 的整数（doc.line(0.5) 抛 RangeError），
+  // initialLine 等 native 载荷经同一入口统一收口（截尾取整后 clamp）
+  const n = Number.isFinite(line) ? Math.trunc(line) : 1;
+  const clamped = Math.max(1, Math.min(n, view.state.doc.lines));
   const pos = view.state.doc.line(clamped).from;
   view.dispatch({
     selection: { anchor: pos },
@@ -369,11 +372,13 @@ function stepSearchMatch(backward) {
   const query = getSearchQuery(view.state);
   if (!query.valid) return;
   const main = view.state.selection.main;
-  // SearchQuery 是规格对象，nextMatch/prevMatch 在其 create() 的 QueryType 上
+  // SearchQuery 是规格对象，nextMatch/prevMatch 在其 create() 的 QueryType 上。
+  // 越过末/首命中时回绕（nextMatch 越界返回 null 即停，与面板按钮的回绕行为对齐）
   const qt = query.create();
   const match = backward
-    ? qt.prevMatch(view.state, main.from, main.from)
-    : qt.nextMatch(view.state, main.to, main.to);
+    ? qt.prevMatch(view.state, main.from, main.from) ??
+      qt.prevMatch(view.state, view.state.doc.length, view.state.doc.length)
+    : qt.nextMatch(view.state, main.to, main.to) ?? qt.nextMatch(view.state, 0, 0);
   if (!match) return;
   view.dispatch({
     selection: { anchor: match.from, head: match.to },
@@ -447,7 +452,9 @@ function handleImageFile(file) {
       if (p && p.path) insertImageLink(p.path);
       // 失败（{error}）时 native 已弹提示，此处静默
     })
-    .catch(() => {});
+    // 桥协议暂无错误上报通道（MessageType 无 editor.error）：3s 超时 / FileReader 失败
+    // 只能留控制台诊断（WKWebView 可用 Safari Web 检查器查看），避免完全静默
+    .catch((err) => console.error("[markpdf] 图片存盘失败：", err));
 }
 
 // 粘贴：剪贴板含图片时接管，否则交给 CM 默认文本粘贴
@@ -483,7 +490,9 @@ view.dom.addEventListener("dragover", (e) => {
   if (hasImage) e.preventDefault();
 });
 
-Bridge.notify("editor.ready", { version: "0.1.0" });
+// 就绪通知：不带 version 字段——native 两侧 ready 处理器（MarkdownEditorView /
+// MarkdownExportSession）均不读 payload，硬编码版本号只会与应用版本脱节
+Bridge.notify("editor.ready");
 
 // 调试句柄：供 native 探针/浏览器控制台诊断坐标映射（不影响功能）
 window.__cmView = view;

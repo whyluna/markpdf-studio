@@ -538,6 +538,12 @@ final class AnnotationToolbarController: NSObject {
 }
 
 extension AnnotationToolbarController: NSPopoverDelegate {
+  /// 光标定位用的 UTF-16 长度（Bug 修复 5）：NSTextView.setSelectedRange 按 UTF-16 计数，
+  /// String.count 是 Character 数——含 emoji（占 2 个 UTF-16 码元）时光标会落进文本中间
+  static func utf16Length(of string: String) -> Int {
+    (string as NSString).length
+  }
+
   /// 弹出完成后把焦点放进文本区（新建/编辑都直接出光标）
   func popoverDidShow(_ notification: Notification) {
     guard let view = commentPopover?.contentViewController?.view,
@@ -545,7 +551,7 @@ extension AnnotationToolbarController: NSPopoverDelegate {
     else { return }
     view.window?.makeFirstResponder(textView)
     // 光标移到文末并显式重启闪烁——否则插入点要等首次击键才出现
-    textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+    textView.setSelectedRange(NSRange(location: Self.utf16Length(of: textView.string), length: 0))
     textView.updateInsertionPointStateAndRestartTimer(true)
   }
 

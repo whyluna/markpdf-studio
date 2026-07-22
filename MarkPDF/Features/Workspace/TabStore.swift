@@ -155,7 +155,10 @@ final class TabStore: ObservableObject {
       for state in states {
         let url = state.path.map { URL(fileURLWithPath: $0) }
         let kind = FileNode.Kind(rawValue: state.kind) ?? .markdown
-        group.tabs.append(EditorTab(url: url, kind: kind))
+        let tab = EditorTab(url: url, kind: kind)
+        // 动作阶段预建编辑状态（body 只读已建好的 store，不在视图更新途中创建）
+        group.prepareStore(for: tab)
+        group.tabs.append(tab)
       }
       return group
     }

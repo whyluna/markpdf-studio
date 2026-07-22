@@ -245,7 +245,7 @@ final class EditorStore: ObservableObject {
     ```swift
     // 代码块语法高亮
     let bridge = WebBridge()
-    bridge.notify("editor.setContent", payload: ["text": text])
+    bridge.notify(.setContent, payload: ["text": text])
     ```
 
     - [x] 内核嵌入 App

@@ -30,7 +30,7 @@ struct SettingsView: View {
           Text(mode.title).tag(mode)
         }
       }
-      // FR-3.6：阅读主题（白天/羊皮纸/夜间）
+      // FR-3.6：阅读主题（白天/夜间）
       Picker("PDF 阅读主题", selection: $settings.pdfReadingTheme) {
         ForEach(SettingsStore.PDFReadingTheme.allCases) { theme in
           Text(theme.title).tag(theme)
