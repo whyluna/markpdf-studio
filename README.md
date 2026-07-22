@@ -62,6 +62,10 @@ open MarkPDF.xcodeproj   # Cmd+R 运行
 
 测试：Swift 单元测试 `xcodebuild -scheme MarkPDF test`；编辑器内核测试 `cd MarkPDF/Resources/Web && npm test`。
 
+## 文档
+
+- [**功能说明**](docs/功能说明.md)：完整功能与快捷键手册（Markdown 语法、PDF 标注、联动、设置、已知限制）
+
 ## License
 
 [MIT](LICENSE)
