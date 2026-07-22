@@ -297,7 +297,7 @@ extension MarkdownEditorView {
       bridge.notify(.scrollToLine, payload: ["line": line])
     }
 
-    /// 外部载入新文档（打开文件时使用）；整体替换内容，不打断内核撤销栈之外的编辑
+    /// 外部载入新文档（打开文件时使用）；整体替换内容并重置内核撤销栈（换档即重置，防跨档 ⌘Z 串档）
     func loadDocument(_ text: String) {
       guard isReady else { return }
       bridge.notify(.setContent, payload: contentPayload(text))
