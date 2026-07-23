@@ -48,23 +48,9 @@ struct KeychainAIKeyStorage: AIKeyStorage {
   }
 }
 
-/// 内存实现（测试用）
-final class InMemoryAIKeyStorage: AIKeyStorage {
-  private var map: [String: String] = [:]
-
-  func string(for account: String) -> String? { map[account] }
-
-  func set(_ value: String?, for account: String) {
-    guard let value, !value.isEmpty else {
-      map.removeValue(forKey: account)
-      return
-    }
-    map[account] = value
-  }
-}
-
 /// API Key 门面（FR-AI.4）：Key 本体只经 apiKey(for:) 取出送进请求头，
 /// UI 只观察「已配置」集合做状态展示，永不回显明文。
+/// 内存实现（InMemoryAIKeyStorage）在测试 target（MarkPDFTests/TestAIHelpers.swift）
 @MainActor
 final class AIKeyStore: ObservableObject {
   /// 已保存 Key 的 account（Provider rawValue）集合
@@ -82,9 +68,12 @@ final class AIKeyStore: ObservableObject {
   }
 
   func save(_ key: String, for account: String) {
-    storage.set(key, for: account)
+    // 粘贴自网页/密码管理器的 key 常带换行或空格：CFNetwork 会静默丢弃含 \n 的
+    // 头值（请求不带鉴权发出、全线 401 且极难排查），保存前清洗
+    let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+    storage.set(trimmed, for: account)
     // 空串在存储层视为删除，状态集合同步口径
-    if key.isEmpty {
+    if trimmed.isEmpty {
       configuredAccounts.remove(account)
     } else {
       configuredAccounts.insert(account)

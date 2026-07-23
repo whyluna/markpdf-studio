@@ -158,9 +158,10 @@ final class AnnotationToolbarController: NSObject {
       Logger.ai.debug("[TR ctrl] 去重：同文本已成功")
       return
     }
-    // AI 引擎首次使用需隐私确认（选中文本将发往第三方 Provider）
+    // AI 引擎首次使用需隐私确认（选中文本将发往第三方 Provider）；
+    // 自动触发不轰炸（会话级已拒则静默落失败态），手动点击仍会再弹
     if aiSettings.settings.translationEngine == .ai,
-      !AIPrivacyGate.ensureAcknowledged(store: aiSettings)
+      !AIPrivacyGate.ensureAcknowledged(store: aiSettings, allowPrompt: !isAutomatic)
     {
       translationStore.presentFailure("已取消翻译：首次使用 AI 功能需确认隐私告知", for: text)
       return

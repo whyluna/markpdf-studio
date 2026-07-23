@@ -37,6 +37,31 @@ final class AIProviderTests: XCTestCase {
     XCTAssertEqual(request.url?.absoluteString, "https://api.deepseek.com/v1/chat/completions")
   }
 
+  /// 多个尾部斜杠全部去除（`https://x.com/v1//` 不再拼出 `//chat/completions`）
+  func testMultipleTrailingSlashesStripped() throws {
+    let config = AIProviderConfig(isEnabled: true, baseURL: "https://api.deepseek.com/v1//", model: "m")
+    let request = try AIRequestBuilder.chatRequest(
+      family: .openAICompatible, config: config, apiKey: "k", messages: [.user("hi")], stream: false
+    )
+    XCTAssertEqual(request.url?.absoluteString, "https://api.deepseek.com/v1/chat/completions")
+  }
+
+  /// 公网 http 拒绝（Bearer Key 不明文出网）；本地回环 http 放行（mock 调试）
+  func testPlainHTTPRejectedExceptLoopback() throws {
+    let pub = AIProviderConfig(isEnabled: true, baseURL: "http://api.deepseek.com", model: "m")
+    XCTAssertThrowsError(
+      try AIRequestBuilder.chatRequest(family: .openAICompatible, config: pub, apiKey: "k", messages: [.user("hi")], stream: false)
+    ) { error in
+      guard case .invalidConfiguration = error as? AIServiceError else {
+        return XCTFail("期望 invalidConfiguration，实际 \(error)")
+      }
+    }
+    let local = AIProviderConfig(isEnabled: true, baseURL: "http://127.0.0.1:8899", model: "m")
+    XCTAssertNoThrow(
+      try AIRequestBuilder.chatRequest(family: .openAICompatible, config: local, apiKey: "k", messages: [.user("hi")], stream: false)
+    )
+  }
+
   func testAnthropicRequest() throws {
     let request = try AIRequestBuilder.chatRequest(
       family: .anthropic,

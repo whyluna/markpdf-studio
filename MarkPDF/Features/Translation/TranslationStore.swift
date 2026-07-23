@@ -22,8 +22,12 @@ final class TranslationStore: ObservableObject {
   @Published private(set) var sourceText = ""
   /// 结果来源标注（气泡右上角：系统翻译 / Provider 名）
   @Published private(set) var engineTitle = ""
+  /// AI 引擎输入超长被截断（气泡注明用；系统翻译端侧处理无需截断）
+  @Published private(set) var wasTruncated = false
   /// 系统翻译请求：非 nil 即触发气泡的 .translationTask
   @Published var systemConfiguration: TranslationSession.Configuration?
+  /// AI 引擎输入上限（FR-AI.1 口径 2000 字）：长选区译文会超 maxTokens 被静默掐断，先截输入
+  static let maxAIInputCharacters = 2000
 
   /// 实例短 ID（诊断"成功写回与可见气泡是否同一 Store"）
   private let instanceID = String(UUID().uuidString.prefix(4))
@@ -53,6 +57,7 @@ final class TranslationStore: ObservableObject {
     phase = .hidden
     sourceText = ""
     engineTitle = ""
+    wasTruncated = false
     pendingSystemText = nil
     watchdog?.cancel()
     watchdog = nil
@@ -88,6 +93,8 @@ final class TranslationStore: ObservableObject {
     }
     switch settings.settings.translationEngine {
     case .system:
+      // 系统翻译端侧处理，无需截断
+      wasTruncated = false
       startSystemTranslation(trimmed, source: source, target: target)
     case .ai:
       startAITranslation(trimmed, target: target)
@@ -173,10 +180,14 @@ final class TranslationStore: ObservableObject {
       return
     }
     engineTitle = kind.title
+    // AI 引擎输入截断（FR-AI.1 口径 2000 字）：长选区译文会超 maxTokens 被静默掐断，
+    // 先截输入并在气泡注明；系统翻译引擎无此处理
+    let input = String(text.prefix(Self.maxAIInputCharacters))
+    wasTruncated = input.count < text.count
     let config = settings.config(for: kind)
     let messages = [
       AIChatMessage.system(TranslationPromptBuilder.systemMessage),
-      AIChatMessage.user(TranslationPromptBuilder.userPrompt(text: text, target: target)),
+      AIChatMessage.user(TranslationPromptBuilder.userPrompt(text: input, target: target)),
     ]
     Task {
       do {
@@ -191,7 +202,8 @@ final class TranslationStore: ObservableObject {
       } catch {
         guard sourceText == text else { return }
         let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        Logger.ai.error("AI 翻译失败: \(description, privacy: .public)")
+        let safe = (error as? AIServiceError)?.logSafeDescription ?? "未知错误"
+        Logger.ai.error("AI 翻译失败: \(safe, privacy: .public)")
         phase = .failure(description)
       }
     }

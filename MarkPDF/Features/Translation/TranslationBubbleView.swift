@@ -104,6 +104,11 @@ struct TranslationBubbleView: View {
           }
           .frame(maxWidth: .infinity, alignment: .leading)
         case .success(let translated):
+          if store.wasTruncated {
+            Text("原文超长，AI 引擎仅翻译前 \(TranslationStore.maxAIInputCharacters) 字")
+              .font(.caption2)
+              .foregroundStyle(.orange)
+          }
           // 高度上限 240pt、超出滚动；AppKit 文本区：I 形光标/文本选择原生正确，
           // overlay 滚动条不占轨道（无 SwiftUI 滚动条的白底突兀）
           SelectableTextView(text: translated)

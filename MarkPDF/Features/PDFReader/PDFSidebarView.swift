@@ -202,9 +202,10 @@ private struct PDFThumbnailListView: View {
   @StateObject private var cache = ThumbnailCache()
 
   private var document: PDFDocument? { pdfStore.pdfView?.document }
-  /// 文档标识（换文档后缓存键与单元任务随之失效）
+  /// 文档标识（换文档后缓存键与单元任务随之失效）：
+  /// 用文档 URL 而非 ObjectIdentifier——后者地址复用即串档显示旧文档缩略图
   private var docKey: String {
-    document.map { "\(UInt(bitPattern: ObjectIdentifier($0).hashValue))" } ?? "none"
+    document?.documentURL?.path ?? "none"
   }
 
   var body: some View {
@@ -284,12 +285,23 @@ private struct ThumbnailCell: View {
   }
 }
 
-/// 缩略图缓存：后台生成（237 页级文档不能在主线程逐页渲染），按文档+页码缓存
+/// 缩略图缓存：后台生成（237 页级文档不能在主线程逐页渲染），按文档+页码缓存。
+/// 容量 FIFO 上限 + 换文档清空：237 页滚一遍 ~250MB 位图不再无界驻留
 @MainActor
 private final class ThumbnailCache: ObservableObject {
   private var images: [String: NSImage] = [:]
+  private var order: [String] = []
+  /// 缓存页数上限（约 80 页 × ~1MB）
+  private let limit = 80
+  private var currentDocKey = ""
 
   func image(pageIndex: Int, docKey: String, in document: PDFDocument) async -> NSImage? {
+    // 换文档清空：旧文档位图不驻留
+    if docKey != currentDocKey {
+      images.removeAll()
+      order.removeAll()
+      currentDocKey = docKey
+    }
     let key = "\(docKey)-\(pageIndex)"
     if let hit = images[key] { return hit }
     guard let page = document.page(at: pageIndex) else { return nil }
@@ -298,6 +310,11 @@ private final class ThumbnailCache: ObservableObject {
       page.thumbnail(of: NSSize(width: 232, height: 320), for: .cropBox)
     }.value
     images[key] = image
+    order.append(key)
+    if order.count > limit, let evicted = order.first {
+      order.removeFirst()
+      images.removeValue(forKey: evicted)
+    }
     return image
   }
 }

@@ -22,6 +22,17 @@ enum AIServiceError: LocalizedError, Equatable {
       "响应格式无法识别"
     }
   }
+
+  /// 日志安全描述（规范 §6「日志不落正文」：错误体摘录可能含敏感回显，只用于 UI 展示）
+  var logSafeDescription: String {
+    switch self {
+    case .missingAPIKey: "未配置 API Key"
+    case .invalidConfiguration: "配置无效"
+    case .httpStatus(let status, _): "HTTP \(status)"
+    case .provider: "Provider 错误"
+    case .invalidResponse: "响应格式无法识别"
+    }
+  }
 }
 
 /// 请求构造（FR-AI.4）：纯函数不触网，可单测。
@@ -96,10 +107,15 @@ enum AIRequestBuilder {
   }
 
   private static func baseRequest(url: String) throws -> URLRequest {
-    guard let url = URL(string: url) else {
-      throw AIServiceError.invalidConfiguration("Base URL 无法解析（\(url)）")
+    guard let parsed = URL(string: url) else {
+      throw AIServiceError.invalidConfiguration("Base URL 无法解析")
     }
-    var request = URLRequest(url: url, timeoutInterval: 60)
+    // Bearer/x-api-key 会随请求发出：必须 https；仅本地回环（mock 调试）放行 http，防明文泄钥
+    let loopback = ["127.0.0.1", "localhost", "::1"].contains(parsed.host ?? "")
+    guard parsed.host != nil, parsed.scheme == "https" || (parsed.scheme == "http" && loopback) else {
+      throw AIServiceError.invalidConfiguration("Base URL 必须是 https 地址（本地调试可用 http://127.0.0.1）")
+    }
+    var request = URLRequest(url: parsed, timeoutInterval: 60)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     return request
@@ -107,9 +123,9 @@ enum AIRequestBuilder {
 }
 
 private extension AIProviderConfig {
-  /// 去掉尾部 / 的 baseURL，供拼接端点路径
+  /// 去掉全部尾部 / 的 baseURL，供拼接端点路径（`https://x.com/v1//` 不再拼出双斜杠）
   var endpoint: String {
-    baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
+    baseURL.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
   }
 }
 

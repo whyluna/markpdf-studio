@@ -27,6 +27,19 @@ final class AIKeyStoreTests: XCTestCase {
   }
 
   @MainActor
+  func testSaveTrimsWhitespaceAndNewlines() {
+    let store = AIKeyStore(storage: InMemoryAIKeyStorage())
+    // 粘贴自网页的 key 常带尾换行/空格：含 \n 的头值会被 CFNetwork 静默丢弃（全线 401）
+    store.save("  sk-abc123\n", for: "openai")
+    XCTAssertEqual(store.apiKey(for: "openai"), "sk-abc123")
+    XCTAssertTrue(store.configuredAccounts.contains("openai"))
+    // 清洗后为空等同删除
+    store.save(" \n ", for: "openai")
+    XCTAssertNil(store.apiKey(for: "openai"))
+    XCTAssertFalse(store.configuredAccounts.contains("openai"))
+  }
+
+  @MainActor
   func testAccountsAreIsolated() {
     let store = AIKeyStore(storage: InMemoryAIKeyStorage())
     store.save("sk-a", for: "openai")

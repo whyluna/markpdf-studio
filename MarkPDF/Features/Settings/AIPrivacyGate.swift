@@ -4,9 +4,14 @@ import AppKit
 /// 明确告知内容将发往用户自行配置的第三方服务；「继续」记忆选择，之后不再弹。
 @MainActor
 enum AIPrivacyGate {
+  /// 会话级拒绝记忆：用户点过「取消」后，自动触发（划词松手）不再重弹模态窗轰炸；
+  /// 仅手动点击（用户明确意图）才再次提示
+  private static var declinedThisSession = false
+
   @discardableResult
-  static func ensureAcknowledged(store: AISettingsStore) -> Bool {
+  static func ensureAcknowledged(store: AISettingsStore, allowPrompt: Bool = true) -> Bool {
     if store.privacyNoticeAcknowledged { return true }
+    if declinedThisSession, !allowPrompt { return false }
     let alert = NSAlert()
     alert.messageText = "使用 AI 功能前请知悉"
     alert.informativeText = """
@@ -21,6 +26,9 @@ enum AIPrivacyGate {
     let acknowledged = alert.runModal() == .alertFirstButtonReturn
     if acknowledged {
       store.privacyNoticeAcknowledged = true
+      declinedThisSession = false
+    } else {
+      declinedThisSession = true
     }
     return acknowledged
   }
