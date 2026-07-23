@@ -36,7 +36,7 @@ struct PDFSidebarView: View {
       Divider()
       switch segment {
       case .thumbnails:
-        PDFThumbnailRepresentable(pdfView: pdfStore.pdfView)
+        PDFThumbnailListView()
       case .bookmarks:
         bookmarkContent
       case .annotations:
@@ -192,23 +192,113 @@ private struct BookmarkRow: View {
   }
 }
 
-// MARK: - 缩略图（PDFKit 原生）
+// MARK: - 缩略图（自绘列表）
 
-/// PDFKit 缩略图视图：直连当前 PDFView，页码跟踪与点击跳转由系统完成
-private struct PDFThumbnailRepresentable: NSViewRepresentable {
-  weak var pdfView: PDFView?
+/// 自绘缩略图列表：原生 PDFThumbnailView 依赖 `currentPage`/`PDFViewPageChanged`，
+/// 二者在连续滚动中都不更新（实测日志确认），观感是「滚动停稳一秒后缩略图才跳」。
+/// 自绘列表由 Store 的 currentPage（滚动实时跟页直写）驱动：实时高亮 + 滚到当前页
+private struct PDFThumbnailListView: View {
+  @EnvironmentObject private var pdfStore: PDFReaderStore
+  @StateObject private var cache = ThumbnailCache()
 
-  func makeNSView(context: Context) -> PDFThumbnailView {
-    let view = PDFThumbnailView()
-    view.pdfView = pdfView
-    view.thumbnailSize = NSSize(width: 120, height: 160)
-    return view
+  private var document: PDFDocument? { pdfStore.pdfView?.document }
+  /// 文档标识（换文档后缓存键与单元任务随之失效）
+  private var docKey: String {
+    document.map { "\(UInt(bitPattern: ObjectIdentifier($0).hashValue))" } ?? "none"
   }
 
-  func updateNSView(_ nsView: PDFThumbnailView, context: Context) {
-    if nsView.pdfView !== pdfView {
-      nsView.pdfView = pdfView
+  var body: some View {
+    ScrollViewReader { proxy in
+      ScrollView {
+        LazyVStack(spacing: 12) {
+          if let document, pdfStore.pageCount > 0 {
+            ForEach(1...pdfStore.pageCount, id: \.self) { page in
+              ThumbnailCell(
+                pageNumber: page,
+                isCurrent: page == pdfStore.currentPage,
+                taskKey: "\(docKey)-\(page)",
+                loadImage: { await cache.image(pageIndex: page - 1, docKey: docKey, in: document) },
+                onTap: { pdfStore.goTo(page: page) }
+              )
+              .id(page)
+            }
+          }
+        }
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+      }
+      .onAppear {
+        proxy.scrollTo(pdfStore.currentPage, anchor: .center)
+      }
+      .onChange(of: pdfStore.currentPage) { page in
+        withAnimation(.easeOut(duration: 0.15)) {
+          proxy.scrollTo(page, anchor: .center)
+        }
+      }
     }
+  }
+}
+
+/// 单页缩略图（懒加载 + 当前页高亮）
+private struct ThumbnailCell: View {
+  let pageNumber: Int
+  let isCurrent: Bool
+  /// 图片加载任务标识（文档 + 页码；换文档后触发重载）
+  let taskKey: String
+  let loadImage: () async -> NSImage?
+  let onTap: () -> Void
+  @State private var image: NSImage?
+
+  var body: some View {
+    VStack(spacing: 4) {
+      Group {
+        if let image {
+          Image(nsImage: image)
+            .resizable()
+            .scaledToFit()
+        } else {
+          Rectangle()
+            .fill(Color.primary.opacity(0.04))
+            .aspectRatio(0.72, contentMode: .fit)
+        }
+      }
+      .frame(width: 116)
+      .background(Color.white)
+      .overlay(
+        RoundedRectangle(cornerRadius: 3)
+          .stroke(
+            isCurrent ? Color.accentColor : Color.primary.opacity(0.15),
+            lineWidth: isCurrent ? 2.5 : 1
+          )
+      )
+      Text("\(pageNumber)")
+        .font(.caption)
+        .fontWeight(isCurrent ? .semibold : .regular)
+        .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
+    }
+    .contentShape(Rectangle())
+    .onTapGesture(perform: onTap)
+    .task(id: taskKey) {
+      image = await loadImage()
+    }
+  }
+}
+
+/// 缩略图缓存：后台生成（237 页级文档不能在主线程逐页渲染），按文档+页码缓存
+@MainActor
+private final class ThumbnailCache: ObservableObject {
+  private var images: [String: NSImage] = [:]
+
+  func image(pageIndex: Int, docKey: String, in document: PDFDocument) async -> NSImage? {
+    let key = "\(docKey)-\(pageIndex)"
+    if let hit = images[key] { return hit }
+    guard let page = document.page(at: pageIndex) else { return nil }
+    // 2x 尺寸供 Retina 显示（展示宽 116pt）
+    let image = await Task.detached(priority: .utility) {
+      page.thumbnail(of: NSSize(width: 232, height: 320), for: .cropBox)
+    }.value
+    images[key] = image
+    return image
   }
 }
 

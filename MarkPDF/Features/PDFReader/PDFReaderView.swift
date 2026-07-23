@@ -256,6 +256,10 @@ struct PDFReaderView: NSViewRepresentable {
     private var spinner: NSProgressIndicator?
     /// 解析失败占位视图（Bug 修复 3：重试入口）
     private var failureHosting: NSHostingView<PDFLoadFailureView>?
+    /// 是否已挂上滚动实时监听（clip view 跨文档复用，避免重复注册）
+    private var isObservingScroll = false
+    /// 滚动实时监听记录的当前页（0 起；-1 = 未知）
+    private var lastLivePageIndex = -1
 
     init(_ parent: PDFReaderView) {
       self.parent = parent
@@ -289,6 +293,8 @@ struct PDFReaderView: NSViewRepresentable {
           }
           pdfView.document = document
           pdfView.autoScales = true
+          self.lastLivePageIndex = -1
+          self.startScrollObservationIfNeeded()
           // 分栏双 PDF：仅本 pane 当前持有焦点时才关联标注 Store——否则后加载完成的
           // 视图会覆盖先加载视图的关联，把 A 窗标注写进 B 文档（焦点切换由 claimFocus 补关联）
           if self.parent.pdfStore.pdfView === pdfView {
@@ -352,18 +358,57 @@ struct PDFReaderView: NSViewRepresentable {
       loadDocumentAsync(url: url)
     }
 
-    /// 同步页码/总页数到 Store
+    /// 同步页码/总页数到 Store（页码用视口中心页，与滚动实时跟页同一口径）
     func syncPageState() {
       guard let pdfView, let doc = pdfView.document else { return }
       parent.pdfStore.pageCount = doc.pageCount
-      if let page = pdfView.currentPage {
+      if let page = visibleCenterPage() ?? pdfView.currentPage {
         parent.pdfStore.currentPage = doc.index(for: page) + 1
       }
+    }
+
+    /// 视口中心对应的页（滚动中实时准确；PDFKit 的 currentPage 在连续滚动中不更新）
+    private func visibleCenterPage() -> PDFPage? {
+      guard let pdfView else { return nil }
+      return pdfView.page(
+        for: CGPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY), nearest: true)
     }
 
     @objc func pageChanged(_ note: Notification) {
       syncPageState()
       schedulePositionSave()
+    }
+
+    // MARK: - 滚动实时跟页（缩略图/页码同步）
+
+    /// PDFKit 限制（实测日志确认）：连续滚动中 `currentPage` 不更新、
+    /// `PDFViewPageChanged` 要等滚动停稳约 1s 才发——原生缩略图/页码观感是「停下才跳」。
+    /// 修法：监听 PDFView 内部 clip view 的 bounds 实时变化，用视口中心页实算页码
+    /// 直写 Store，驱动自绘缩略图列表（PDFThumbnailListView）与工具栏页码实时跟随
+    private func startScrollObservationIfNeeded() {
+      guard !isObservingScroll, let pdfView,
+        let clipView = pdfView.documentView?.enclosingScrollView?.contentView
+      else { return }
+      isObservingScroll = true
+      clipView.postsBoundsChangedNotifications = true
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(liveScrolled(_:)),
+        name: NSView.boundsDidChangeNotification,
+        object: clipView
+      )
+    }
+
+    @objc private func liveScrolled(_ note: Notification) {
+      guard let pdfView, let doc = pdfView.document, let page = visibleCenterPage() else { return }
+      let index = doc.index(for: page)
+      if index != lastLivePageIndex {
+        lastLivePageIndex = index
+        // 分栏双 PDF：只有焦点视图才回写共享 Store，否则两窗滚动互相覆盖页码
+        if parent.pdfStore.pdfView === pdfView {
+          parent.pdfStore.currentPage = index + 1
+        }
+      }
     }
 
     @objc func scaleChanged(_ note: Notification) {
