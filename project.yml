@@ -8,7 +8,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     GENERATE_INFOPLIST_FILE: YES
-    MARKETING_VERSION: "0.1.1"
+    MARKETING_VERSION: "0.1.2"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_STRICT_CONCURRENCY: minimal
 # FR-AI 决策：AI 网络层自写薄 SSE 客户端（OpenAI 兼容 + Anthropic 各 ~150 行），
