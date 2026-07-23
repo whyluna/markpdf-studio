@@ -50,6 +50,8 @@ private struct PlainTextView: NSViewRepresentable {
     let scrollView = NSTextView.scrollableTextView()
     // 透明底：透出下层的淡色圆角背景，白底在 popover 里太突兀
     scrollView.drawsBackground = false
+    // 滚动条按需显示：内容未溢出时隐藏，超出文本框才出现
+    scrollView.autohidesScrollers = true
     let textView = scrollView.documentView as! NSTextView
     textView.isRichText = false
     textView.font = .systemFont(ofSize: 14.5)

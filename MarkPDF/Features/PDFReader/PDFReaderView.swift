@@ -30,6 +30,9 @@ final class ZoomablePDFView: PDFView {
   /// 容差不触发识别，若只靠点击手势，「选中 → 浮动工具条标注」全程不产生焦点认领
   var onFocusClaim: (() -> Void)?
 
+  /// 最近一次 mouseDown 位置（视图坐标）：划词选区分栏裁剪（SelectionColumnTrimmer）的拖拽起点
+  private(set) var lastMouseDownPoint: NSPoint?
+
   override func keyDown(with event: NSEvent) {
     if event.keyCode == 53, onEscape?() == true { return }  // 53 = Esc
     super.keyDown(with: event)
@@ -48,6 +51,7 @@ final class ZoomablePDFView: PDFView {
     // 任何直接按下先认领焦点（须在批注标记拦截与 PDFKit 处理之前）
     onFocusClaim?()
     let point = convert(event.locationInWindow, from: nil)
+    lastMouseDownPoint = point
     if let handler = onCommentMarkerMouseDown, handler(point) {
       return
     }
