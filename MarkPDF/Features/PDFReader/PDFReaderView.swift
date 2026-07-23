@@ -90,6 +90,8 @@ struct PDFReaderView: NSViewRepresentable {
   @EnvironmentObject private var annotationStore: PDFAnnotationStore
   @EnvironmentObject private var positionStore: PDFReadingPositionStore
   @EnvironmentObject private var settings: SettingsStore
+  @EnvironmentObject private var aiSettings: AISettingsStore
+  @EnvironmentObject private var aiKeys: AIKeyStore
 
   func makeNSView(context: Context) -> PDFView {
     let pdfView = ZoomablePDFView()
@@ -142,10 +144,12 @@ struct PDFReaderView: NSViewRepresentable {
     )
     context.coordinator.pdfView = pdfView
     pdfStore.pdfView = pdfView
-    // 划词浮动工具条（FR-4.1）与标注写回关联（FR-4.6）
+    // 划词浮动工具条（FR-4.1 + FR-AI.1 划词翻译）与标注写回关联（FR-4.6）
     context.coordinator.toolbarController = AnnotationToolbarController(
       pdfView: pdfView,
-      store: annotationStore
+      store: annotationStore,
+      aiSettings: aiSettings,
+      aiKeys: aiKeys
     )
     // 异步解析文档（NFR-1：大 PDF 主线程同步解析整窗卡顿，237 页实测 ~1s）
     context.coordinator.loadDocumentAsync(url: url)
@@ -589,5 +593,7 @@ private struct PDFLoadFailureView: View {
     .environmentObject(PDFAnnotationStore())
     .environmentObject(PDFReadingPositionStore())
     .environmentObject(SettingsStore())
+    .environmentObject(AISettingsStore())
+    .environmentObject(AIKeyStore())
     .frame(width: 640, height: 480)
 }

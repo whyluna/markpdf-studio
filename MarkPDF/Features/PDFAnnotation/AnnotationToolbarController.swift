@@ -3,28 +3,37 @@ import os
 import PDFKit
 import SwiftUI
 
-/// 划词浮动工具条控制器（FR-4.1）：
+/// 划词浮动工具条控制器（FR-4.1 + FR-AI.1）：
 /// 监听 PDFView 选区变化，鼠标松开后在选区上方弹出工具条；
 /// 动作时把选区转为对应文本标注（逐行创建，精确贴合选中文字）。
-/// 另支持点击既有标注 → 弹出删除按钮（点选即删）。
+/// 另支持点击既有标注 → 弹出删除按钮（点选即删）；
+/// 划词翻译气泡挂在工具条正下方（自动触发可在设置关闭，工具条上有手动入口）。
 @MainActor
 final class AnnotationToolbarController: NSObject {
   private weak var pdfView: PDFView?
   private let store: PDFAnnotationStore
-  private var hostingView: NSHostingView<FloatingToolbarView>?
+  private let aiSettings: AISettingsStore
+  private let translationStore: TranslationStore
+  private var hostingView: NSHostingView<SelectionFloatingPanel>?
   private var mouseUpMonitor: Any?
   private var keyMonitor: Any?
   private var toolCancellable: AnyCancellable?
+  private var translationCancellable: AnyCancellable?
 
-  init(pdfView: PDFView, store: PDFAnnotationStore) {
+  init(pdfView: PDFView, store: PDFAnnotationStore, aiSettings: AISettingsStore, aiKeys: AIKeyStore) {
     self.pdfView = pdfView
     self.store = store
+    self.aiSettings = aiSettings
+    translationStore = TranslationStore(settings: aiSettings, service: AIService(keys: aiKeys))
     super.init()
 
-    let toolbar = FloatingToolbarView(store: store) { [weak self] kind in
-      self?.apply(kind: kind)
-    }
-    let hosting = NSHostingView(rootView: toolbar)
+    let panel = SelectionFloatingPanel(
+      store: store,
+      translationStore: translationStore,
+      onApply: { [weak self] kind in self?.apply(kind: kind) },
+      onTranslate: { [weak self] in self?.triggerTranslation() }
+    )
+    let hosting = NSHostingView(rootView: panel)
     hosting.isHidden = true
     pdfView.addSubview(hosting)
     hostingView = hosting
@@ -57,6 +66,10 @@ final class AnnotationToolbarController: NSObject {
         self?.hide()
       }
     }
+    // 翻译气泡出现/消失改变面板高度 → 以当前选区重排（保持夹取在视图内）
+    translationCancellable = translationStore.$phase.sink { [weak self] _ in
+      self?.relayoutPanel()
+    }
     // 批注图标点击在 mouseDown 层拦截（FR-4.3）：PDFKit 收不到事件，
     // 原生 Popup 弹窗（深蓝框）不会触发；手势识别器路径时灵时不灵故弃用
     (pdfView as? ZoomablePDFView)?.onCommentMarkerMouseDown = { [weak self] point in
@@ -77,6 +90,7 @@ final class AnnotationToolbarController: NSObject {
       NSEvent.removeMonitor(keyMonitor)
     }
     toolCancellable?.cancel()
+    translationCancellable?.cancel()
   }
 
   // MARK: - 弹出与隐藏
@@ -98,6 +112,49 @@ final class AnnotationToolbarController: NSObject {
       apply(kind: tool)
       return
     }
+    show(above: selection)
+    // FR-AI.1：划词即翻（可在 设置 → AI 关闭，工具条保留手动入口）
+    if aiSettings.settings.autoTranslateOnSelection {
+      triggerTranslation(isAutomatic: true)
+    }
+  }
+
+  // MARK: - 划词翻译（FR-AI.1）
+
+  private func triggerTranslation(isAutomatic: Bool = false) {
+    guard let pdfView,
+      let rawText = pdfView.currentSelection?.string
+    else { return }
+    let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return }
+    Logger.ai.debug("[TR ctrl] 触发翻译 auto=\(isAutomatic) \(text.count) 字 phase=\(String(describing: self.translationStore.phase), privacy: .public)")
+    // 同一文本翻译途中不重复触发（点击工具条翻译按钮会伴随一次全局 mouseUp 回调）
+    if case .translating = translationStore.phase, translationStore.sourceText == text {
+      Logger.ai.debug("[TR ctrl] 去重：同文本翻译中")
+      return
+    }
+    // 自动触发跳过已成功展示的同文本：PDF 上任意 mouseUp 都会走到这，
+    // 否则译文出来后被下一次点击打回"翻译中"，而新任务不重启时即永转
+    if isAutomatic, case .success = translationStore.phase, translationStore.sourceText == text {
+      Logger.ai.debug("[TR ctrl] 去重：同文本已成功")
+      return
+    }
+    // AI 引擎首次使用需隐私确认（选中文本将发往第三方 Provider）
+    if aiSettings.settings.translationEngine == .ai,
+      !AIPrivacyGate.ensureAcknowledged(store: aiSettings)
+    {
+      translationStore.presentFailure("已取消翻译：首次使用 AI 功能需确认隐私告知", for: text)
+      return
+    }
+    translationStore.translate(text)
+  }
+
+  /// 翻译状态变化后面板尺寸已变，按当前选区重新定位（仍夹取在视图范围内）
+  private func relayoutPanel() {
+    guard let pdfView, let hostingView, !hostingView.isHidden,
+      let selection = pdfView.currentSelection
+    else { return }
+    hostingView.layoutSubtreeIfNeeded()
     show(above: selection)
   }
 
@@ -125,6 +182,7 @@ final class AnnotationToolbarController: NSObject {
 
   private func hide() {
     hostingView?.isHidden = true
+    translationStore.reset()
     syncCursorRects()
   }
 

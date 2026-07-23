@@ -16,6 +16,9 @@ struct MarkPDFApp: App {
   @StateObject private var settingsStore = SettingsStore()
   @StateObject private var searchStore = SearchStore()
   @StateObject private var backlinksStore = BacklinksStore()
+  // AI（FR-AI.4）：偏好与密钥均为 App 级单例（设置页 / 划词翻译 / AI 助手共用）
+  @StateObject private var aiSettingsStore = AISettingsStore()
+  @StateObject private var aiKeyStore = AIKeyStore()
 
   init() {
     let tabStore = TabStore()
@@ -78,6 +81,8 @@ struct MarkPDFApp: App {
         .environmentObject(settingsStore)
         .environmentObject(searchStore)
         .environmentObject(backlinksStore)
+        .environmentObject(aiSettingsStore)
+        .environmentObject(aiKeyStore)
         .frame(minWidth: 1080, minHeight: 640)
         .onAppear {
           // 重命名/移动成功（含撤销/重做链）→ 标签页路径跟随；
@@ -193,6 +198,8 @@ struct MarkPDFApp: App {
     Settings {
       SettingsView()
         .environmentObject(settingsStore)
+        .environmentObject(aiSettingsStore)
+        .environmentObject(aiKeyStore)
     }
   }
 }

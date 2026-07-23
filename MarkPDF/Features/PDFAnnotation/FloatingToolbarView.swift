@@ -6,7 +6,10 @@ import SwiftUI
 struct FloatingToolbarView: View {
   @ObservedObject var store: PDFAnnotationStore
   let onApply: (AnnotationKind) -> Void
+  /// 划词翻译（FR-AI.1）：手动触发入口；自动触发关闭时尤为必要
+  let onTranslate: () -> Void
   @State private var hoveredKind: AnnotationKind?
+  @State private var isTranslateHovered = false
 
   private static let tools: [(kind: AnnotationKind, icon: String)] = [
     (.highlight, "highlighter"),
@@ -42,11 +45,23 @@ struct FloatingToolbarView: View {
           hoveredKind = hovering ? tool.kind : nil
         }
         .help(tool.kind.title)
-        if tool.kind != Self.tools.last?.kind {
-          Divider()
-            .frame(height: 16)
-        }
+        Divider()
+          .frame(height: 16)
       }
+      Button(action: onTranslate) {
+        Image(systemName: "translate")
+          .font(.system(size: 13))
+          .foregroundStyle(.primary)
+          .frame(width: 28, height: 28)
+          .background(
+            isTranslateHovered ? Color.primary.opacity(0.08) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6)
+          )
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .onHover { isTranslateHovered = $0 }
+      .help("翻译选中内容")
     }
     .padding(.horizontal, 6)
     .padding(.vertical, 4)
@@ -64,7 +79,24 @@ private extension NSColor {
   var swiftUI: Color { Color(self) }
 }
 
+/// 划词浮动面板（FR-4.1 + FR-AI.1）：工具条在上，翻译气泡紧贴其下
+struct SelectionFloatingPanel: View {
+  @ObservedObject var store: PDFAnnotationStore
+  @ObservedObject var translationStore: TranslationStore
+  let onApply: (AnnotationKind) -> Void
+  let onTranslate: () -> Void
+
+  var body: some View {
+    VStack(spacing: 6) {
+      FloatingToolbarView(store: store, onApply: onApply, onTranslate: onTranslate)
+      TranslationBubbleView(store: translationStore) {
+        onTranslate()
+      }
+    }
+  }
+}
+
 #Preview {
-  FloatingToolbarView(store: PDFAnnotationStore(), onApply: { _ in })
+  FloatingToolbarView(store: PDFAnnotationStore(), onApply: { _ in }, onTranslate: {})
     .padding(20)
 }
