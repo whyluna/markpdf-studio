@@ -26,8 +26,11 @@ final class PDFAnnotationStore: ObservableObject {
   /// 全文档重扫含逐标注文本提取，不能随任意 @Published（activeTool/colorsByKind…）
   /// 变化触发的 body 重估而重跑
   @Published private(set) var annotationItemsSnapshot: [AnnotationItem] = []
-  /// 全文档重扫（缓存重建）次数（测试钩子：验证重复读缓存、无关 @Published 变化不重扫）
+  #if DEBUG
+  /// 全文档重扫（缓存重建）次数（测试钩子：验证重复读缓存、无关 @Published 变化不重扫；
+  /// 仅 DEBUG 编入，Release 不携带）
   private(set) var annotationItemsRescanCount = 0
+  #endif
 
   private var writer: AnnotationWriter
   private let defaults: UserDefaults
@@ -188,7 +191,9 @@ final class PDFAnnotationStore: ObservableObject {
 
   /// 重扫全文档并刷新列表缓存（计数供测试断言缓存复用）
   private func rescanAnnotationItems() {
+    #if DEBUG
     annotationItemsRescanCount += 1
+    #endif
     annotationItemsSnapshot = scanAnnotationItems()
   }
 

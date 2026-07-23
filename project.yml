@@ -58,10 +58,3 @@ targets:
       - path: MarkPDFTests
     dependencies:
       - target: MarkPDF
-  MarkPDFUITests:
-    type: bundle.ui-testing
-    platform: macOS
-    sources:
-      - path: MarkPDFUITests
-    dependencies:
-      - target: MarkPDF

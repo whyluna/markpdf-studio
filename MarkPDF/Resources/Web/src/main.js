@@ -57,7 +57,6 @@ const codeLanguages = [
 ];
 import { wysiwyg } from "./wysiwyg.js";
 import * as Bridge from "./bridge.js";
-import { DEMO_DOC } from "./demo.js";
 import { docContext } from "./doccontext.js";
 import { buildExport } from "./exporthtml.js";
 import { matchHeadingLine } from "./extended.js";
@@ -172,8 +171,8 @@ function baseExtensions() {
 const view = new EditorView({
   parent: document.getElementById("editor"),
   state: EditorState.create({
-    // App 内初始为空（防 setContent 丢失时误显示 demo 内容）；浏览器调试才用示例文档
-    doc: new URLSearchParams(location.search).has("app") ? "" : DEMO_DOC,
+    // 初始为空（防 setContent 握手丢失时误显示内容）；浏览器调试自行粘贴文本
+    doc: "",
     extensions: [
       historyConf.of(history()),
       // 自绘光标/选区：替代 WebKit 原生光标（原生按 line-height 1.8 的行框绘制，显得过长）
