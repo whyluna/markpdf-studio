@@ -80,11 +80,6 @@ struct TranslationBubbleView: View {
           .stroke(Color.primary.opacity(0.1), lineWidth: 1)
       )
       .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
-      // 系统翻译引擎：Store 发出 Configuration 即触发，结果经 performSystemTranslation 写回
-      .translationTask(store.systemConfiguration) { session in
-        Logger.ai.debug("[TR view] translationTask 闭包触发（配置变更被 SwiftUI 感知）")
-        await store.performSystemTranslation(using: session)
-      }
     }
   }
 }

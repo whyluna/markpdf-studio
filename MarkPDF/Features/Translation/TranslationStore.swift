@@ -29,6 +29,11 @@ final class TranslationStore: ObservableObject {
   private let instanceID = String(UUID().uuidString.prefix(4))
   /// 等待系统翻译回调的原文（防止回调时串台）
   private var pendingSystemText: String?
+  /// 首次经 `.translationTask` 取得的系统翻译会话：同语言对的后续翻译直接复用，
+  /// 绕开「等值 Configuration 赋给 SwiftUI 判无变化、任务不重触发」的坑（永转根因）
+  private var systemSession: TranslationSession?
+  /// systemSession 对应的语言对（对不上才重新走 Configuration 通道）
+  private var systemSessionPair: (source: AITargetLanguage, target: AITargetLanguage)?
   /// 兜底看门狗：系统预检静默失败时（回调永不到达）不让气泡永转
   private var watchdog: Task<Void, Never>?
   private let settings: AISettingsStore
@@ -51,8 +56,8 @@ final class TranslationStore: ObservableObject {
     pendingSystemText = nil
     watchdog?.cancel()
     watchdog = nil
-    systemConfiguration?.invalidate()
-    systemConfiguration = nil
+    // 不再 invalidate/nil systemConfiguration：session 缓存与配置保留，
+    // 下次翻译直接复用 session（本地翻译无成本；在途结果由 pendingSystemText=nil 守卫丢弃）
   }
 
   /// 控制器侧前置校验未通过的展示（如隐私告知被拒），不经翻译流程
@@ -106,15 +111,24 @@ final class TranslationStore: ObservableObject {
   private func startSystemTranslation(_ text: String, source: AITargetLanguage, target: AITargetLanguage) {
     engineTitle = "系统翻译"
     pendingSystemText = text
+    let pair = (source: source, target: target)
+    // 同语言对且已有 session：直接复用，不再依赖 .translationTask 重触发（等值配置不重触发=永转）
+    if let session = systemSession, let current = systemSessionPair, current == pair {
+      Logger.ai.debug("[TR\(self.instanceID)] 复用已取得的系统会话直接翻译")
+      Task { await self.performSystemTranslation(using: session) }
+      return
+    }
+    // 首次或语言对变化：弃旧 session，走 Configuration 通道取新 session
+    systemSession = nil
+    systemSessionPair = pair
     let configuration = TranslationSession.Configuration(
       source: source.localeLanguage,
       target: target.localeLanguage
     )
     if systemConfiguration != nil {
-      // 同语言对的连续划词：新赋等值 Configuration 时 SwiftUI 判定无变化、不重触发任务
-      //（卡"翻译中"根因；invalidate() 实测也不可靠）。先置 nil 下一 runloop 再赋新值，
-      // nil → 非 nil 必然变化，任务必重启
-      Logger.ai.debug("[TR\(self.instanceID)] 配置先置 nil 再异步重赋（强制任务重启）")
+      // 语言对变化：先 invalidate 旧配置（真实变化，任务必重触发）
+      Logger.ai.debug("[TR\(self.instanceID)] 语言对变化，invalidate 后赋新配置")
+      systemConfiguration?.invalidate()
       systemConfiguration = nil
       DispatchQueue.main.async { [weak self] in
         guard let self, self.pendingSystemText == text else { return }
@@ -126,8 +140,10 @@ final class TranslationStore: ObservableObject {
     }
   }
 
-  /// `.translationTask` 回调里调用：执行系统翻译并写回状态
+  /// `.translationTask` 回调（或同语言对复用）里调用：执行系统翻译并写回状态
   func performSystemTranslation(using session: TranslationSession) async {
+    // 捕获 session 供同语言对的后续翻译直接复用（pair 在 startSystemTranslation 已记录）
+    systemSession = session
     guard let text = pendingSystemText else {
       Logger.ai.debug("[TR\(self.instanceID)] 系统回调到达但无 pending 文本，忽略")
       return

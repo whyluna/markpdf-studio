@@ -66,10 +66,14 @@ final class AnnotationToolbarController: NSObject {
         self?.hide()
       }
     }
-    // 翻译气泡出现/消失改变面板高度 → 以当前选区重排（保持夹取在视图内）
-    translationCancellable = translationStore.$phase.sink { [weak self] _ in
-      self?.relayoutPanel()
-    }
+    // 翻译气泡出现/消失改变面板高度 → 以当前选区重排（保持夹取在视图内）。
+    // receive(on:) 与 @Published 的发射解耦：sink 在 willSet 同步上下文里直接驱动
+    // AppKit 布局会干扰 SwiftUI 更新事务（UI 停在旧相位不刷新的嫌疑路径之一）
+    translationCancellable = translationStore.$phase
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.relayoutPanel()
+      }
     // 批注图标点击在 mouseDown 层拦截（FR-4.3）：PDFKit 收不到事件，
     // 原生 Popup 弹窗（深蓝框）不会触发；手势识别器路径时灵时不灵故弃用
     (pdfView as? ZoomablePDFView)?.onCommentMarkerMouseDown = { [weak self] point in

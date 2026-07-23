@@ -93,6 +93,12 @@ struct SelectionFloatingPanel: View {
         onTranslate()
       }
     }
+    // 系统翻译引擎：Store 发出 Configuration 即触发，结果经 performSystemTranslation 写回。
+    // 修改器挂在面板根部（稳定位置、始终安装）——此前挂在气泡的相位条件分支内，
+    // 每次相位变化拆除重建子树，SwiftUI 更新事务被打断，UI 停在「翻译中」不再刷新
+    .translationTask(translationStore.systemConfiguration) { session in
+      await translationStore.performSystemTranslation(using: session)
+    }
   }
 }
 
