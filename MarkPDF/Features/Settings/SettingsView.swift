@@ -1,10 +1,20 @@
 import SwiftUI
 
-/// 设置面板（FR-7.2；⌘,）：编辑器字体/字号/行高、PDF 默认视图模式。
+/// 设置面板（FR-7.2；⌘,）：通用（编辑器/PDF/模式）+ AI（FR-AI.4）两个标签页。
 struct SettingsView: View {
   @EnvironmentObject private var settings: SettingsStore
 
   var body: some View {
+    TabView {
+      generalSettings
+        .tabItem { Label("通用", systemImage: "gearshape") }
+      AISettingsView()
+        .tabItem { Label("AI", systemImage: "sparkles") }
+    }
+    .frame(width: 500, height: 560)
+  }
+
+  private var generalSettings: some View {
     Form {
       Picker("编辑器字体", selection: $settings.editorFont) {
         ForEach(SettingsStore.EditorFont.allCases) { font in
@@ -41,7 +51,6 @@ struct SettingsView: View {
       Toggle("专注模式（高亮当前段落）", isOn: $settings.focusMode)
     }
     .formStyle(.grouped)
-    .frame(width: 420)
     .padding()
   }
 }
@@ -49,4 +58,6 @@ struct SettingsView: View {
 #Preview {
   SettingsView()
     .environmentObject(SettingsStore())
+    .environmentObject(AISettingsStore())
+    .environmentObject(AIKeyStore())
 }

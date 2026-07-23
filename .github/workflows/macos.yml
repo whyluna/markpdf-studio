@@ -17,7 +17,8 @@ on:
 
 jobs:
   build-test:
-    runs-on: macos-14
+    # 部署目标 macOS 15（FR-AI v1.1 抬升），需在 macOS 15 runner 上编译与跑测试
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 

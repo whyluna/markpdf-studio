@@ -14,7 +14,7 @@
 - **研究生 / 科研人员**：大量阅读 PDF 论文，需要高亮批注并沉淀为结构化笔记
 - **开发者 / 文字工作者**：需要 Typora 级体验的 Markdown 写作工具
 
-**文件即真相**：md 存纯文本源码、PDF 标注写回标准 PDF Annotation（系统预览可见），不使用私有数据库锁死你的数据。单机离线、无账号、无遥测。
+**文件即真相**：md 存纯文本源码、PDF 标注写回标准 PDF Annotation（系统预览可见），不使用私有数据库锁死你的数据。核心功能单机离线、无账号、无遥测；AI 增强为可选能力，仅你显式发起时联网（规划中，见需求文档模块 8）。
 
 ## 功能亮点
 
@@ -28,7 +28,7 @@
 
 ## 下载安装
 
-- **要求**：macOS 13 Ventura 及以上（Apple Silicon / Intel）
+- **要求**：macOS 15 Sequoia 及以上（Apple Silicon / Intel）
 - 在 [**Releases**](https://github.com/whyluna/markpdf-studio/releases) 下载最新 `MarkPDF-x.x.x.dmg`，把 MarkPDF.app 拖入 Applications
 - **首次打开请右键点击图标 →「打开」**（当前未购买 Apple Developer ID 签名，Gatekeeper 提示「无法验证开发者」属正常现象，仅需首次操作一次）
 
@@ -45,7 +45,7 @@
 ## 从源码构建
 
 ```bash
-# 前置：Xcode 15+，Node.js 20+（编辑器内核构建），XcodeGen
+# 前置：Xcode 16+，Node.js 20+（编辑器内核构建），XcodeGen
 brew install node xcodegen
 
 git clone git@github.com:whyluna/markpdf-studio.git
