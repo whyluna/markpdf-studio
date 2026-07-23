@@ -3,6 +3,55 @@ import os
 import SwiftUI
 import Translation
 
+/// 可选择/可滚动的只读文本区（翻译气泡用）：
+/// AppKit NSTextView——I 形光标与文本选择原生正确；
+/// overlay 滚动条自动显隐、不占轨道（内容未溢出不出现，滚动时才浮现）
+struct SelectableTextView: NSViewRepresentable {
+  let text: String
+  /// 高度上限（sizeThatFits 里夹取）
+  var maxHeight: CGFloat = 240
+
+  func makeNSView(context: Context) -> NSScrollView {
+    let scrollView = NSScrollView()
+    scrollView.drawsBackground = false
+    scrollView.hasVerticalScroller = true
+    scrollView.autohidesScrollers = true
+    scrollView.scrollerStyle = .overlay
+    let textView = NSTextView()
+    textView.isEditable = false
+    textView.isSelectable = true
+    textView.drawsBackground = false
+    textView.font = .systemFont(ofSize: 13)
+    textView.textColor = .labelColor
+    textView.textContainerInset = NSSize(width: 0, height: 2)
+    textView.isVerticallyResizable = true
+    textView.isHorizontallyResizable = false
+    textView.textContainer?.widthTracksTextView = true
+    textView.string = text
+    scrollView.documentView = textView
+    return scrollView
+  }
+
+  func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    let textView = scrollView.documentView as! NSTextView
+    if textView.string != text {
+      textView.string = text
+    }
+  }
+
+  /// 内容自适应高度（不超过 maxHeight），保证短译文不高、长译文滚动
+  func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+    guard let textView = nsView.documentView as? NSTextView,
+      let layoutManager = textView.layoutManager,
+      let container = textView.textContainer
+    else { return nil }
+    let width = proposal.width ?? 280
+    container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+    layoutManager.ensureLayout(for: container)
+    let height = layoutManager.usedRect(for: container).height + 8
+    return CGSize(width: width, height: min(height, maxHeight))
+  }
+}
 /// 划词翻译气泡（FR-AI.1）：贴在浮动工具条正下方，
 /// 展示译文 / 加载 / 失败三态，带复制与关闭。
 struct TranslationBubbleView: View {
@@ -55,16 +104,20 @@ struct TranslationBubbleView: View {
           }
           .frame(maxWidth: .infinity, alignment: .leading)
         case .success(let translated):
-          Text(translated)
-            .font(.callout)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+          // 高度上限 240pt、超出滚动；AppKit 文本区：I 形光标/文本选择原生正确，
+          // overlay 滚动条不占轨道（无 SwiftUI 滚动条的白底突兀）
+          SelectableTextView(text: translated)
+            .frame(maxWidth: .infinity, maxHeight: 240)
         case .failure(let message):
           VStack(alignment: .leading, spacing: 6) {
-            Text(message)
-              .font(.callout)
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+              Text(message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 160)
             Button("重试", action: onRetry)
               .controlSize(.small)
           }

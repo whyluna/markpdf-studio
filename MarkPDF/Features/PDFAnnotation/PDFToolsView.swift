@@ -5,8 +5,10 @@ import SwiftUI
 /// 四色色板（按类型记忆最近用色）。
 struct PDFToolsView: View {
   @EnvironmentObject private var store: PDFAnnotationStore
+  @EnvironmentObject private var aiSettings: AISettingsStore
   @State private var hoveredTool: AnnotationKind?
   @State private var hoveredColor: AnnotationColor?
+  @State private var isTranslateHovered = false
 
   private static let tools: [(kind: AnnotationKind, icon: String)] = [
     (.highlight, "highlighter"),
@@ -20,6 +22,7 @@ struct PDFToolsView: View {
       ForEach(Self.tools, id: \.kind) { tool in
         toolButton(tool.kind, icon: tool.icon)
       }
+      translateToggle
       Divider()
         .frame(height: 20)
         .padding(.horizontal, 4)
@@ -27,6 +30,36 @@ struct PDFToolsView: View {
         colorDot(color)
       }
     }
+  }
+
+  /// 划词翻译开关（FR-AI.1）：开启后划词即翻；关闭时选中文本点浮动工具条翻译按钮手动翻译。
+  /// 状态即 设置 → AI 的「划词后自动翻译」（持久化，两处一致）
+  private var translateToggle: some View {
+    let isOn = aiSettings.settings.autoTranslateOnSelection
+    return Button {
+      aiSettings.update { $0.autoTranslateOnSelection.toggle() }
+      if !isOn {
+        // 开启翻译时退出标注工具（划词即标与划词即翻语义互斥）
+        store.activeTool = nil
+      }
+    } label: {
+      Image(systemName: "translate")
+        .font(.system(size: 14))
+        .foregroundStyle(isOn ? Color.accentColor : .secondary)
+        .frame(width: 28, height: 28)
+        .background(
+          isOn
+            ? Color.accentColor.opacity(0.15)
+            : (isTranslateHovered ? Color.primary.opacity(0.08) : Color.clear),
+          in: RoundedRectangle(cornerRadius: 6)
+        )
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { isTranslateHovered = $0 }
+    .help(isOn
+      ? "划词翻译（已开启：划词即翻；点击关闭）"
+      : "划词翻译（已关闭：选中文本后点浮动条翻译按钮手动翻译；点击开启划词即翻）")
   }
 
   private func toolButton(_ kind: AnnotationKind, icon: String) -> some View {
@@ -37,6 +70,8 @@ struct PDFToolsView: View {
       } else {
         store.activeTool = kind
         store.paletteKind = kind
+        // 工具互斥（含翻译）：激活标注工具时退出划词即翻
+        aiSettings.update { $0.autoTranslateOnSelection = false }
       }
     } label: {
       Image(systemName: icon)
@@ -97,5 +132,6 @@ private extension NSColor {
 #Preview {
   PDFToolsView()
     .environmentObject(PDFAnnotationStore())
+    .environmentObject(AISettingsStore())
     .padding(20)
 }

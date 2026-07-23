@@ -46,7 +46,7 @@ final class AnnotationToolbarController: NSObject {
     )
     // 鼠标松开才弹出（划词途中不打扰）
     mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-      self?.revealIfSelection()
+      self?.revealIfSelection(at: event)
       return event
     }
     // 点击既有标注 → 点选删除
@@ -106,8 +106,19 @@ final class AnnotationToolbarController: NSObject {
     }
   }
 
-  private func revealIfSelection() {
-    guard let pdfView, let selection = pdfView.currentSelection, !selection.pages.isEmpty else {
+  private func revealIfSelection(at event: NSEvent) {
+    guard let pdfView, pdfView.currentSelection != nil, !(pdfView.currentSelection?.pages.isEmpty ?? true) else {
+      hide()
+      return
+    }
+    // 双栏跨栏误选裁剪：拖拽起止在同一栏时仅保留该栏内容（右栏划词不再连带左栏）
+    let dragEnd = pdfView.convert(event.locationInWindow, from: nil)
+    SelectionColumnTrimmer.trimSelection(
+      of: pdfView,
+      dragStart: (pdfView as? ZoomablePDFView)?.lastMouseDownPoint,
+      dragEnd: dragEnd
+    )
+    guard let selection = pdfView.currentSelection, !selection.pages.isEmpty else {
       hide()
       return
     }
@@ -116,6 +127,8 @@ final class AnnotationToolbarController: NSObject {
       apply(kind: tool)
       return
     }
+    // 记录松手点：定位算法的鼠标侧判据（面板放在离手近的一侧）
+    panelAnchorY = dragEnd.y
     show(above: selection)
     // FR-AI.1：划词即翻（可在 设置 → AI 关闭，工具条保留手动入口）
     if aiSettings.settings.autoTranslateOnSelection {
@@ -129,7 +142,9 @@ final class AnnotationToolbarController: NSObject {
     guard let pdfView,
       let rawText = pdfView.currentSelection?.string
     else { return }
-    let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+    // 与 TranslationStore.translate 同一整理口径：去重比较必须用整理后的文本，
+    // 否则多行选区永远匹配不上，每次 mouseUp 都重翻译（成功→翻译中→成功闪烁）
+    let text = TranslationTextNormalizer.normalize(rawText)
     guard !text.isEmpty else { return }
     Logger.ai.debug("[TR ctrl] 触发翻译 auto=\(isAutomatic) \(text.count) 字 phase=\(String(describing: self.translationStore.phase), privacy: .public)")
     // 同一文本翻译途中不重复触发（点击工具条翻译按钮会伴随一次全局 mouseUp 回调）
@@ -162,6 +177,18 @@ final class AnnotationToolbarController: NSObject {
     show(above: selection)
   }
 
+  /// 面板在选区的哪一侧（首次出现时定夺，同一选区内尺寸变化不换边，防「翻译中→译文」跳变）
+  private var panelSide: PanelSide?
+  /// 松手点的视图坐标 y（定位算法的鼠标侧判据；顺着手拖方向，松手点一般在选区末端）
+  private var panelAnchorY: CGFloat?
+  /// 面板最大预估高度（工具条 40 + 间距 6 + 气泡头/边距 ~44 + 译文上限 240）：
+  /// 定位按最大高度一次定边，译文出来尺寸变化不再换边
+  private static let maxPanelHeight: CGFloat = 330
+
+  private enum PanelSide {
+    case above, below
+  }
+
   private func show(above selection: PDFSelection) {
     guard let pdfView, let hostingView,
       let page = selection.pages.last
@@ -169,33 +196,71 @@ final class AnnotationToolbarController: NSObject {
     let pageBounds = selection.bounds(for: page)
     let viewBounds = pdfView.convert(pageBounds, from: page)
     let size = hostingView.fittingSize
-    // 选区上方居中，并夹取在视图范围内
-    var origin = NSPoint(
-      x: viewBounds.midX - size.width / 2,
-      y: viewBounds.maxY + 8
-    )
-    origin.x = min(max(origin.x, 8), pdfView.bounds.width - size.width - 8)
-    if origin.y + size.height > pdfView.bounds.height - 8 {
-      // 上方放不下则放选区下方
-      origin.y = viewBounds.minY - size.height - 8
+    let width = min(size.width, pdfView.bounds.width - 16)
+    let maxY = max(pdfView.bounds.height - size.height - 8, 8)
+    // 选区上方居中，水平夹取在视图内
+    var origin = NSPoint(x: viewBounds.midX - width / 2, y: 0)
+    origin.x = min(max(origin.x, 8), max(pdfView.bounds.width - width - 8, 8))
+    if panelSide == nil {
+      // 定边三因素：① 鼠标侧优先（松手点在哪侧放哪侧，离手最近）；
+      // ② 该侧按最大高度放得下才用（面板向选区外侧生长，不盖选区）；
+      // ③ 放不下退到空间更大的一侧（两侧都不够时夹进视图，可见优先）
+      let required = min(Self.maxPanelHeight, pdfView.bounds.height - 16)
+      let spaceAbove = pdfView.bounds.height - viewBounds.maxY
+      let spaceBelow = viewBounds.minY
+      let mouseAbove = (panelAnchorY ?? viewBounds.midY) > viewBounds.midY
+      if mouseAbove {
+        panelSide = spaceAbove >= required ? .above : (spaceBelow > spaceAbove ? .below : .above)
+      } else {
+        panelSide = spaceBelow >= required ? .below : (spaceAbove > spaceBelow ? .above : .below)
+      }
     }
-    hostingView.frame = NSRect(origin: origin, size: size)
+    // 垂直方向：按定夺侧摆放后夹取进视图（侧不变，仅位置夹取，杜绝换边跳变）
+    switch panelSide {
+    case .above, .none:
+      origin.y = min(viewBounds.maxY + 8, maxY)
+    case .below:
+      origin.y = max(viewBounds.minY - size.height - 8, 8)
+    }
+    origin.y = min(max(origin.y, 8), maxY)
+    hostingView.frame = NSRect(origin: origin, size: NSSize(width: width, height: size.height))
     hostingView.isHidden = false
     syncCursorRects()
   }
 
   private func hide() {
     hostingView?.isHidden = true
+    panelSide = nil
+    panelAnchorY = nil
     translationStore.reset()
     syncCursorRects()
   }
+
+  /// 浮动面板的工具条区高度（手型光标只给这一条；翻译气泡正文用 I 形文本光标）
+  private static let toolbarStripHeight: CGFloat = 40
+  /// 气泡头部按钮区（复制/关闭）相对面板顶部的偏移与尺寸（工具条 40 + 间距 6 + 头部 26）
+  private static let bubbleHeaderHeight: CGFloat = 26
+  private static let bubbleHeaderButtonsWidth: CGFloat = 62
 
   /// 把可见浮动层的 frame 同步给 ZoomablePDFView 的手型光标区域
   private func syncCursorRects() {
     guard let zoomable = pdfView as? ZoomablePDFView else { return }
     var rects: [CGRect] = []
     if let hostingView, !hostingView.isHidden {
-      rects.append(hostingView.frame)
+      let frame = hostingView.frame
+      // 只取顶部工具条条带（AppKit y 轴向上，工具条在面板顶=maxY 侧）：
+      // 整条都报手型会让翻译气泡正文也显示小手（应为 I 形文本光标）
+      let strip = min(Self.toolbarStripHeight, frame.height)
+      rects.append(NSRect(x: frame.minX, y: frame.maxY - strip, width: frame.width, height: strip))
+      // 气泡可见时，头部复制/关闭按钮区也报手型（正文文本区不在其内）
+      if frame.height > strip + 10 {
+        rects.append(NSRect(
+          x: frame.maxX - Self.bubbleHeaderButtonsWidth,
+          y: frame.maxY - strip - Self.bubbleHeaderHeight,
+          width: Self.bubbleHeaderButtonsWidth,
+          height: Self.bubbleHeaderHeight
+        ))
+      }
     }
     if let deleteHosting, !deleteHosting.isHidden {
       rects.append(deleteHosting.frame)

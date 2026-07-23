@@ -68,7 +68,8 @@ final class TranslationStore: ObservableObject {
   }
 
   func translate(_ text: String) {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    // PDF 物理行整理成整句（断词相连、换行并空格）：译文质量与排版都受益
+    let trimmed = TranslationTextNormalizer.normalize(text)
     guard !trimmed.isEmpty else { return }
     // 同文本翻译途中不重复触发
     if case .translating = phase, sourceText == trimmed { return }
