@@ -74,9 +74,9 @@ final class WorkspaceStore: ObservableObject {
   /// 弹出系统面板选择工作区文件夹
   func openFolderPanel() {
     let panel = NSOpenPanel()
-    panel.title = "选择工作区文件夹"
-    panel.message = "选择包含 Markdown / PDF 的文件夹，作为工作区打开"
-    panel.prompt = "打开"
+    panel.title = String(localized: "选择工作区文件夹")
+    panel.message = String(localized: "选择包含 Markdown / PDF 的文件夹，作为工作区打开")
+    panel.prompt = String(localized: "打开")
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
     panel.allowsMultipleSelection = false
@@ -142,7 +142,7 @@ final class WorkspaceStore: ObservableObject {
   /// 新建 Markdown 文件（唯一默认名，随后由视图进入行内命名）；返回新文件 URL
   @discardableResult
   func createMarkdown(in folder: URL, undo: UndoManager?) -> URL? {
-    let url = ops.uniqueFileURL(in: folder, baseName: "未命名", ext: "md")
+    let url = ops.uniqueFileURL(in: folder, baseName: String(localized: "未命名"), ext: "md")
     do {
       try ops.createFile(at: url)
       refresh(selecting: url)
@@ -157,7 +157,7 @@ final class WorkspaceStore: ObservableObject {
   /// 新建文件夹（唯一默认名）；返回新文件夹 URL
   @discardableResult
   func createFolder(in folder: URL, undo: UndoManager?) -> URL? {
-    let url = ops.uniqueFolderURL(in: folder, baseName: "未命名文件夹")
+    let url = ops.uniqueFolderURL(in: folder, baseName: String(localized: "未命名文件夹"))
     do {
       try ops.createFolder(at: url)
       refresh(selecting: url)
@@ -180,7 +180,7 @@ final class WorkspaceStore: ObservableObject {
         undo?.registerUndo(withTarget: self) { target in
           target.rename(FileNode(id: newURL, name: newURL.lastPathComponent, kind: node.kind), to: node.name, undo: undo)
         }
-        undo?.setActionName("重命名")
+        undo?.setActionName(String(localized: "重命名"))
       }
       return newURL
     } catch {
@@ -196,7 +196,7 @@ final class WorkspaceStore: ObservableObject {
     if node.isFolder {
       let nodePath = node.id.path
       if folder.path == nodePath || folder.path.hasPrefix(nodePath + "/") {
-        lastError = "不能移动到自身或其子文件夹内"
+        lastError = String(localized: "不能移动到自身或其子文件夹内")
         return nil
       }
     }
@@ -217,7 +217,7 @@ final class WorkspaceStore: ObservableObject {
             undo: undo
           )
         }
-        undo?.setActionName("移动")
+        undo?.setActionName(String(localized: "移动"))
       }
       return newURL
     } catch {
@@ -260,7 +260,7 @@ final class WorkspaceStore: ObservableObject {
     undo?.registerUndo(withTarget: self) { target in
       target.trashCreated(url, isFolder: isFolder, undo: undo)
     }
-    undo?.setActionName("新建")
+    undo?.setActionName(String(localized: "新建"))
   }
 
   /// 「新建」的撤销 = 入废纸篓；并注册重做

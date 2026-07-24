@@ -7,8 +7,8 @@ enum FileOperationError: LocalizedError, Equatable {
 
   var errorDescription: String? {
     switch self {
-    case .alreadyExists(let name): "「\(name)」已存在"
-    case .invalidName(let name): "文件名「\(name)」不合法（不能为空，且不含 / 或 :）"
+    case .alreadyExists(let name): String(localized: "「\(name)」已存在")
+    case .invalidName(let name): String(localized: "文件名「\(name)」不合法（不能为空，且不含 / 或 :）")
     }
   }
 }

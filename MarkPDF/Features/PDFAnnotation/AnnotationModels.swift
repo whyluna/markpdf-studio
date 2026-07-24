@@ -16,10 +16,10 @@ enum AnnotationKind: String, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .highlight: "高亮"
-    case .underline: "下划线"
-    case .strikeOut: "删除线"
-    case .freeText: "批注"
+    case .highlight: String(localized: "高亮")
+    case .underline: String(localized: "下划线")
+    case .strikeOut: String(localized: "删除线")
+    case .freeText: String(localized: "批注")
     }
   }
 }
@@ -117,9 +117,9 @@ enum AnnotationSort: String, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .page: "按页码"
-    case .color: "按颜色"
-    case .type: "按类型"
+    case .page: String(localized: "按页码")
+    case .color: String(localized: "按颜色")
+    case .type: String(localized: "按类型")
     }
   }
 

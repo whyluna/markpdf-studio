@@ -59,4 +59,53 @@ final class SettingsStoreTests: XCTestCase {
     XCTAssertEqual(SettingsStore.PDFViewMode.singlePage.pdfDisplayMode, .singlePage)
     XCTAssertEqual(SettingsStore.PDFViewMode.twoPages.pdfDisplayMode, .twoUpContinuous)
   }
+
+  // MARK: - 界面语言（重启后生效）
+
+  @MainActor
+  func testAppLanguageDefaultAndPersistence() {
+    let store = SettingsStore(defaults: defaults)
+    XCTAssertEqual(store.appLanguage, .system)
+
+    store.appLanguage = .en
+    let reopened = SettingsStore(defaults: defaults)
+    XCTAssertEqual(reopened.appLanguage, .en)
+  }
+
+  @MainActor
+  func testAppLanguageCorruptFallsBackToSystem() {
+    defaults.set("klingon", forKey: "settings.appLanguage")
+    XCTAssertEqual(SettingsStore(defaults: defaults).appLanguage, .system)
+  }
+
+  func testAppleLanguagesValueMapping() {
+    XCTAssertNil(SettingsStore.appleLanguagesValue(for: .system))
+    XCTAssertEqual(SettingsStore.appleLanguagesValue(for: .zhHans), ["zh-Hans"])
+    XCTAssertEqual(SettingsStore.appleLanguagesValue(for: .en), ["en"])
+  }
+
+  @MainActor
+  func testAppLanguageWritesAndRemovesAppleLanguagesOverride() {
+    let store = SettingsStore(defaults: defaults)
+    store.appLanguage = .en
+    XCTAssertEqual(defaults.stringArray(forKey: "AppleLanguages"), ["en"])
+
+    store.appLanguage = .zhHans
+    XCTAssertEqual(defaults.stringArray(forKey: "AppleLanguages"), ["zh-Hans"])
+
+    // 跟随系统 = 移除覆盖（object(forKey:) 会回落 NSGlobalDomain，须查本 suite 域）
+    store.appLanguage = .system
+    XCTAssertNil(defaults.persistentDomain(forName: suiteName)?["AppleLanguages"])
+  }
+
+  @MainActor
+  func testEffectiveWebLocale() {
+    let store = SettingsStore(defaults: defaults)
+    store.appLanguage = .zhHans
+    XCTAssertEqual(store.effectiveWebLocale, "zh")
+    store.appLanguage = .en
+    XCTAssertEqual(store.effectiveWebLocale, "en")
+    store.appLanguage = .system
+    XCTAssertTrue(["zh", "en"].contains(store.effectiveWebLocale))
+  }
 }

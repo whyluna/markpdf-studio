@@ -343,7 +343,7 @@ struct PDFReaderView: NSViewRepresentable {
       if show {
         guard failureHosting == nil, let pdfView else { return }
         let hosting = NSHostingView(rootView: PDFLoadFailureView(
-          message: parent.pdfStore.lastError ?? "无法打开 PDF",
+          message: parent.pdfStore.lastError ?? String(localized: "无法打开 PDF"),
           onRetry: { [weak self] in self?.retryLoad() }
         ))
         hosting.translatesAutoresizingMaskIntoConstraints = false

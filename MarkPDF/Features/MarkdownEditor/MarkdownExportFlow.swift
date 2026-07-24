@@ -12,8 +12,8 @@ enum MarkdownExportFlow {
 
     var title: String {
       switch self {
-      case .pdf: "导出为 PDF"
-      case .html: "导出为 HTML"
+      case .pdf: String(localized: "导出为 PDF")
+      case .html: String(localized: "导出为 HTML")
       }
     }
 
@@ -33,10 +33,10 @@ enum MarkdownExportFlow {
       baseURL: store.currentFileURL?.deletingLastPathComponent()
     ) { html, title in
       guard let html, !html.isEmpty else {
-        alert(title: "导出失败", message: "渲染结果为空或内核超时，请稍后再试。")
+        alert(title: String(localized: "导出失败"), message: String(localized: "渲染结果为空或内核超时，请稍后再试。"))
         return
       }
-      presentSavePanel(format: format, suggestedName: title ?? "导出") { url in
+      presentSavePanel(format: format, suggestedName: title ?? String(localized: "导出")) { url in
         switch format {
         case .html:
           writeHTML(html, to: url)
@@ -67,7 +67,7 @@ enum MarkdownExportFlow {
       Logger.editor.info("已导出 HTML: \(url.lastPathComponent, privacy: .public)")
     } catch {
       Logger.editor.error("导出 HTML 失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-      alert(title: "导出失败", message: error.localizedDescription)
+      alert(title: String(localized: "导出失败"), message: error.localizedDescription)
     }
   }
 
@@ -96,7 +96,7 @@ final class MarkdownPDFGenerator: NSObject, WKNavigationDelegate {
     do {
       try html.write(to: temp, atomically: true, encoding: .utf8)
     } catch {
-      MarkdownExportFlow.alert(title: "导出失败", message: error.localizedDescription)
+      MarkdownExportFlow.alert(title: String(localized: "导出失败"), message: error.localizedDescription)
       return
     }
     tempFile = temp
@@ -152,7 +152,7 @@ final class MarkdownPDFGenerator: NSObject, WKNavigationDelegate {
           if succeeded, FileManager.default.fileExists(atPath: outputURL.path) {
             Logger.editor.info("已导出 PDF: \(outputURL.lastPathComponent, privacy: .public)")
           } else {
-            MarkdownExportFlow.alert(title: "导出失败", message: "PDF 打印任务未完成。")
+            MarkdownExportFlow.alert(title: String(localized: "导出失败"), message: String(localized: "PDF 打印任务未完成。"))
           }
           self.cleanup()
         }
@@ -161,7 +161,7 @@ final class MarkdownPDFGenerator: NSObject, WKNavigationDelegate {
   }
 
   private func fail(_ error: Error) {
-    MarkdownExportFlow.alert(title: "导出失败", message: error.localizedDescription)
+    MarkdownExportFlow.alert(title: String(localized: "导出失败"), message: error.localizedDescription)
     cleanup()
   }
 

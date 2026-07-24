@@ -22,8 +22,8 @@ enum AIProviderKind: String, Codable, CaseIterable, Identifiable {
     switch self {
     case .openai: "OpenAI"
     case .deepseek: "DeepSeek"
-    case .kimi: "Kimi（月之暗面）"
-    case .qwen: "通义千问 Qwen"
+    case .kimi: String(localized: "Kimi（月之暗面）")
+    case .qwen: String(localized: "通义千问 Qwen")
     case .gemini: "Google Gemini"
     case .anthropic: "Claude（Anthropic）"
     }

@@ -16,7 +16,8 @@ enum AITargetLanguage: String, Codable, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .auto: "自动（中英互译）"
+    case .auto: String(localized: "自动（中英互译）")
+    // 语言名用自体（autonym），任何界面语言下都可辨认，不本地化
     case .zh: "中文"
     case .en: "English"
     case .ja: "日本語"
@@ -38,8 +39,8 @@ enum AITranslationEngine: String, Codable, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .system: "系统翻译"
-    case .ai: "AI 大模型"
+    case .system: String(localized: "系统翻译")
+    case .ai: String(localized: "AI 大模型")
     }
   }
 }

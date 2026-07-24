@@ -6,6 +6,7 @@ import { RangeSetBuilder, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import katex from "katex";
 import { docContext } from "./doccontext.js";
+import { t } from "./strings.js";
 import { scanExtended } from "./extended.js";
 
 /* ---------- 小部件 ---------- */
@@ -96,7 +97,7 @@ class FenceBadgeWidget extends WidgetType {
     // 右：复制按钮（图标；提取本 fence 块正文）
     const copy = document.createElement("button");
     copy.className = "cm-fence-copy";
-    copy.title = "复制代码";
+    copy.title = t("copyCode");
     copy.innerHTML = COPY_ICON;
     copy.addEventListener("click", (e) => {
       e.preventDefault();
@@ -296,7 +297,7 @@ class ImageWidget extends WidgetType {
     if (!this.src) {
       el = document.createElement("span");
       el.className = "cm-image-broken";
-      el.textContent = `🖼 ${this.alt || "图片"}（草稿暂不支持相对路径图片）`;
+      el.textContent = `🖼 ${this.alt || t("imageFallbackAlt")}${t("imageDraftUnsupported")}`;
     } else {
       el = document.createElement("img");
       el.className = "cm-rendered-image";
@@ -305,7 +306,7 @@ class ImageWidget extends WidgetType {
       el.onerror = () => {
         const span = document.createElement("span");
         span.className = "cm-image-broken";
-        span.textContent = `🖼 图片加载失败：${this.alt || this.src}`;
+        span.textContent = `🖼 ${t("imageLoadFailed")}${this.alt || this.src}`;
         el.replaceWith(span);
       };
     }

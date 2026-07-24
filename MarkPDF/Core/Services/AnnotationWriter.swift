@@ -7,7 +7,7 @@ enum AnnotationWriteError: LocalizedError {
 
   var errorDescription: String? {
     switch self {
-    case .writeFailed: "PDF 写回失败"
+    case .writeFailed: String(localized: "PDF 写回失败")
     }
   }
 }

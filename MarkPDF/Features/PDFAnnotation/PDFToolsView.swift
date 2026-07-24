@@ -58,8 +58,8 @@ struct PDFToolsView: View {
     .buttonStyle(.plain)
     .onHover { isTranslateHovered = $0 }
     .help(isOn
-      ? "划词翻译（已开启：划词即翻；点击关闭）"
-      : "划词翻译（已关闭：选中文本后点浮动条翻译按钮手动翻译；点击开启划词即翻）")
+      ? String(localized: "划词翻译（已开启：划词即翻；点击关闭）")
+      : String(localized: "划词翻译（已关闭：选中文本后点浮动条翻译按钮手动翻译；点击开启划词即翻）"))
   }
 
   private func toolButton(_ kind: AnnotationKind, icon: String) -> some View {

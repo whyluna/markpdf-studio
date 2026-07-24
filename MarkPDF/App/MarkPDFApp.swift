@@ -19,6 +19,10 @@ struct MarkPDFApp: App {
   // AI（FR-AI.4）：偏好与密钥均为 App 级单例（设置页 / 划词翻译 / AI 助手共用）
   @StateObject private var aiSettingsStore = AISettingsStore()
   @StateObject private var aiKeyStore = AIKeyStore()
+  // Finder 直接打开文件的路由（文档类型见 Info.plist CFBundleDocumentTypes）
+  @StateObject private var externalOpen = ExternalOpenCoordinator()
+  // 默认打开方式开关（设置 → 通用）
+  @StateObject private var defaultHandlerService = DefaultHandlerService()
 
   init() {
     let tabStore = TabStore()
@@ -83,7 +87,12 @@ struct MarkPDFApp: App {
         .environmentObject(backlinksStore)
         .environmentObject(aiSettingsStore)
         .environmentObject(aiKeyStore)
+        .environmentObject(externalOpen)
         .frame(minWidth: 1080, minHeight: 640)
+        // Finder 双击 / Open With / 拖 Dock 打开文件：恢复现场就绪前入队，就绪后路由
+        .onOpenURL { url in
+          externalOpen.handle(url)
+        }
         .onAppear {
           // 重命名/移动成功（含撤销/重做链）→ 标签页路径跟随；
           // 撤销在 WorkspaceStore 内闭环、不经过视图层，需在 Store 层统一通知
@@ -200,6 +209,7 @@ struct MarkPDFApp: App {
         .environmentObject(settingsStore)
         .environmentObject(aiSettingsStore)
         .environmentObject(aiKeyStore)
+        .environmentObject(defaultHandlerService)
     }
   }
 }

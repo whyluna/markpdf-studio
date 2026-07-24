@@ -1,5 +1,6 @@
 // MarkPDF Markdown 编辑器内核入口（FR-2.1 / FR-2.2 / FR-2.7）
 import { EditorState, Compartment, StateField, Transaction } from "@codemirror/state";
+import { t as uiText } from "./strings.js";
 import { EditorView, keymap, placeholder, drawSelection, Decoration } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { search, searchKeymap, getSearchQuery } from "@codemirror/search";
@@ -180,7 +181,7 @@ const view = new EditorView({
       search({ top: true }),
       keymap.of([...searchKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
       ...baseExtensions(),
-      placeholder("开始输入 Markdown…"),
+      placeholder(uiText("placeholder")),
       modeConf.of(modeExtension("wysiwyg")),
       // 打字机/专注模式（FR-2.10）：默认关，经 editor.setTypewriter/setFocusMode 重配置
       typewriterConf.of([]),

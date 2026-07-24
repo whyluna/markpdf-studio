@@ -91,7 +91,7 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
 
   /// 上报文档解析失败（Bug 修复 3）：重试/再次加载成功前由视图层占位展示
   func reportLoadFailure(for url: URL) {
-    lastError = "无法打开 PDF「\(url.lastPathComponent)」：文件可能已损坏或格式不受支持"
+    lastError = String(localized: "无法打开 PDF「\(url.lastPathComponent)」：文件可能已损坏或格式不受支持")
   }
 
   // MARK: - 页内搜索（FR-3.4）
@@ -118,7 +118,7 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
   /// 计数文本：`k / n`；无查询为空，无结果显示提示
   var matchCountText: String {
     if findQuery.isEmpty { return "" }
-    if findMatches.isEmpty { return "无结果" }
+    if findMatches.isEmpty { return String(localized: "无结果") }
     return "\(currentMatchIndex + 1) / \(findMatches.count)"
   }
 

@@ -11,19 +11,20 @@ enum AIServiceError: LocalizedError, Equatable {
   var errorDescription: String? {
     switch self {
     case .missingAPIKey:
-      "未配置 API Key，请在设置中填写"
+      String(localized: "未配置 API Key，请在设置中填写")
     case .invalidConfiguration(let detail):
-      "配置无效：\(detail)"
+      String(localized: "配置无效：\(detail)")
     case .httpStatus(let status, let snippet):
-      "服务返回 HTTP \(status)\(snippet.isEmpty ? "" : "：\(snippet)")"
+      String(localized: "服务返回 HTTP \(status)\(snippet.isEmpty ? "" : "：\(snippet)")")
     case .provider(let message):
       message
     case .invalidResponse:
-      "响应格式无法识别"
+      String(localized: "响应格式无法识别")
     }
   }
 
-  /// 日志安全描述（规范 §6「日志不落正文」：错误体摘录可能含敏感回显，只用于 UI 展示）
+  /// 日志安全描述（规范 §6「日志不落正文」：错误体摘录可能含敏感回显，只用于 UI 展示）。
+  /// 仅进日志不进 UI，保持中文便于检索，不本地化
   var logSafeDescription: String {
     switch self {
     case .missingAPIKey: "未配置 API Key"
@@ -108,12 +109,12 @@ enum AIRequestBuilder {
 
   private static func baseRequest(url: String) throws -> URLRequest {
     guard let parsed = URL(string: url) else {
-      throw AIServiceError.invalidConfiguration("Base URL 无法解析")
+      throw AIServiceError.invalidConfiguration(String(localized: "Base URL 无法解析"))
     }
     // Bearer/x-api-key 会随请求发出：必须 https；仅本地回环（mock 调试）放行 http，防明文泄钥
     let loopback = ["127.0.0.1", "localhost", "::1"].contains(parsed.host ?? "")
     guard parsed.host != nil, parsed.scheme == "https" || (parsed.scheme == "http" && loopback) else {
-      throw AIServiceError.invalidConfiguration("Base URL 必须是 https 地址（本地调试可用 http://127.0.0.1）")
+      throw AIServiceError.invalidConfiguration(String(localized: "Base URL 必须是 https 地址（本地调试可用 http://127.0.0.1）"))
     }
     var request = URLRequest(url: parsed, timeoutInterval: 60)
     request.httpMethod = "POST"
@@ -177,7 +178,7 @@ enum AIChunkDecoder {
     guard let data = payload.data(using: .utf8) else { return .ignored }
     if event == "error" {
       let parsed = try? JSONDecoder().decode(AnthropicErrorPayload.self, from: data)
-      throw AIServiceError.provider(parsed?.error.message ?? "Anthropic 返回错误")
+      throw AIServiceError.provider(parsed?.error.message ?? String(localized: "Anthropic 返回错误"))
     }
     switch event {
     case "content_block_delta":

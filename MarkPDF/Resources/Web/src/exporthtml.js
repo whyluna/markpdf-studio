@@ -6,6 +6,7 @@
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { forceParsing } from "@codemirror/language";
+import { t } from "./strings.js";
 
 /* ---------- 标题提取 ---------- */
 
@@ -32,13 +33,13 @@ export function extractTitle(docText) {
     if (inFence) continue;
     // CommonMark：闭合 # 序列须前导空格、且之后只允许空白（"# C#" 的 # 属标题文本）
     const atx = /^\s{0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
-    if (atx) return plainText(atx[1]) || "Markdown 导出";
+    if (atx) return plainText(atx[1]) || t("exportFallbackTitle");
     // Setext：文本行 + === / --- 下划线
     if (line.trim() && i + 1 < lines.length && /^\s{0,3}(=+|-+)\s*$/.test(lines[i + 1])) {
-      return plainText(line) || "Markdown 导出";
+      return plainText(line) || t("exportFallbackTitle");
     }
   }
-  return "Markdown 导出";
+  return t("exportFallbackTitle");
 }
 
 /* ---------- 图片链接重写 ---------- */

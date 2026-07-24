@@ -14,6 +14,7 @@ struct ContentView: View {
   @EnvironmentObject private var backlinksStore: BacklinksStore
   @EnvironmentObject private var imageStore: ImagePreviewStore
   @EnvironmentObject private var settingsStore: SettingsStore
+  @EnvironmentObject private var externalOpen: ExternalOpenCoordinator
 
   var body: some View {
     VStack(spacing: 0) {
@@ -81,6 +82,18 @@ struct ContentView: View {
         workspaceStore?.allFiles.filter { $0.kind == .markdown }.map(\.id) ?? []
       }
       backlinksStore.setWorkspaceRoot(workspaceStore.root?.id)
+      // Finder 直接打开文件（授权已建立、标签现场已恢复后才放行队列）
+      externalOpen.openFileTab = { [weak tabStore] url in
+        tabStore?.open(url: url)
+      }
+      externalOpen.currentRootPath = { [weak stateStore] in
+        stateStore?.currentRootPath
+      }
+      externalOpen.switchWorkspaceTo = { [weak workspaceStore, weak tabStore] url in
+        guard let workspaceStore, let tabStore else { return }
+        stateStore.switchWorkspace(to: url, workspaceStore: workspaceStore, tabStore: tabStore)
+      }
+      externalOpen.markReady()
     }
     // 快速打开面板（FR-6.1 ⌘P）与全文搜索面板（FR-6.2 ⌘⇧F）与命令面板（FR-6.3 ⌘O）
     .overlay {
@@ -104,6 +117,9 @@ struct ContentView: View {
     } content: {
       tabArea
         .frame(minWidth: 480)
+        // ideal 引导首次列宽分配：内容区尽量宽，右侧面板默认压到最窄（266）；
+        // 用户拖动后由系统状态恢复接管，此值只影响首次
+        .navigationSplitViewColumnWidth(min: 480, ideal: 4000)
         .toolbar {
           ToolbarItem(placement: .principal) {
             if tabStore.activeGroup.activeTab?.kind == .pdf {
@@ -225,52 +241,52 @@ struct ContentView: View {
     var commands: [AppCommand] = []
 
     // 文件
-    commands.append(AppCommand(id: "open-folder", title: "打开文件夹…", section: "文件", shortcut: "⌘⇧O") {
+    commands.append(AppCommand(id: "open-folder", title: String(localized: "打开文件夹…"), section: String(localized: "文件"), shortcut: "⌘⇧O") {
       workspaceStore.openFolderPanel()
     })
-    commands.append(AppCommand(id: "new-md", title: "新建 Markdown 文件", section: "文件", isEnabled: { hasWorkspace }) {
+    commands.append(AppCommand(id: "new-md", title: String(localized: "新建 Markdown 文件"), section: String(localized: "文件"), isEnabled: { hasWorkspace }) {
       _ = workspaceStore.createMarkdown(in: workspaceStore.root!.id, undo: nil)  // root 已由 isEnabled 保证
     })
-    commands.append(AppCommand(id: "new-folder", title: "新建文件夹", section: "文件", isEnabled: { hasWorkspace }) {
+    commands.append(AppCommand(id: "new-folder", title: String(localized: "新建文件夹"), section: String(localized: "文件"), isEnabled: { hasWorkspace }) {
       _ = workspaceStore.createFolder(in: workspaceStore.root!.id, undo: nil)
     })
-    commands.append(AppCommand(id: "save", title: "保存", section: "文件", shortcut: "⌘S", isEnabled: { tabStore.activeEditorStore != nil }) {
+    commands.append(AppCommand(id: "save", title: String(localized: "保存"), section: String(localized: "文件"), shortcut: "⌘S", isEnabled: { tabStore.activeEditorStore != nil }) {
       tabStore.activeEditorStore?.flushPendingSave()
     })
-    commands.append(AppCommand(id: "quick-open", title: "快速打开…", section: "文件", shortcut: "⌘P", isEnabled: { hasWorkspace }) {
+    commands.append(AppCommand(id: "quick-open", title: String(localized: "快速打开…"), section: String(localized: "文件"), shortcut: "⌘P", isEnabled: { hasWorkspace }) {
       workspaceStore.isQuickOpenPresented = true
     })
-    commands.append(AppCommand(id: "full-search", title: "全文搜索…", section: "文件", shortcut: "⌘⇧F", isEnabled: { hasWorkspace }) {
+    commands.append(AppCommand(id: "full-search", title: String(localized: "全文搜索…"), section: String(localized: "文件"), shortcut: "⌘⇧F", isEnabled: { hasWorkspace }) {
       workspaceStore.isFullTextSearchPresented = true
     })
 
     // 导出
-    commands.append(AppCommand(id: "export-pdf", title: "导出为 PDF", section: "导出", isEnabled: { canExportMarkdown }) {
+    commands.append(AppCommand(id: "export-pdf", title: String(localized: "导出为 PDF"), section: String(localized: "导出"), isEnabled: { canExportMarkdown }) {
       exportMarkdown(.pdf)
     })
-    commands.append(AppCommand(id: "export-html", title: "导出为 HTML", section: "导出", isEnabled: { canExportMarkdown }) {
+    commands.append(AppCommand(id: "export-html", title: String(localized: "导出为 HTML"), section: String(localized: "导出"), isEnabled: { canExportMarkdown }) {
       exportMarkdown(.html)
     })
-    commands.append(AppCommand(id: "export-annotations", title: "导出全部标注为 Markdown…", section: "导出", isEnabled: { canExportAnnotations }) {
+    commands.append(AppCommand(id: "export-annotations", title: String(localized: "导出全部标注为 Markdown…"), section: String(localized: "导出"), isEnabled: { canExportAnnotations }) {
       exportAnnotations()
     })
 
     // 视图
-    commands.append(AppCommand(id: "split", title: tabStore.isSplit ? "合并为单栏" : "左右分栏", section: "视图") {
+    commands.append(AppCommand(id: "split", title: tabStore.isSplit ? String(localized: "合并为单栏") : String(localized: "左右分栏"), section: String(localized: "视图")) {
       tabStore.toggleSplit()
     })
-    commands.append(AppCommand(id: "zoom-in", title: "放大", section: "视图", shortcut: "⌘=", isEnabled: { isPDF || isImage }) {
+    commands.append(AppCommand(id: "zoom-in", title: String(localized: "放大"), section: String(localized: "视图"), shortcut: "⌘=", isEnabled: { isPDF || isImage }) {
       if isPDF { pdfStore.zoomIn() } else { imageStore.zoomIn() }
     })
-    commands.append(AppCommand(id: "zoom-out", title: "缩小", section: "视图", shortcut: "⌘-", isEnabled: { isPDF || isImage }) {
+    commands.append(AppCommand(id: "zoom-out", title: String(localized: "缩小"), section: String(localized: "视图"), shortcut: "⌘-", isEnabled: { isPDF || isImage }) {
       if isPDF { pdfStore.zoomOut() } else { imageStore.zoomOut() }
     })
-    commands.append(AppCommand(id: "zoom-reset", title: "实际大小", section: "视图", shortcut: "⌘0", isEnabled: { isPDF || isImage }) {
+    commands.append(AppCommand(id: "zoom-reset", title: String(localized: "实际大小"), section: String(localized: "视图"), shortcut: "⌘0", isEnabled: { isPDF || isImage }) {
       if isPDF { pdfStore.resetZoom() } else { imageStore.resetZoom() }
     })
     for mode in MarkdownEditorView.EditorMode.allCases {
       commands.append(AppCommand(
-        id: "mode-\(mode.rawValue)", title: "编辑模式：\(mode.title)", section: "视图",
+        id: "mode-\(mode.rawValue)", title: String(localized: "编辑模式：\(mode.title)"), section: String(localized: "视图"),
         isEnabled: { tabStore.activeEditorStore != nil }
       ) {
         tabStore.activeEditorStore?.mode = mode
@@ -278,16 +294,16 @@ struct ContentView: View {
     }
 
     // PDF
-    commands.append(AppCommand(id: "find", title: "在文档中查找…", section: "PDF", shortcut: "⌘F", isEnabled: { isPDF }) {
+    commands.append(AppCommand(id: "find", title: String(localized: "在文档中查找…"), section: String(localized: "PDF"), shortcut: "⌘F", isEnabled: { isPDF }) {
       pdfStore.presentFindBar()
     })
-    commands.append(AppCommand(id: "find-next", title: "查找下一个", section: "PDF", shortcut: "⌘G", isEnabled: { pdfStore.isFindBarVisible }) {
+    commands.append(AppCommand(id: "find-next", title: String(localized: "查找下一个"), section: String(localized: "PDF"), shortcut: "⌘G", isEnabled: { pdfStore.isFindBarVisible }) {
       pdfStore.findNext()
     })
-    commands.append(AppCommand(id: "find-prev", title: "查找上一个", section: "PDF", shortcut: "⇧⌘G", isEnabled: { pdfStore.isFindBarVisible }) {
+    commands.append(AppCommand(id: "find-prev", title: String(localized: "查找上一个"), section: String(localized: "PDF"), shortcut: "⇧⌘G", isEnabled: { pdfStore.isFindBarVisible }) {
       pdfStore.findPrevious()
     })
-    commands.append(AppCommand(id: "copy-quote", title: "复制为带回链的引用", section: "PDF", shortcut: "⇧⌘C", isEnabled: { isPDF && pdfStore.hasSelection }) {
+    commands.append(AppCommand(id: "copy-quote", title: String(localized: "复制为带回链的引用"), section: String(localized: "PDF"), shortcut: "⇧⌘C", isEnabled: { isPDF && pdfStore.hasSelection }) {
       PDFQuoteExporter.copyAsQuote(
         pdfView: pdfStore.pdfView,
         currentPage: pdfStore.currentPage,
@@ -296,15 +312,15 @@ struct ContentView: View {
     })
     commands.append(AppCommand(
       id: "sidecar",
-      title: annotationStore.isSidecarMode ? "关闭只读标注模式" : "开启只读标注模式",
-      section: "PDF",
+      title: annotationStore.isSidecarMode ? String(localized: "关闭只读标注模式") : String(localized: "开启只读标注模式"),
+      section: String(localized: "PDF"),
       isEnabled: { annotationStore.currentFileURL != nil }
     ) {
       annotationStore.setSidecarMode(!annotationStore.isSidecarMode)
     })
     for kind in AnnotationKind.allCases {
       commands.append(AppCommand(
-        id: "tool-\(kind.rawValue)", title: "标注工具：\(kind.title)", section: "PDF",
+        id: "tool-\(kind.rawValue)", title: String(localized: "标注工具：\(kind.title)"), section: String(localized: "PDF"),
         isEnabled: { isPDF }
       ) {
         annotationStore.activeTool = kind
@@ -314,19 +330,19 @@ struct ContentView: View {
     // 其他
     for theme in SettingsStore.PDFReadingTheme.allCases {
       commands.append(AppCommand(
-        id: "reading-theme-\(theme.rawValue)", title: "PDF 阅读主题：\(theme.title)", section: "视图",
+        id: "reading-theme-\(theme.rawValue)", title: String(localized: "PDF 阅读主题：\(theme.title)"), section: String(localized: "视图"),
         isEnabled: { isPDF }
       ) {
         settingsStore.pdfReadingTheme = theme
       })
     }
-    commands.append(AppCommand(id: "typewriter", title: "切换打字机模式", section: "视图", isEnabled: { tabStore.activeEditorStore != nil }) {
+    commands.append(AppCommand(id: "typewriter", title: String(localized: "切换打字机模式"), section: String(localized: "视图"), isEnabled: { tabStore.activeEditorStore != nil }) {
       settingsStore.typewriterMode.toggle()
     })
-    commands.append(AppCommand(id: "focus-mode", title: "切换专注模式", section: "视图", isEnabled: { tabStore.activeEditorStore != nil }) {
+    commands.append(AppCommand(id: "focus-mode", title: String(localized: "切换专注模式"), section: String(localized: "视图"), isEnabled: { tabStore.activeEditorStore != nil }) {
       settingsStore.focusMode.toggle()
     })
-    commands.append(AppCommand(id: "settings", title: "设置…", section: "其他", shortcut: "⌘,") {
+    commands.append(AppCommand(id: "settings", title: String(localized: "设置…"), section: String(localized: "其他"), shortcut: "⌘,") {
       NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     })
     return commands

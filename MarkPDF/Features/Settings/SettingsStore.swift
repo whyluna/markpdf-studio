@@ -15,9 +15,9 @@ final class SettingsStore: ObservableObject {
 
     var title: String {
       switch self {
-      case .system: "系统默认"
-      case .serif: "衬线（宋体系）"
-      case .mono: "等宽"
+      case .system: String(localized: "系统默认")
+      case .serif: String(localized: "衬线（宋体系）")
+      case .mono: String(localized: "等宽")
       }
     }
 
@@ -41,9 +41,9 @@ final class SettingsStore: ObservableObject {
 
     var title: String {
       switch self {
-      case .continuous: "连续滚动"
-      case .singlePage: "单页"
-      case .twoPages: "双页连续"
+      case .continuous: String(localized: "连续滚动")
+      case .singlePage: String(localized: "单页")
+      case .twoPages: String(localized: "双页连续")
       }
     }
 
@@ -77,8 +77,8 @@ final class SettingsStore: ObservableObject {
 
     var title: String {
       switch self {
-      case .day: "白天"
-      case .night: "夜间"
+      case .day: String(localized: "白天")
+      case .night: String(localized: "夜间")
       }
     }
   }
@@ -102,6 +102,66 @@ final class SettingsStore: ObservableObject {
     }
   }
 
+  /// 界面语言（重启后生效）：system 跟随 macOS；其余写 AppleLanguages 覆盖，
+  /// 系统菜单（About/Settings/Quit 由运行时提供）与界面文案在下次启动统一切换
+  enum AppLanguage: String, CaseIterable, Identifiable {
+    case system
+    case zhHans = "zh-Hans"
+    case en
+
+    var id: String { rawValue }
+
+    /// 语言名用自体（autonym），任何语言界面下都可辨认；仅「跟随系统」走本地化
+    var title: String {
+      switch self {
+      case .system: String(localized: "跟随系统")
+      case .zhHans: "中文"
+      case .en: "English"
+      }
+    }
+  }
+
+  @Published var appLanguage: AppLanguage {
+    didSet {
+      defaults.set(appLanguage.rawValue, forKey: Key.appLanguage)
+      // 只写不读回（cfprefsd 时序风险）；不 synchronize（废弃且不必要）
+      if let value = Self.appleLanguagesValue(for: appLanguage) {
+        defaults.set(value, forKey: "AppleLanguages")
+      } else {
+        defaults.removeObject(forKey: "AppleLanguages")
+      }
+    }
+  }
+
+  /// AppleLanguages 覆盖值（纯函数供单测）：nil = 移除覆盖、跟随系统
+  nonisolated static func appleLanguagesValue(for language: AppLanguage) -> [String]? {
+    switch language {
+    case .system: nil
+    case .zhHans: ["zh-Hans"]
+    case .en: ["en"]
+    }
+  }
+
+  /// 编辑器内核（JS）语言：从自有 key 推导（不读回 AppleLanguages）
+  var effectiveWebLocale: String {
+    Self.webLocale(for: appLanguage)
+  }
+
+  /// 启动期静态读取（NSViewRepresentable/静态初始化处无 store 实例；语言重启后生效，读一次即准）
+  nonisolated static var launchWebLocale: String {
+    let raw = UserDefaults.standard.string(forKey: Key.appLanguage) ?? ""
+    return webLocale(for: AppLanguage(rawValue: raw) ?? .system)
+  }
+
+  private nonisolated static func webLocale(for language: AppLanguage) -> String {
+    switch language {
+    case .zhHans: "zh"
+    case .en: "en"
+    case .system:
+      Locale.preferredLanguages.first?.hasPrefix("zh") == true ? "zh" : "en"
+    }
+  }
+
   private let defaults: UserDefaults
   private enum Key {
     static let font = "settings.editorFont"
@@ -111,6 +171,7 @@ final class SettingsStore: ObservableObject {
     static let typewriterMode = "settings.typewriterMode"
     static let focusMode = "settings.focusMode"
     static let pdfReadingTheme = "settings.pdfReadingTheme"
+    static let appLanguage = "settings.appLanguage"
   }
 
   /// 默认值（与内核 baseTheme 一致）
@@ -128,5 +189,6 @@ final class SettingsStore: ObservableObject {
     pdfReadingTheme = PDFReadingTheme(rawValue: defaults.string(forKey: Key.pdfReadingTheme) ?? "") ?? .day
     typewriterMode = defaults.bool(forKey: Key.typewriterMode)
     focusMode = defaults.bool(forKey: Key.focusMode)
+    appLanguage = AppLanguage(rawValue: defaults.string(forKey: Key.appLanguage) ?? "") ?? .system
   }
 }

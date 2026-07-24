@@ -147,7 +147,7 @@ final class PDFAnnotationStore: ObservableObject {
       // 持续失败只提示一次（attach 随分栏焦点切换反复发生），避免弹窗轰炸
       if !hasReportedSidecarLoadFailure {
         hasReportedSidecarLoadFailure = true
-        lastError = "标注文件「\(sidecarURL.lastPathComponent)」读取失败：\(error.localizedDescription)。标注未加载；为保护原文件，本次不会向它写回。"
+        lastError = String(localized: "标注文件「\(sidecarURL.lastPathComponent)」读取失败：\(error.localizedDescription)。标注未加载；为保护原文件，本次不会向它写回。")
       }
     }
   }
@@ -298,7 +298,7 @@ final class PDFAnnotationStore: ObservableObject {
       // 持续失败只提示一次（每次标注变更都会重试），避免弹窗轰炸
       if !hasReportedWriteFailure {
         hasReportedWriteFailure = true
-        lastError = "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)"
+        lastError = String(localized: "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)")
       }
     }
   }

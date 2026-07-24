@@ -1,16 +1,19 @@
 name: MarkPDF
 options:
   bundleIdPrefix: com.whyluna
+  # 本地化：源语言中文（catalog 以中文字面量为 key，补英文译文）
+  developmentLanguage: zh-Hans
   deploymentTarget:
     # FR-AI 决策：系统翻译 TranslationSession 需 macOS 15（见需求文档 v1.1 模块 8）
     macOS: "15.0"
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    GENERATE_INFOPLIST_FILE: YES
     MARKETING_VERSION: "0.1.2"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_STRICT_CONCURRENCY: minimal
+    # 编译时把 SwiftUI 字面量与 String(localized:) 自动收编进 Localizable.xcstrings
+    SWIFT_EMIT_LOC_STRINGS: YES
 # FR-AI 决策：AI 网络层自写薄 SSE 客户端（OpenAI 兼容 + Anthropic 各 ~150 行），
 # 不引入 SwiftOpenAI/SwiftAnthropic 第三方包，保持规范 §1 原生零依赖
 targets:
@@ -50,11 +53,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.whyluna.markpdf
         CODE_SIGN_ENTITLEMENTS: MarkPDF/MarkPDF.entitlements
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        # 手动 Info.plist（声明 PDF/Markdown 文档类型，Finder 打开入口的前提）
+        INFOPLIST_FILE: MarkPDF/Info.plist
   MarkPDFTests:
     type: bundle.unit-test
     platform: macOS
     sources:
       - path: MarkPDFTests
+    settings:
+      base:
+        # App target 用手动 Info.plist；测试 bundle 仍自动生成
+        GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: MarkPDF

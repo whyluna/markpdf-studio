@@ -11,7 +11,7 @@ struct EditorTab: Equatable, Identifiable {
 
   /// 文件标签以路径为身份（同路径同标签）；草稿以 UUID 为身份
   var id: String { url?.path ?? uuid.uuidString }
-  var title: String { url?.lastPathComponent ?? "未命名" }
+  var title: String { url?.lastPathComponent ?? String(localized: "未命名") }
   var isDraft: Bool { url == nil }
 
   /// SF Symbols 图标（与文件树一致）

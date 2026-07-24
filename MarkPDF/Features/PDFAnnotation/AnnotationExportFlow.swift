@@ -12,13 +12,13 @@ enum AnnotationExportFlow {
     let items = store.annotationItems()
     let pdfBaseName = pdfURL.deletingPathExtension().lastPathComponent
     guard !items.isEmpty else {
-      alert(title: "没有可导出的标注", message: "当前 PDF 还没有任何标注。")
+      alert(title: String(localized: "没有可导出的标注"), message: String(localized: "当前 PDF 还没有任何标注。"))
       return nil
     }
 
     let panel = NSSavePanel()
-    panel.title = "导出全部标注为 Markdown"
-    panel.nameFieldStringValue = "\(pdfBaseName)-标注.md"
+    panel.title = String(localized: "导出全部标注为 Markdown")
+    panel.nameFieldStringValue = String(localized: "\(pdfBaseName)-标注.md")
     panel.directoryURL = pdfURL.deletingLastPathComponent()
     if let mdType = UTType(filenameExtension: "md") {
       panel.allowedContentTypes = [mdType]
@@ -38,13 +38,13 @@ enum AnnotationExportFlow {
       // 文件存在但读不出（如 UTF-16 编码）：必须中止——按「不存在」走全新分支
       // 会整体覆盖原文件，造成数据丢失（Bug C2）
       Logger.pdf.error("导出标注失败：目标文件读取失败 \(target.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-      alert(title: "导出失败", message: "目标文件已存在但无法读取，已中止导出以避免覆盖原内容：\(error.localizedDescription)")
+      alert(title: String(localized: "导出失败"), message: String(localized: "目标文件已存在但无法读取，已中止导出以避免覆盖原内容：\(error.localizedDescription)"))
       return nil
     }
     let (content, addedCount) = AnnotationMarkdownExporter.mergedContent(
       existing: existing, pdfBaseName: pdfBaseName, newLines: lines)
     guard addedCount > 0 else {
-      alert(title: "没有新标注", message: "全部 \(lines.count) 条标注已存在于目标笔记中。")
+      alert(title: String(localized: "没有新标注"), message: String(localized: "全部 \(lines.count) 条标注已存在于目标笔记中。"))
       return target
     }
     do {
@@ -54,7 +54,7 @@ enum AnnotationExportFlow {
       return target
     } catch {
       Logger.pdf.error("导出标注失败 \(target.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-      alert(title: "导出失败", message: error.localizedDescription)
+      alert(title: String(localized: "导出失败"), message: error.localizedDescription)
       return nil
     }
   }

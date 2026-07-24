@@ -88,7 +88,7 @@ final class TranslationStore: ObservableObject {
     ) else {
       // 原文已是目标语言
       phase = .success(trimmed)
-      engineTitle = "无需翻译"
+      engineTitle = String(localized: "无需翻译")
       return
     }
     switch settings.settings.translationEngine {
@@ -110,14 +110,14 @@ final class TranslationStore: ObservableObject {
         case .translating = self.phase, self.sourceText == text
       else { return }
       Logger.ai.error("翻译超时无响应")
-      self.phase = .failure("翻译超时无响应，请重试；系统引擎持续不可用时可改用 AI 大模型引擎")
+      self.phase = .failure(String(localized: "翻译超时无响应，请重试；系统引擎持续不可用时可改用 AI 大模型引擎"))
     }
   }
 
   // MARK: - 系统翻译
 
   private func startSystemTranslation(_ text: String, source: AITargetLanguage, target: AITargetLanguage) {
-    engineTitle = "系统翻译"
+    engineTitle = String(localized: "系统翻译")
     pendingSystemText = text
     let pair = (source: source, target: target)
     // 同语言对且已有 session：直接复用，不再依赖 .translationTask 重触发（等值配置不重触发=永转）
@@ -168,7 +168,7 @@ final class TranslationStore: ObservableObject {
     } catch {
       guard pendingSystemText == text else { return }
       Logger.ai.error("[TR\(self.instanceID)] 系统翻译失败: \(error.localizedDescription, privacy: .public)")
-      phase = .failure("系统翻译失败（\(error.localizedDescription)）。可在 设置 → AI 中改用 AI 大模型引擎")
+      phase = .failure(String(localized: "系统翻译失败（\(error.localizedDescription)）。可在 设置 → AI 中改用 AI 大模型引擎"))
     }
   }
 
@@ -176,7 +176,7 @@ final class TranslationStore: ObservableObject {
 
   private func startAITranslation(_ text: String, target: AITargetLanguage) {
     guard let kind = settings.translationProviderKind else {
-      phase = .failure("未启用任何 AI Provider，请到 设置 → AI 配置并启用")
+      phase = .failure(String(localized: "未启用任何 AI Provider，请到 设置 → AI 配置并启用"))
       return
     }
     engineTitle = kind.title

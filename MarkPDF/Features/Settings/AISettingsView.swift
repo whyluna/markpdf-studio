@@ -60,7 +60,7 @@ struct AISettingsView: View {
       TextField("模型", text: configBinding(kind, \.model))
       HStack {
         SecureField(
-          aiKeys.configuredAccounts.contains(kind.rawValue) ? "API Key（已保存，输入以更换）" : "API Key",
+          aiKeys.configuredAccounts.contains(kind.rawValue) ? String(localized: "API Key（已保存，输入以更换）") : String(localized: "API Key"),
           text: keyDraftBinding(for: kind)
         )
         Button("保存") {
@@ -132,7 +132,7 @@ struct AISettingsView: View {
     Task { @MainActor in
       do {
         let elapsed = try await service.testConnection(kind: kind, config: config)
-        testStates[kind.rawValue] = .success(String(format: "连接正常（%.1fs）", elapsed))
+        testStates[kind.rawValue] = .success(String(format: String(localized: "连接正常（%.1fs）"), elapsed))
       } catch {
         testStates[kind.rawValue] = .failure(error.localizedDescription)
       }

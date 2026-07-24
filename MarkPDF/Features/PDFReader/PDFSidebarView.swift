@@ -11,11 +11,20 @@ struct PDFSidebarView: View {
   @State private var segment = Segment.thumbnails
 
   private enum Segment: String, CaseIterable, Identifiable {
-    case thumbnails = "缩略图"
-    case bookmarks = "书签"
-    case annotations = "标注"
-    case references = "引用"
+    case thumbnails
+    case bookmarks
+    case annotations
+    case references
     var id: String { rawValue }
+
+    var title: String {
+      switch self {
+      case .thumbnails: String(localized: "缩略图")
+      case .bookmarks: String(localized: "书签")
+      case .annotations: String(localized: "标注")
+      case .references: String(localized: "引用")
+      }
+    }
   }
 
   var body: some View {
@@ -26,7 +35,7 @@ struct PDFSidebarView: View {
           if segment == .annotations {
             Text("标注 \(annotationStore.annotationItemsSnapshot.count)").tag(segment)
           } else {
-            Text(segment.rawValue).tag(segment)
+            Text(segment.title).tag(segment)
           }
         }
       }
@@ -54,7 +63,7 @@ struct PDFSidebarView: View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
         if let outlineRoot = pdfStore.pdfView?.document?.outlineRoot, outlineRoot.numberOfChildren > 0 {
-          sectionTitle("文档大纲")
+          sectionTitle(String(localized: "文档大纲"))
           ForEach(0..<outlineRoot.numberOfChildren, id: \.self) { index in
             if let child = outlineRoot.child(at: index) {
               PDFOutlineRow(outline: child) { destination in
@@ -63,7 +72,7 @@ struct PDFSidebarView: View {
             }
           }
         }
-        sectionTitle("我的书签")
+        sectionTitle(String(localized: "我的书签"))
         Button {
           // 加载窗口期（异步解析未完成）currentPage 为 0：0 页书签永远跳不到
           //（goTo 有 page>=1 防护），不得产生死书签（Bug 修复 4）
@@ -71,7 +80,7 @@ struct PDFSidebarView: View {
           bookmarksStore.toggle(page: pdfStore.currentPage, for: url)
         } label: {
           Label(
-            bookmarksStore.contains(page: pdfStore.currentPage, for: url) ? "移除当前页书签" : "书签当前页",
+            bookmarksStore.contains(page: pdfStore.currentPage, for: url) ? String(localized: "移除当前页书签") : String(localized: "书签当前页"),
             systemImage: bookmarksStore.contains(page: pdfStore.currentPage, for: url) ? "bookmark.fill" : "bookmark"
           )
           .font(.callout)

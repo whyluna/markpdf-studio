@@ -16,9 +16,9 @@ struct MarkdownEditorView: NSViewRepresentable {
 
     var title: String {
       switch self {
-      case .wysiwyg: "所见即所得"
-      case .source: "源码"
-      case .reading: "阅读"
+      case .wysiwyg: String(localized: "所见即所得")
+      case .source: String(localized: "源码")
+      case .reading: String(localized: "阅读")
       }
     }
   }
@@ -153,9 +153,9 @@ struct MarkdownEditorView: NSViewRepresentable {
       Logger.editor.fault("缺少内核页面 index.html（先执行 npm run build，并确认 Web/dist 已加入 target）")
       return webView
     }
-    // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）
+    // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）；lang：内核界面文案语言
     var appPage = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)
-    appPage?.query = "app=1"
+    appPage?.query = "app=1&lang=\(SettingsStore.launchWebLocale)"
     webView.loadFileURL(appPage?.url ?? pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
     return webView
   }
@@ -361,7 +361,7 @@ extension MarkdownEditorView {
       func fail(_ message: String) {
         bridge.respond(id: id, payload: ["error": message])
         let alert = NSAlert()
-        alert.messageText = "图片保存失败"
+        alert.messageText = String(localized: "图片保存失败")
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.runModal()
@@ -369,13 +369,13 @@ extension MarkdownEditorView {
       guard let dataString = payload["data"] as? String,
         let data = Data(base64Encoded: dataString)
       else {
-        fail("图片数据解码失败。")
+        fail(String(localized: "图片数据解码失败。"))
         return
       }
       guard let root = parent.workspaceRoot,
         let dir = parent.documentID?.deletingLastPathComponent()
       else {
-        fail("草稿或未打开工作区时无法保存图片，请先保存文件。")
+        fail(String(localized: "草稿或未打开工作区时无法保存图片，请先保存文件。"))
         return
       }
       do {

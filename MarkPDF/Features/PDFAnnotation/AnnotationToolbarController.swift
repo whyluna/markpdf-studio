@@ -163,7 +163,7 @@ final class AnnotationToolbarController: NSObject {
     if aiSettings.settings.translationEngine == .ai,
       !AIPrivacyGate.ensureAcknowledged(store: aiSettings, allowPrompt: !isAutomatic)
     {
-      translationStore.presentFailure("已取消翻译：首次使用 AI 功能需确认隐私告知", for: text)
+      translationStore.presentFailure(String(localized: "已取消翻译：首次使用 AI 功能需确认隐私告知"), for: text)
       return
     }
     translationStore.translate(text)

@@ -68,7 +68,7 @@ final class EditorStore: ObservableObject {
           Logger.editor.info("已打开文件: \(url.lastPathComponent, privacy: .public)")
         case .failure(let error):
           Logger.editor.error("读取文件失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-          self.lastError = "无法打开「\(url.lastPathComponent)」：\(error.localizedDescription)"
+          self.lastError = String(localized: "无法打开「\(url.lastPathComponent)」：\(error.localizedDescription)")
         }
       }
     }
@@ -192,7 +192,7 @@ final class EditorStore: ObservableObject {
           // 持续失败只提示一次（内容每变一次就重试一次），避免击键级弹窗轰炸
           if !self.hasReportedSaveFailure {
             self.hasReportedSaveFailure = true
-            self.lastError = "自动保存失败「\(url.lastPathComponent)」：\(error.localizedDescription)"
+            self.lastError = String(localized: "自动保存失败「\(url.lastPathComponent)」：\(error.localizedDescription)")
           }
         }
         return
@@ -229,7 +229,13 @@ final class EditorStore: ObservableObject {
     statsDebouncer.cancel()
   }
 
-  static let welcomeDocument = """
+  /// 欢迎文档（按界面语言选择；大段内容不进 catalog，双语两份字面量）。
+  /// 语言重启后生效，启动时读一次持久化键即可（与 SettingsStore.effectiveWebLocale 同口径）
+  static var welcomeDocument: String {
+    SettingsStore.launchWebLocale == "zh" ? welcomeDocumentZH : welcomeDocumentEN
+  }
+
+  static let welcomeDocumentZH = """
     # 欢迎使用 MarkPDF Studio
 
     按 **⌘O** 打开一个文件夹作为工作区；在左侧文件树中点击 `.md` 文件即可编辑，PDF 与图片可直接预览。
@@ -253,5 +259,31 @@ final class EditorStore: ObservableObject {
     - [x] 自动保存：停止输入 0.5 秒后落盘（FR-2.7）
 
     > 明暗主题跟随系统外观自动切换。
+    """
+
+  static let welcomeDocumentEN = """
+    # Welcome to MarkPDF Studio
+
+    Press **⌘O** to open a folder as your workspace. Click a `.md` file in the file tree to edit it; PDFs and images open as previews.
+
+    Edits are **auto-saved**: written to disk 0.5s after you stop typing (atomic writes). An orange dot next to the file name means unsaved changes.
+
+    This is a CodeMirror 6 engine running inside **WKWebView**. Move the cursor into a line to see its source; move away and it renders.
+
+    - Supports **bold**, *italic*, ~~strikethrough~~, `inline code`
+    - Supports [links](https://github.com/whyluna/markpdf-studio), quotes, and task lists
+    - Switch between WYSIWYG / Source / Reading modes in the top-right corner
+
+    ```swift
+    // Syntax-highlighted code block
+    let bridge = WebBridge()
+    bridge.notify(.setContent, payload: ["text": text])
+    ```
+
+    - [x] Engine embedded in the app
+    - [x] File tree opens real documents (FR-1.1)
+    - [x] Auto-save: flushed 0.5s after typing stops (FR-2.7)
+
+    > Light/dark theme follows the system appearance.
     """
 }

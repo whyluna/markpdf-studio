@@ -28,9 +28,9 @@ struct BacklinksPanelView: View {
   @ViewBuilder
   private var content: some View {
     if target == nil {
-      placeholder("打开文件后\n显示引用它的文件")
+      placeholder(String(localized: "打开文件后\n显示引用它的文件"))
     } else if backlinksStore.items.isEmpty {
-      placeholder(backlinksStore.isScanning ? "扫描中…" : "没有文件引用它")
+      placeholder(backlinksStore.isScanning ? String(localized: "扫描中…") : String(localized: "没有文件引用它"))
     } else {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {

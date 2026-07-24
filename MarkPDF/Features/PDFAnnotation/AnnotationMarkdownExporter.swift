@@ -41,7 +41,7 @@ enum AnnotationMarkdownExporter {
   ) -> (content: String, addedCount: Int) {
     guard let existing, !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       let body = newLines.joined(separator: "\n")
-      return ("# \(pdfBaseName) 标注\n\n\(body)\n", newLines.count)
+      return (String(localized: "# \(pdfBaseName) 标注") + "\n\n\(body)\n", newLines.count)
     }
     var lines = existing.components(separatedBy: .newlines)
     var appended: [String] = []
