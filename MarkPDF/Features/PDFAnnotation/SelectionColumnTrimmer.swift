@@ -28,11 +28,20 @@ enum SelectionColumnTrimmer {
     func clusterIndex(at point: NSPoint) -> Int? {
       clusters.firstIndex { point.x >= $0.minX - 4 && point.x <= $0.maxX + 4 }
     }
-    guard let start = clusterIndex(at: dragStart), start == clusterIndex(at: dragEnd) else {
-      // 跨栏拖拽或起止落在栏外空白：视为有意跨栏（阅读顺序），保持原选区
+    guard let start = clusterIndex(at: dragStart), let end = clusterIndex(at: dragEnd) else {
+      // 起止落在栏外空白：保持原选区
       return Array(lineBounds.indices)
     }
-    return clusters[start].lines.sorted()
+    if start == end {
+      // 同栏拖拽：仅保留该栏（右栏划词不带左栏）
+      return clusters[start].lines.sorted()
+    }
+    if end < start {
+      // 逆向跨栏（右栏→左栏，阅读顺序倒序）：几乎必是划过栏间距的误触，裁到起始栏
+      return clusters[start].lines.sorted()
+    }
+    // 顺向跨栏（左栏→右栏，阅读顺序）：视为有意跨栏复制，保持原选区
+    return Array(lineBounds.indices)
   }
 
   /// 拖拽结束：按需裁剪 PDFView 当前选区（起止点为视图坐标；dragStart 为 nil 时不动）

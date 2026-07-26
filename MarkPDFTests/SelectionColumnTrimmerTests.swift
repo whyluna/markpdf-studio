@@ -38,13 +38,24 @@ final class SelectionColumnTrimmerTests: XCTestCase {
 
   func testCrossColumnDragKeepsEverything() {
     let bounds = twoColumnBounds()
-    // 起在左栏、止在右栏：有意跨栏（阅读顺序），保持原选区
+    // 顺向跨栏（左栏→右栏，阅读顺序）：有意跨栏复制，保持原选区
     let kept = SelectionColumnTrimmer.keptLineIndices(
       lineBounds: bounds,
       dragStart: NSPoint(x: 100, y: 30),
       dragEnd: NSPoint(x: 400, y: 95)
     )
     XCTAssertEqual(kept, Array(bounds.indices))
+  }
+
+  func testBackwardCrossColumnDragTrimsToStartColumn() {
+    let bounds = twoColumnBounds()
+    // 逆向跨栏（右栏→左栏，阅读顺序倒序）：划过栏间距的误触，裁到起始栏（右栏）
+    let kept = SelectionColumnTrimmer.keptLineIndices(
+      lineBounds: bounds,
+      dragStart: NSPoint(x: 400, y: 95),
+      dragEnd: NSPoint(x: 100, y: 30)
+    )
+    XCTAssertEqual(kept, [4, 5, 6, 7])
   }
 
   func testSingleColumnKeepsEverything() {
