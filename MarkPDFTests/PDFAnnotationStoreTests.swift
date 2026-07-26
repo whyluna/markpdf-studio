@@ -115,6 +115,63 @@ final class PDFAnnotationStoreTests: XCTestCase {
     XCTAssertNotNil(store.lastError, "恢复后再失败应再次上报")
   }
 
+  // MARK: - FR-7.4 审查修复：权限不足提示附补救引导
+
+  /// 权限错误识别（裸开工作区外 PDF 时同目录新建 .bak/.tmp/.json 必 EPERM）
+  func testIsPermissionError() {
+    XCTAssertTrue(PDFAnnotationStore.isPermissionError(
+      NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)))
+    XCTAssertTrue(PDFAnnotationStore.isPermissionError(
+      NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError)))
+    XCTAssertTrue(PDFAnnotationStore.isPermissionError(
+      NSError(domain: NSPOSIXErrorDomain, code: Int(EPERM))))
+    XCTAssertTrue(PDFAnnotationStore.isPermissionError(
+      NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES))))
+    // POSIX 原因包在 underlying error 里也算
+    XCTAssertTrue(PDFAnnotationStore.isPermissionError(
+      NSError(
+        domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError,
+        userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES))])))
+    XCTAssertFalse(PDFAnnotationStore.isPermissionError(
+      NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)))
+    XCTAssertFalse(PDFAnnotationStore.isPermissionError(AnnotationWriteError.writeFailed))
+  }
+
+  /// 权限不足写回失败（只读目录下无法新建 .bak，模拟裸开工作区外文件的沙盒 EPERM）：
+  /// 提示须附「设为工作区」补救引导
+  func testPermissionWriteFailureGuidesSetWorkspace() throws {
+    let (dir, url, doc) = try makePDFFixture()
+    defer {
+      // 先恢复可写再清理（只读目录删不动）
+      try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+      try? FileManager.default.removeItem(at: dir)
+    }
+    try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+
+    let store = makeStore()
+    store.attach(document: doc, url: url)
+    store.markDirty()
+    store.flushPendingWrites()
+
+    let error = try XCTUnwrap(store.lastError, "写回失败必须上报")
+    XCTAssertTrue(error.contains("设为工作区"), "权限不足须附补救引导，实际: \(error)")
+  }
+
+  /// 非权限错误（原文件丢失）：沿用原提示，不附工作区引导
+  func testNonPermissionWriteFailureKeepsOriginalMessage() throws {
+    let (dir, url, doc) = try makePDFFixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.removeItem(at: url)
+
+    let store = makeStore()
+    store.attach(document: doc, url: url)
+    store.markDirty()
+    store.flushPendingWrites()
+
+    let error = try XCTUnwrap(store.lastError, "写回失败必须上报")
+    XCTAssertFalse(error.contains("设为工作区"), "非权限错误不应附工作区引导，实际: \(error)")
+  }
+
   // MARK: - 防抖窗口内 flush 写回（Bug C1 回归）
 
   /// 建临时目录 + 落盘一页 PDF，返回 (目录, 文件 URL, 文档)

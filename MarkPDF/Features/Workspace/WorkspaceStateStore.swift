@@ -82,10 +82,22 @@ final class WorkspaceStateStore: ObservableObject {
   func tabsDidChange(groups: [TabGroup], activeGroupID: TabGroup.ID) {
     guard let rootPath = currentRootPath else { return }  // 无工作区不入槽
     var ws = state.workspaces[rootPath] ?? WorkspaceSnapshot()
+    // FR-7.4 审查修复：异根文件标签（Finder 裸开）不入当前工作区槽位——否则旧槽被污染：
+    // 接受「设为工作区」时异根路径留在旧槽；选「仅打开文件」时留在旧槽且重启后
+    // Finder 授权失效，恢复必 EPERM。nil url 草稿不受影响照常记录。
+    //（判定与 ExternalOpenCoordinator.decide 共用，见 isWithinWorkspace 注释）
     ws.groups = groups.map { group in
-      group.tabs.map { TabState(path: $0.url?.path, kind: $0.kind.rawValue) }
+      group.tabs.compactMap { tab in
+        guard let url = tab.url else { return TabState(path: nil, kind: tab.kind.rawValue) }
+        guard url.isWithinWorkspace(rootPath: rootPath) else { return nil }
+        return TabState(path: url.path, kind: tab.kind.rawValue)
+      }
     }
-    ws.activeTabs = groups.map { $0.activeTab?.url?.path }
+    // 激活标签同理：异根激活标签记为 nil（恢复时回退组内首个），不得记录异根路径
+    ws.activeTabs = groups.map { group in
+      guard let url = group.activeTab?.url, url.isWithinWorkspace(rootPath: rootPath) else { return nil }
+      return url.path
+    }
     ws.activeGroup = groups.firstIndex { $0.id == activeGroupID } ?? 0
     state.workspaces[rootPath] = ws
     schedulePersist()

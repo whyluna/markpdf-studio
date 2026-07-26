@@ -135,7 +135,8 @@ final class WorkspaceStateStoreTests: XCTestCase {
     func stopWatching() {}
   }
 
-  private let rootA = URL(fileURLWithPath: "/tmp/ws-a")
+  // rootA 取 /tmp/ws：槽位只记录根内标签（FR-7.4 审查修复），夹具文件 file1/file2 必须位于工作区内
+  private let rootA = URL(fileURLWithPath: "/tmp/ws")
   private let rootB = URL(fileURLWithPath: "/tmp/ws-b")
   private let bFile = URL(fileURLWithPath: "/tmp/ws-b/b.md")
 
@@ -205,6 +206,43 @@ final class WorkspaceStateStoreTests: XCTestCase {
     XCTAssertEqual(paths, [file1.path], "打开文件后槽位应记录真实文件标签")
   }
 
+  /// FR-7.4 审查修复：Finder 裸开的异根文件标签（「仅打开文件」/ 接受设工作区前的旧槽）
+  /// 不得写入当前工作区槽位——否则重启/切回后恢复该文件必 EPERM（Finder 授权不跨会话）。
+  /// 工作区内文件（含子目录后代）与 nil url 草稿照常记录
+  @MainActor
+  func testForeignRootTabsAreNotRecordedIntoSlot() throws {
+    let store = WorkspaceStateStore(defaults: defaults)
+    let tabStore = TabStore()
+    store.workspaceDidChange(root: rootA, collapsedFolders: [])
+    // 与 ContentView.onAppear 一致的接线
+    tabStore.onStructureChange = { [weak tabStore] in
+      guard let tabStore else { return }
+      store.tabsDidChange(groups: tabStore.groups, activeGroupID: tabStore.activeGroupID)
+    }
+
+    // 工作区内文件与子目录后代：照常入槽
+    tabStore.open(FileNode(id: file1, name: "a.md", kind: .markdown))
+    let descendant = URL(fileURLWithPath: "/tmp/ws/notes/c.md")
+    tabStore.open(FileNode(id: descendant, name: "c.md", kind: .markdown))
+    // 异根文件（裸开）：不入槽
+    let foreign = URL(fileURLWithPath: "/elsewhere/x.pdf")
+    tabStore.open(url: foreign)
+    store.flush()
+
+    let data = try XCTUnwrap(defaults.data(forKey: "workspaceSnapshot.v1"))
+    let snapshot = try JSONDecoder().decode(WorkspaceStateStore.Snapshot.self, from: data)
+    let key = rootA.standardizedFileURL.path
+    let ws = try XCTUnwrap(snapshot.workspaces[key])
+    XCTAssertEqual(
+      ws.groups.flatMap { $0 }.compactMap(\.path),
+      [file1.path, descendant.path],
+      "异根标签不得污染当前工作区槽位；根后代照常记录"
+    )
+    // 激活标签是异根文件：记为 nil（恢复时回退组内首个），不得记录异根路径
+    XCTAssertEqual(ws.activeTabs.count, 1)
+    XCTAssertNil(ws.activeTabs[0], "异根激活标签不得入槽（重启恢复必 EPERM）")
+  }
+
   /// 切换工作区不得清掉旧槽（实机 bug 回归）：切换编排期间 root 仍是旧工作区（异步扫描未完成），
   /// collapsedFolders 赋值等路过事件会以旧 root 触发 workspaceDidChange——必须把这类事件挡在门外，
   /// 否则槽位指针被拉回旧工作区，随后的 replaceAll 把空白草稿写进旧槽、真实标签被覆盖丢失
@@ -237,7 +275,9 @@ final class WorkspaceStateStoreTests: XCTestCase {
       RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     }
     XCTAssertNotNil(ws.root)
-    tabStore.open(FileNode(id: file1, name: "a.md", kind: .markdown))
+    // 打开的文件必须在工作区内（FR-7.4 审查修复：异根标签不再入槽）
+    let aFile = rootA.appendingPathComponent("a.md")
+    tabStore.open(FileNode(id: aFile, name: "a.md", kind: .markdown))
 
     // 切到 B：此间 collapsedFolders 赋值会以旧 root(A) 触发路过事件
     store.switchWorkspace(to: rootB, workspaceStore: ws, tabStore: tabStore)
@@ -247,7 +287,7 @@ final class WorkspaceStateStoreTests: XCTestCase {
     let snapshot = try JSONDecoder().decode(WorkspaceStateStore.Snapshot.self, from: data)
     XCTAssertEqual(
       snapshot.workspaces[rootA.standardizedFileURL.path]?.groups.flatMap { $0 }.compactMap(\.path),
-      [file1.path],
+      [aFile.path],
       "旧工作区槽位必须保留真实标签，不得被切换期间的路过事件覆盖"
     )
     XCTAssertEqual(store.currentRootPath, rootB.standardizedFileURL.path)
@@ -255,7 +295,7 @@ final class WorkspaceStateStoreTests: XCTestCase {
     // 切回 A：真实标签应恢复（而非只剩空白草稿）
     store.switchWorkspace(to: rootA, workspaceStore: ws, tabStore: tabStore)
     XCTAssertTrue(
-      tabStore.groups[0].tabs.contains(where: { $0.url == file1 }),
+      tabStore.groups[0].tabs.contains(where: { $0.url == aFile }),
       "切回应恢复旧工作区的真实标签"
     )
   }

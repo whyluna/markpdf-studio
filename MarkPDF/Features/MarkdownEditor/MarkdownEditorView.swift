@@ -378,6 +378,13 @@ extension MarkdownEditorView {
         fail(String(localized: "草稿或未打开工作区时无法保存图片，请先保存文件。"))
         return
       }
+      // FR-7.4 审查修复：裸开异根 md（「仅打开文件」）时 md 不在当前工作区内——
+      // 图片会静默写进旧工作区 assets/ 并留下指向旧工作区的相对链接（移动即失效），
+      // 必须在落盘前拦下（判定与 ExternalOpenCoordinator.decide 共用，见 isWithinWorkspace 注释）
+      guard dir.isWithinWorkspace(root: root) else {
+        fail(String(localized: "文件位于当前工作区之外，图片无法保存到工作区 assets。将文件所在文件夹设为工作区（或把文件移入工作区）后再粘贴。"))
+        return
+      }
       do {
         let path = try imageAssetService.save(
           data: data,

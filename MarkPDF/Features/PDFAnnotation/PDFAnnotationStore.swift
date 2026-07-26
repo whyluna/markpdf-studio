@@ -298,8 +298,30 @@ final class PDFAnnotationStore: ObservableObject {
       // 持续失败只提示一次（每次标注变更都会重试），避免弹窗轰炸
       if !hasReportedWriteFailure {
         hasReportedWriteFailure = true
-        lastError = String(localized: "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)")
+        // FR-7.4 审查修复：权限不足（Finder 裸开工作区外 PDF，仅文件授权无法在
+        // 同目录新建 .bak/.tmp/.json）时附补救引导——文案层解决，不加额外按钮
+        if Self.isPermissionError(error) {
+          lastError = String(localized: "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)。文件位于工作区外，设为工作区后即可正常标注。")
+        } else {
+          lastError = String(localized: "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)")
+        }
       }
+    }
+  }
+
+  /// 是否沙盒权限不足错误（纯函数可单测）：Cocoa 257/513 或 POSIX EPERM/EACCES。
+  /// 裸开工作区外文件时，写回所需的同目录新建（.bak/.tmp/sidecar .json）必以此类错误失败；
+  /// Cocoa 常把 POSIX 原因包进 underlying error，递归看一眼
+  nonisolated static func isPermissionError(_ error: Error) -> Bool {
+    let nsError = error as NSError
+    switch nsError.domain {
+    case NSCocoaErrorDomain
+    where nsError.code == NSFileReadNoPermissionError || nsError.code == NSFileWriteNoPermissionError,
+      NSPOSIXErrorDomain where nsError.code == EPERM || nsError.code == EACCES:
+      return true
+    default:
+      guard let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError else { return false }
+      return isPermissionError(underlying)
     }
   }
 }
