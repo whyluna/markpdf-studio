@@ -80,7 +80,7 @@ struct CommandPaletteView: View {
     VStack(spacing: 0) {
       CommandSearchField(
         text: $query,
-        placeholder: "输入命令或拼音首字母…",
+        placeholder: String(localized: "输入命令或拼音首字母…"),
         onMoveUp: { selectedIndex = clampedSelectionIndex(selectedIndex - 1, count: results.count) },
         onMoveDown: { selectedIndex = clampedSelectionIndex(selectedIndex + 1, count: results.count) },
         onSubmit: runSelected,

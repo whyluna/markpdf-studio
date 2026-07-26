@@ -108,4 +108,14 @@ final class SettingsStoreTests: XCTestCase {
     store.appLanguage = .system
     XCTAssertTrue(["zh", "en"].contains(store.effectiveWebLocale))
   }
+
+  /// .system 内核语言按 bundle 本地化解析推导（FR-7.3 修复：zh-Hant 系统
+  /// 回退链落 zh-Hans → zh，落 en → en；不再按 preferredLanguages 前缀猜）
+  func testSystemWebLocaleFromResolvedLocalization() {
+    XCTAssertEqual(SettingsStore.webLocale(forSystemLocalization: "zh-Hans"), "zh")
+    XCTAssertEqual(SettingsStore.webLocale(forSystemLocalization: "en"), "en")
+    // 解析异常/空结果兜底英文（内核文案 zh 之外的唯一选项）
+    XCTAssertEqual(SettingsStore.webLocale(forSystemLocalization: nil), "en")
+    XCTAssertEqual(SettingsStore.webLocale(forSystemLocalization: "zh-Hant"), "en")
+  }
 }

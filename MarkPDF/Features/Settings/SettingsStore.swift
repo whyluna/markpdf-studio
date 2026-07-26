@@ -153,13 +153,21 @@ final class SettingsStore: ObservableObject {
     return webLocale(for: AppLanguage(rawValue: raw) ?? .system)
   }
 
-  private nonisolated static func webLocale(for language: AppLanguage) -> String {
+  /// 内核语言推导（internal 供 SettingsView 重启提示比对与单测）
+  nonisolated static func webLocale(for language: AppLanguage) -> String {
     switch language {
     case .zhHans: "zh"
     case .en: "en"
     case .system:
-      Locale.preferredLanguages.first?.hasPrefix("zh") == true ? "zh" : "en"
+      // 与系统菜单同一口径：按 bundle 本地化解析推导（zh-Hant 系统回退链
+      // 落 zh-Hans 则给 zh，落 en 则给 en），不再用 preferredLanguages 猜前缀
+      webLocale(forSystemLocalization: Bundle.preferredLocalizations(from: ["zh-Hans", "en"]).first)
     }
+  }
+
+  /// .system 分支推导（纯函数供单测）：本地化解析结果落 zh-Hans → zh，其余 → en
+  nonisolated static func webLocale(forSystemLocalization resolved: String?) -> String {
+    resolved == "zh-Hans" ? "zh" : "en"
   }
 
   private let defaults: UserDefaults

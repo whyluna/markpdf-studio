@@ -39,7 +39,9 @@ final class MarkdownExportSession {
       return
     }
     var appPage = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)
-    appPage?.query = "app=1"
+    // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）；lang：内核界面文案语言
+    //（导出 fallback 标题等也走内核文案，与主编辑器一致注入）
+    appPage?.query = "app=1&lang=\(SettingsStore.launchWebLocale)"
     webView.loadFileURL(appPage?.url ?? pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
   }
 

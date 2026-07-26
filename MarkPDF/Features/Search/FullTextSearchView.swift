@@ -15,7 +15,7 @@ struct FullTextSearchView: View {
       HStack(spacing: 8) {
         CommandSearchField(
           text: $store.query,
-          placeholder: "全文搜索（至少 2 个字符）…",
+          placeholder: String(localized: "全文搜索（至少 2 个字符）…"),
           onMoveUp: { selectedIndex = max(0, selectedIndex - 1) },
           onMoveDown: { selectedIndex = min(store.results.count - 1, selectedIndex + 1) },
           onSubmit: openSelected,

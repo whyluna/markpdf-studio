@@ -62,6 +62,10 @@ import { docContext } from "./doccontext.js";
 import { buildExport } from "./exporthtml.js";
 import { matchHeadingLine } from "./extended.js";
 
+// <html lang> 跟随内核语言：index.html 静态硬编码 zh-CN，此处按 ?lang= 纠正；
+// 取值口径与 strings.js currentLang() 一致（currentLang 未导出，同源复述勿漂移）
+document.documentElement.lang = new URLSearchParams(location.search).get("lang") === "en" ? "en" : "zh";
+
 /* ---------- 模式（FR-2.2） ---------- */
 
 const modeConf = new Compartment();

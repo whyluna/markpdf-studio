@@ -6,6 +6,9 @@ struct SettingsView: View {
   @EnvironmentObject private var settings: SettingsStore
   @EnvironmentObject private var defaultHandler: DefaultHandlerService
   @State private var showLanguageRestartPrompt = false
+  /// 启动时生效的内核语言快照（界面语言重启后生效，@State 只在视图生命周期取一次，
+  /// 避免 didSet 写回 defaults 后重读成新值）；用于识别「改回当前语言」不弹重启提示
+  @State private var launchWebLocale = SettingsStore.launchWebLocale
 
   /// 开关绑定系统真实状态：开 = 设为默认（完成后重查）；关 = 无操作（macOS 无「取消默认」，回弹）
   private func defaultBinding(for kind: DefaultHandlerService.FileKind) -> Binding<Bool> {
@@ -91,9 +94,10 @@ struct SettingsView: View {
     .formStyle(.grouped)
     .padding()
     .onAppear { defaultHandler.refresh() }
-    // 语言切换需重启：系统菜单由运行时按 AppleLanguages 提供，无法运行中切换
-    .onChange(of: settings.appLanguage) { _, _ in
-      showLanguageRestartPrompt = true
+    // 语言切换需重启：系统菜单由运行时按 AppleLanguages 提供，无法运行中切换。
+    // 仅当新选择的「生效语言」与启动时生效语言不同才提示——改回当前语言不打扰
+    .onChange(of: settings.appLanguage) { _, newValue in
+      showLanguageRestartPrompt = SettingsStore.webLocale(for: newValue) != launchWebLocale
     }
     .alert("语言设置将在重启 App 后生效", isPresented: $showLanguageRestartPrompt) {
       Button("退出 App") { NSApp.terminate(nil) }

@@ -57,7 +57,7 @@ struct QuickOpenView: View {
     VStack(spacing: 0) {
       CommandSearchField(
         text: $query,
-        placeholder: "搜索文件名…",
+        placeholder: String(localized: "搜索文件名…"),
         onMoveUp: { selectedIndex = clampedSelectionIndex(selectedIndex - 1, count: results.count) },
         onMoveDown: { selectedIndex = clampedSelectionIndex(selectedIndex + 1, count: results.count) },
         onSubmit: openSelected,

@@ -141,7 +141,7 @@ private struct PDFOutlineRow: View {
         onJump(destination)
       }
     } label: {
-      Text(outline.label ?? "未命名")
+      Text(outline.label ?? String(localized: "未命名"))
         .font(.system(size: 13))
         .lineLimit(1)
         .truncationMode(.tail)
