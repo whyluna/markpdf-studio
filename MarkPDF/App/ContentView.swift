@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import SwiftUI
 
 /// 应用根视图：三栏布局（文件树 / 标签内容区 / 上下文面板）+ 底部状态栏。
@@ -64,6 +65,16 @@ struct ContentView: View {
         workspaceStore?.selection = activeURL.flatMap { workspaceStore?.node(for: $0) }
         // AI 会话按文档隔离（FR-AI.3 v1.2）：激活标签变化即切线程（同 key 幂等）
         aiChatStore?.bindDocument(activeURL)
+        // 切节预热（v1.2 性能）：激活 PDF 后台预切并缓存，首次 AI 提问不再现场解析。
+        // 后台自建 PDFDocument（不碰主线程的 pdfView.document，对象单线程归属）
+        if tabStore.activeGroup.activeTab?.kind == .pdf, let url = activeURL,
+          !DocumentSectionCache.shared.isCached(url) {
+          Task.detached(priority: .utility) {
+            _ = DocumentSectionCache.shared.sections(for: url) {
+              PDFDocument(url: url).map { DocumentSectioner.fromPDF($0) }
+            }
+          }
+        }
       }
       tabStore.onEditorCursorLine = { url, line in
         stateStore.recordCursor(url: url, line: line)
@@ -142,7 +153,8 @@ struct ContentView: View {
           return nil
         }
       }
-      // 结构切节（超预算两遍路由用，v1.2）：md 标题树 / PDF 书签（无书签每页一节）
+      // 结构切节（超预算两遍路由用，v1.2）：md 标题树 / PDF 书签（无书签每页一节）。
+      // md 用编辑器实时文本（未落盘也准，切节快不缓存）；PDF 走缓存（预热后免主线程解析）
       aiChatStore.contextSources.documentSections = { [weak tabStore, weak pdfStore] in
         guard let tab = tabStore?.activeGroup.activeTab else { return nil }
         switch tab.kind {
@@ -150,8 +162,10 @@ struct ContentView: View {
           guard let store = tabStore?.activeEditorStore else { return nil }
           return DocumentSectioner.fromMarkdown(store.text)
         case .pdf:
-          guard let document = pdfStore?.pdfView?.document else { return nil }
-          return DocumentSectioner.fromPDF(document)
+          guard let url = tab.url else { return nil }
+          return DocumentSectionCache.shared.sections(for: url) {
+            pdfStore?.pdfView?.document.map { DocumentSectioner.fromPDF($0) }
+          }
         default:
           return nil
         }

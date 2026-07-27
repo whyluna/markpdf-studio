@@ -51,28 +51,29 @@ enum AIWorkspaceRetriever {
     let searchable = files.filter { $0 != currentDoc }
     guard !searchable.isEmpty else { return [] }
 
-    // 逐词召回，按文件累计分数（多词命中的文件更相关）
+    // 一次遍历多词合并计分（此前逐词各扫一遍全工作区：6 词 = 6 倍读盘/解析）
     var scores: [URL: Int] = [:]
-    for word in words {
-      for hit in FullTextSearch.search(query: word, files: searchable, isCancelled: { false }) {
-        scores[hit.url, default: 0] += hit.score
-      }
+    for url in searchable {
+      let score = FullTextSearch.multiTermScore(url: url, terms: words)
+      if score > 0 { scores[url] = score }
     }
     let topFiles = scores.sorted { $0.value > $1.value }.prefix(maxFiles).map(\.key)
 
     var candidates: [Candidate] = []
     for url in topFiles {
-      let sections: [DocumentSection]
-      switch FileNode.kind(for: url, isDirectory: false) {
-      case .markdown:
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-        sections = DocumentSectioner.fromMarkdown(text)
-      case .pdf:
-        guard let document = PDFDocument(url: url) else { continue }
-        sections = DocumentSectioner.fromPDF(document)
-      default:
-        continue
-      }
+      // 切节走懒缓存（key=路径+mtime+大小；同文件连续提问不重复解析）
+      let sections = DocumentSectionCache.shared.sections(for: url) {
+        switch FileNode.kind(for: url, isDirectory: false) {
+        case .markdown:
+          guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+          return DocumentSectioner.fromMarkdown(text)
+        case .pdf:
+          guard let document = PDFDocument(url: url) else { return nil }
+          return DocumentSectioner.fromPDF(document)
+        default:
+          return nil
+        }
+      } ?? []
       for section in sections.prefix(maxSectionsPerFile) where !section.text.isEmpty {
         candidates.append(Candidate(file: url.lastPathComponent, section: section))
       }

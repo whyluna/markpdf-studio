@@ -22,6 +22,7 @@ enum DocumentSectioner {
     var currentTitle = ""
     var currentLines: [String] = []
     var inFence = false
+    var hasHeading = false
 
     func flush() {
       let body = currentLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -34,6 +35,7 @@ enum DocumentSectioner {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
       if trimmed.hasPrefix("```") { inFence.toggle() }
       if !inFence, let title = headingTitle(of: trimmed) {
+        hasHeading = true
         flush()
         currentTitle = title
         currentLines = []
@@ -42,7 +44,8 @@ enum DocumentSectioner {
       }
     }
     flush()
-    if sections.count <= 1 {
+    // 全文无任何标题才退化定长分块（单标题文档保留其标题节语义）
+    if !hasHeading {
       return chunked(text, label: { String(localized: "第 \($0) 段") })
     }
     return sections

@@ -121,6 +121,48 @@ final class DocumentSectionerTests: XCTestCase {
     XCTAssertEqual(hits.first?.snippet, "实现细节")
   }
 
+  // MARK: - 多词合并计分 + 切节缓存（v1.2 性能）
+
+  func testMultiTermScoreCountsAllTerms() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ScoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = dir.appendingPathComponent("a.md")
+    try "attention attention transformer".write(to: note, atomically: true, encoding: .utf8)
+
+    XCTAssertEqual(FullTextSearch.multiTermScore(url: note, terms: ["attention", "transformer"]), 3)
+    XCTAssertEqual(FullTextSearch.multiTermScore(url: note, terms: ["没有的词"]), 0)
+    XCTAssertEqual(FullTextSearch.multiTermScore(url: note, terms: []), 0)
+  }
+
+  func testSectionCacheHitAndInvalidation() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("CacheTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = dir.appendingPathComponent("c.md")
+    try "# 甲\n内容一".write(to: note, atomically: true, encoding: .utf8)
+
+    let cache = DocumentSectionCache()
+    var computeCount = 0
+    let compute: () -> [DocumentSection]? = {
+      computeCount += 1
+      return (try? String(contentsOf: note, encoding: .utf8)).map { DocumentSectioner.fromMarkdown($0) }
+    }
+
+    XCTAssertEqual(cache.sections(for: note, compute: compute)?.first?.title, "甲")
+    _ = cache.sections(for: note, compute: compute)
+    XCTAssertEqual(computeCount, 1, "第二次命中缓存不重算")
+    XCTAssertTrue(cache.isCached(note))
+
+    // 文件修改（mtime/大小变）→ 失效重算
+    try "# 乙\n内容改了改了".write(to: note, atomically: true, encoding: .utf8)
+    XCTAssertFalse(cache.isCached(note))
+    XCTAssertEqual(cache.sections(for: note, compute: compute)?.first?.title, "乙")
+    XCTAssertEqual(computeCount, 2)
+  }
+
   func testFallbackHitsTruncates() {
     let candidates = (0..<5).map {
       AIWorkspaceRetriever.Candidate(

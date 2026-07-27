@@ -117,6 +117,41 @@ enum FullTextSearch {
       url: url, kind: .pdf, location: firstPage, snippet: firstSnippet, score: hits)
   }
 
+  // MARK: - 多词合并计分（AI 工作区检索用）
+
+  /// 内容只加载一次、对全部关键词计命中总数（此前逐词各扫一遍：6 词 = 6 倍读盘/解析）。
+  /// 0 = 无命中或文件不可读/超限
+  static func multiTermScore(url: URL, terms: [String]) -> Int {
+    guard !terms.isEmpty, let text = extractText(url: url) else { return 0 }
+    var total = 0
+    for term in terms where !term.isEmpty {
+      var searchRange = text.startIndex..<text.endIndex
+      while let range = text.range(of: term, options: .caseInsensitive, range: searchRange) {
+        total += 1
+        searchRange = range.upperBound..<text.endIndex
+      }
+    }
+    return total
+  }
+
+  /// 提取文件全文（md 读盘 / PDF 逐页拼接）；不可读或超限返回 nil
+  static func extractText(url: URL) -> String? {
+    switch FileNode.kind(for: url, isDirectory: false) {
+    case .markdown:
+      guard let data = try? Data(contentsOf: url), data.count <= maxFileBytes else { return nil }
+      return String(data: data, encoding: .utf8)
+    case .pdf:
+      guard isPDFWithinSizeLimit(url), let document = PDFDocument(url: url) else { return nil }
+      var text = ""
+      for pageIndex in 0..<document.pageCount {
+        text += (document.page(at: pageIndex)?.string ?? "") + "\n"
+      }
+      return text
+    default:
+      return nil
+    }
+  }
+
   // MARK: - 摘录
 
   /// 命中处前后各 snippetRadius 字符的摘录（首尾省略号、空白规整为一行）
