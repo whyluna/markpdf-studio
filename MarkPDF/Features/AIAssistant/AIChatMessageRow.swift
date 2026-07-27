@@ -60,13 +60,19 @@ struct AIChatMessageRow: View {
             .font(.caption2)
             .foregroundStyle(.tertiary)
         }
-        if !message.isStreaming, !message.content.isEmpty, isHovering, !isBusy {
+        // 动作条常驻（淡显），悬停变实—— hover 才出现时鼠标移向按钮的
+        // 途中会穿过非悬停间隙，按钮在用户点击前消失（实测反馈）
+        if !message.isStreaming, !message.content.isEmpty {
           actionBar
+            .opacity(isHovering && !isBusy ? 1.0 : 0.3)
+            .disabled(isBusy)
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
         }
       }
       .frame(height: 18)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+    .contentShape(Rectangle())
     .onHover { isHovering = $0 }
   }
 

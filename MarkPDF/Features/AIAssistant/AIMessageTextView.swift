@@ -1,7 +1,9 @@
 import SwiftUI
 
 /// AI 回复的轻量 markdown 渲染（FR-AI.2）：围栏代码块自绘（等宽+底色+复制），
-/// 其余段落经 AttributedString(markdown:) 渲染行内样式；失败回退纯文本。
+/// 段落按行解析——标题/无序与有序列表成块渲染（AttributedString 的
+/// inlineOnly 模式不处理块级结构，"- "/"## " 会原文显示），行内样式仍走
+/// AttributedString(markdown:)；失败回退纯文本。
 struct AIMessageTextView: View {
   let markdown: String
 
@@ -10,15 +12,84 @@ struct AIMessageTextView: View {
       ForEach(Array(MarkdownBlockSegmenter.segments(markdown).enumerated()), id: \.offset) { _, segment in
         switch segment {
         case .paragraph(let text):
-          Text(inlineRendered(text))
-            .font(.body)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+          paragraphView(text)
         case .code(let language, let code):
           AICodeBlockView(language: language, code: code)
         }
       }
+    }
+  }
+
+  // MARK: - 段落（按行解析块级结构）
+
+  enum LineKind: Equatable {
+    case header(level: Int, text: String)
+    case bullet(indent: Int, marker: String, text: String)
+    case plain(String)
+  }
+
+  /// 行分类：# 标题 / 无序列表（- * +）/ 有序列表（1.）/ 普通行；缩进每 2 空格一级
+  static func classifyLine(_ line: String) -> LineKind {
+    var hashes = 0
+    var rest = Substring(line)
+    while rest.first == "#" {
+      hashes += 1
+      rest = rest.dropFirst()
+    }
+    if (1...6).contains(hashes), rest.first == " " {
+      return .header(level: hashes, text: String(rest.dropFirst()))
+    }
+    let leadingSpaces = line.prefix(while: { $0 == " " }).count
+    let content = String(line.dropFirst(leadingSpaces))
+    if let marker = content.first, ["-", "*", "+"].contains(marker), content.dropFirst().first == " " {
+      return .bullet(indent: leadingSpaces / 2, marker: "•", text: String(content.dropFirst(2)))
+    }
+    let digits = content.prefix(while: { $0.isNumber })
+    if !digits.isEmpty, content.dropFirst(digits.count).hasPrefix(". ") {
+      return .bullet(
+        indent: leadingSpaces / 2,
+        marker: "\(digits).",
+        text: String(content.dropFirst(digits.count + 2))
+      )
+    }
+    return .plain(line)
+  }
+
+  private func paragraphView(_ text: String) -> some View {
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    return VStack(alignment: .leading, spacing: 3) {
+      ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+        lineView(line)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func lineView(_ line: String) -> some View {
+    switch Self.classifyLine(line) {
+    case .header(let level, let text):
+      Text(inlineRendered(text))
+        .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    case .bullet(let indent, let marker, let text):
+      HStack(alignment: .firstTextBaseline, spacing: 5) {
+        Text(marker)
+          .foregroundStyle(.secondary)
+        Text(inlineRendered(text))
+          .font(.body)
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .padding(.leading, CGFloat(indent) * 12)
+    case .plain(let text):
+      Text(inlineRendered(text))
+        .font(.body)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
