@@ -175,16 +175,15 @@ final class TranslationStore: ObservableObject {
   // MARK: - AI 翻译
 
   private func startAITranslation(_ text: String, target: AITargetLanguage) {
-    guard let kind = settings.translationProviderKind else {
+    guard let selection = settings.translationSelection else {
       phase = .failure(String(localized: "未启用任何 AI Provider，请到 设置 → AI 配置并启用"))
       return
     }
-    engineTitle = kind.title
+    engineTitle = selection.kind.title
     // AI 引擎输入截断（FR-AI.1 口径 2000 字）：长选区译文会超 maxTokens 被静默掐断，
     // 先截输入并在气泡注明；系统翻译引擎无此处理
     let input = String(text.prefix(Self.maxAIInputCharacters))
     wasTruncated = input.count < text.count
-    let config = settings.config(for: kind)
     let messages = [
       AIChatMessage.system(TranslationPromptBuilder.systemMessage),
       AIChatMessage.user(TranslationPromptBuilder.userPrompt(text: input, target: target)),
@@ -192,8 +191,9 @@ final class TranslationStore: ObservableObject {
     Task {
       do {
         let translated = try await service.complete(
-          kind: kind,
-          config: config,
+          kind: selection.kind,
+          config: selection.config,
+          model: selection.model,
           messages: messages,
           maxTokens: 2048
         )

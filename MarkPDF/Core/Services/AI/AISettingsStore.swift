@@ -50,11 +50,11 @@ enum AITranslationEngine: String, Codable, CaseIterable, Identifiable {
 struct AISettings: Codable, Equatable {
   /// Provider 配置表，key = AIProviderKind.rawValue；未配置的 Provider 用预设默认
   var providers: [String: AIProviderConfig] = [:]
-  /// AI 助手对话使用的 Provider（nil = 自动取第一个已启用的）
-  var chatProvider: String?
+  /// AI 助手对话模型（nil = 自动：第一个已启用 Provider 的第一个模型）
+  var chatModel: AIModelChoice?
   var translationEngine: AITranslationEngine = .system
-  /// 翻译使用的 Provider（nil = 跟随 chatProvider）
-  var translationProvider: String?
+  /// 翻译模型（引擎为 AI 时；nil = 跟随对话模型）
+  var translationModel: AIModelChoice?
   var targetLanguage: AITargetLanguage = .auto
   var autoTranslateOnSelection = true
   /// 三层上下文开关（FR-AI.2）：工作区默认关（隐私保守）
@@ -64,17 +64,46 @@ struct AISettings: Codable, Equatable {
 
   init() {}
 
+  private enum CodingKeys: String, CodingKey {
+    case providers, chatModel, translationEngine, translationModel, targetLanguage
+    case autoTranslateOnSelection, contextIncludeSelection, contextIncludeDocument, contextIncludeWorkspace
+    // 旧版仅 Provider 粒度的选择字段（迁移用）
+    case chatProvider, translationProvider
+  }
+
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     providers = try container.decodeIfPresent([String: AIProviderConfig].self, forKey: .providers) ?? [:]
-    chatProvider = try container.decodeIfPresent(String.self, forKey: .chatProvider)
+    // 旧版 chatProvider/translationProvider（字符串）迁移为模型级选择（model 空串 = 该 Provider 首模型）
+    if let choice = try container.decodeIfPresent(AIModelChoice.self, forKey: .chatModel) {
+      chatModel = choice
+    } else if let legacy = try container.decodeIfPresent(String.self, forKey: .chatProvider) {
+      chatModel = AIModelChoice(provider: legacy, model: "")
+    }
+    if let choice = try container.decodeIfPresent(AIModelChoice.self, forKey: .translationModel) {
+      translationModel = choice
+    } else if let legacy = try container.decodeIfPresent(String.self, forKey: .translationProvider) {
+      translationModel = AIModelChoice(provider: legacy, model: "")
+    }
     translationEngine = try container.decodeIfPresent(AITranslationEngine.self, forKey: .translationEngine) ?? .system
-    translationProvider = try container.decodeIfPresent(String.self, forKey: .translationProvider)
     targetLanguage = try container.decodeIfPresent(AITargetLanguage.self, forKey: .targetLanguage) ?? .auto
     autoTranslateOnSelection = try container.decodeIfPresent(Bool.self, forKey: .autoTranslateOnSelection) ?? true
     contextIncludeSelection = try container.decodeIfPresent(Bool.self, forKey: .contextIncludeSelection) ?? true
     contextIncludeDocument = try container.decodeIfPresent(Bool.self, forKey: .contextIncludeDocument) ?? true
     contextIncludeWorkspace = try container.decodeIfPresent(Bool.self, forKey: .contextIncludeWorkspace) ?? false
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(providers, forKey: .providers)
+    try container.encodeIfPresent(chatModel, forKey: .chatModel)
+    try container.encode(translationEngine, forKey: .translationEngine)
+    try container.encodeIfPresent(translationModel, forKey: .translationModel)
+    try container.encode(targetLanguage, forKey: .targetLanguage)
+    try container.encode(autoTranslateOnSelection, forKey: .autoTranslateOnSelection)
+    try container.encode(contextIncludeSelection, forKey: .contextIncludeSelection)
+    try container.encode(contextIncludeDocument, forKey: .contextIncludeDocument)
+    try container.encode(contextIncludeWorkspace, forKey: .contextIncludeWorkspace)
   }
 }
 
@@ -128,21 +157,40 @@ final class AISettingsStore: ObservableObject {
     }
   }
 
-  /// AI 助手对话 Provider：显式选择且已启用则用之，否则第一个已启用的；全未启用为 nil
-  var chatProviderKind: AIProviderKind? {
-    resolveProvider(settings.chatProvider)
+  /// 解析后的可用模型（kind + 配置 + 模型名），供请求链直接使用
+  struct ResolvedModel: Equatable {
+    let kind: AIProviderKind
+    let config: AIProviderConfig
+    let model: String
   }
 
-  /// 翻译 Provider（引擎为 AI 时）：未单独配置则跟随对话 Provider
-  var translationProviderKind: AIProviderKind? {
-    resolveProvider(settings.translationProvider ?? settings.chatProvider)
+  /// AI 助手对话模型：显式选择有效则用之，否则第一个已启用 Provider 的第一个模型；全不可用为 nil
+  var chatSelection: ResolvedModel? {
+    resolve(settings.chatModel)
   }
 
-  private func resolveProvider(_ raw: String?) -> AIProviderKind? {
-    if let raw, let kind = AIProviderKind(rawValue: raw), config(for: kind).isEnabled {
-      return kind
+  /// 翻译模型（引擎为 AI 时）：未单独选择则跟随对话模型
+  var translationSelection: ResolvedModel? {
+    resolve(settings.translationModel ?? settings.chatModel)
+  }
+
+  private func resolve(_ choice: AIModelChoice?) -> ResolvedModel? {
+    if let choice, let kind = AIProviderKind(rawValue: choice.provider) {
+      let config = config(for: kind)
+      if config.isEnabled, !config.models.isEmpty {
+        // 所选模型仍在列表内用之；被删掉则回落该 Provider 首模型（空串迁移形态同此）
+        let model = config.models.contains(choice.model) ? choice.model : config.models[0]
+        return ResolvedModel(kind: kind, config: config, model: model)
+      }
     }
-    return AIProviderKind.allCases.first { config(for: $0).isEnabled }
+    // 回落：第一个已启用且有模型的 Provider
+    for kind in AIProviderKind.allCases {
+      let config = config(for: kind)
+      if config.isEnabled, let first = config.models.first {
+        return ResolvedModel(kind: kind, config: config, model: first)
+      }
+    }
+    return nil
   }
 
   private func persist() {

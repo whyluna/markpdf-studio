@@ -42,15 +42,16 @@ enum AIRequestBuilder {
     family: AIProtocolFamily,
     config: AIProviderConfig,
     apiKey: String,
+    model: String,
     messages: [AIChatMessage],
     stream: Bool,
     maxTokens: Int = 4096
   ) throws -> URLRequest {
     switch family {
     case .openAICompatible:
-      return try openAIRequest(config: config, apiKey: apiKey, messages: messages, stream: stream)
+      return try openAIRequest(config: config, apiKey: apiKey, model: model, messages: messages, stream: stream, maxTokens: maxTokens)
     case .anthropic:
-      return try anthropicRequest(config: config, apiKey: apiKey, messages: messages, stream: stream, maxTokens: maxTokens)
+      return try anthropicRequest(config: config, apiKey: apiKey, model: model, messages: messages, stream: stream, maxTokens: maxTokens)
     }
   }
 
@@ -60,17 +61,22 @@ enum AIRequestBuilder {
     let model: String
     let messages: [AIChatMessage]
     let stream: Bool
+    // 回复上限与 Anthropic 口径统一（当前预设模型族均接受 max_tokens；
+    // OpenAI 新模型族改名 max_completion_tokens 属已知偏差，见进度文档）
+    let max_tokens: Int
   }
 
   private static func openAIRequest(
     config: AIProviderConfig,
     apiKey: String,
+    model: String,
     messages: [AIChatMessage],
-    stream: Bool
+    stream: Bool,
+    maxTokens: Int
   ) throws -> URLRequest {
     var request = try baseRequest(url: config.endpoint + "/chat/completions")
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-    request.httpBody = try JSONEncoder().encode(OpenAIChatBody(model: config.model, messages: messages, stream: stream))
+    request.httpBody = try JSONEncoder().encode(OpenAIChatBody(model: model, messages: messages, stream: stream, max_tokens: maxTokens))
     return request
   }
 
@@ -87,6 +93,7 @@ enum AIRequestBuilder {
   private static func anthropicRequest(
     config: AIProviderConfig,
     apiKey: String,
+    model: String,
     messages: [AIChatMessage],
     stream: Bool,
     maxTokens: Int
@@ -98,7 +105,7 @@ enum AIRequestBuilder {
     let system = messages.filter { $0.role == .system }.map(\.content).joined(separator: "\n\n")
     let turns = messages.filter { $0.role != .system }
     request.httpBody = try JSONEncoder().encode(AnthropicChatBody(
-      model: config.model,
+      model: model,
       max_tokens: maxTokens,
       messages: turns,
       system: system.isEmpty ? nil : system,

@@ -2454,6 +2454,22 @@
         }
       }
     },
+    "模型（多个用逗号分隔）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Models (comma-separated)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模型（多个用逗号分隔）"
+          }
+        }
+      }
+    },
     "此文件夹中没有\nMarkdown / PDF / 图片": {
       "localizations": {
         "en": {
@@ -2934,6 +2950,22 @@
         }
       }
     },
+    "翻译模型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Translation Model"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "翻译模型"
+          }
+        }
+      }
+    },
     "翻译超时无响应，请重试；系统引擎持续不可用时可改用 AI 大模型引擎": {
       "localizations": {
         "en": {
@@ -2994,6 +3026,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "自动（中英互译）"
+          }
+        }
+      }
+    },
+    "自动（第一个可用）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic (first available)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自动（第一个可用）"
           }
         }
       }
@@ -3170,6 +3218,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "语言设置将在重启 App 后生效"
+          }
+        }
+      }
+    },
+    "跟随对话模型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Follow Chat Model"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "跟随对话模型"
           }
         }
       }

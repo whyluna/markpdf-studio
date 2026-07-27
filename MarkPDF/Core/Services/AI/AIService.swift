@@ -100,9 +100,9 @@ final class AIService {
 
   /// 联通性测试（设置页「连接测试」）：发最小消息，返回往返耗时（秒）
   @discardableResult
-  func testConnection(kind: AIProviderKind, config: AIProviderConfig) async throws -> TimeInterval {
+  func testConnection(kind: AIProviderKind, config: AIProviderConfig, model: String) async throws -> TimeInterval {
     let start = Date()
-    _ = try await complete(kind: kind, config: config, messages: [.user("ping")], maxTokens: 16)
+    _ = try await complete(kind: kind, config: config, model: model, messages: [.user("ping")], maxTokens: 16)
     return Date().timeIntervalSince(start)
   }
 
@@ -110,10 +110,11 @@ final class AIService {
   func complete(
     kind: AIProviderKind,
     config: AIProviderConfig,
+    model: String,
     messages: [AIChatMessage],
     maxTokens: Int = 4096
   ) async throws -> String {
-    let request = try makeRequest(kind: kind, config: config, messages: messages, stream: false, maxTokens: maxTokens)
+    let request = try makeRequest(kind: kind, config: config, model: model, messages: messages, stream: false, maxTokens: maxTokens)
     let (data, http) = try await transport.send(request)
     guard (200..<300).contains(http.statusCode) else {
       throw AIServiceError.httpStatus(http.statusCode, String(decoding: data, as: UTF8.self).truncated(to: 200))
@@ -130,13 +131,14 @@ final class AIService {
   func stream(
     kind: AIProviderKind,
     config: AIProviderConfig,
+    model: String,
     messages: [AIChatMessage],
     maxTokens: Int = 4096
   ) -> AsyncThrowingStream<String, Error> {
     AsyncThrowingStream { continuation in
       let task = Task { [transport] in
         do {
-          let request = try makeRequest(kind: kind, config: config, messages: messages, stream: true, maxTokens: maxTokens)
+          let request = try makeRequest(kind: kind, config: config, model: model, messages: messages, stream: true, maxTokens: maxTokens)
           let chunks = try await transport.stream(request)
           var parser = AISSEParser()
           for try await chunk in chunks {
@@ -179,6 +181,7 @@ final class AIService {
   private func makeRequest(
     kind: AIProviderKind,
     config: AIProviderConfig,
+    model: String,
     messages: [AIChatMessage],
     stream: Bool,
     maxTokens: Int
@@ -192,6 +195,7 @@ final class AIService {
       family: kind.family,
       config: config,
       apiKey: apiKey,
+      model: model,
       messages: messages,
       stream: stream,
       maxTokens: maxTokens

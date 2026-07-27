@@ -13,6 +13,7 @@ final class AIProviderTests: XCTestCase {
       family: .openAICompatible,
       config: openAIConfig,
       apiKey: "sk-test",
+      model: "deepseek-chat",
       messages: [.system("你是助手"), .user("你好")],
       stream: true
     )
@@ -32,7 +33,7 @@ final class AIProviderTests: XCTestCase {
   func testOpenAIRequestTrimsTrailingSlash() throws {
     let config = AIProviderConfig(isEnabled: true, baseURL: "https://api.deepseek.com/v1/", model: "m")
     let request = try AIRequestBuilder.chatRequest(
-      family: .openAICompatible, config: config, apiKey: "k", messages: [.user("hi")], stream: false
+      family: .openAICompatible, config: config, apiKey: "k", model: "m", messages: [.user("hi")], stream: false
     )
     XCTAssertEqual(request.url?.absoluteString, "https://api.deepseek.com/v1/chat/completions")
   }
@@ -41,7 +42,7 @@ final class AIProviderTests: XCTestCase {
   func testMultipleTrailingSlashesStripped() throws {
     let config = AIProviderConfig(isEnabled: true, baseURL: "https://api.deepseek.com/v1//", model: "m")
     let request = try AIRequestBuilder.chatRequest(
-      family: .openAICompatible, config: config, apiKey: "k", messages: [.user("hi")], stream: false
+      family: .openAICompatible, config: config, apiKey: "k", model: "m", messages: [.user("hi")], stream: false
     )
     XCTAssertEqual(request.url?.absoluteString, "https://api.deepseek.com/v1/chat/completions")
   }
@@ -50,7 +51,7 @@ final class AIProviderTests: XCTestCase {
   func testPlainHTTPRejectedExceptLoopback() throws {
     let pub = AIProviderConfig(isEnabled: true, baseURL: "http://api.deepseek.com", model: "m")
     XCTAssertThrowsError(
-      try AIRequestBuilder.chatRequest(family: .openAICompatible, config: pub, apiKey: "k", messages: [.user("hi")], stream: false)
+      try AIRequestBuilder.chatRequest(family: .openAICompatible, config: pub, apiKey: "k", model: "m", messages: [.user("hi")], stream: false)
     ) { error in
       guard case .invalidConfiguration = error as? AIServiceError else {
         return XCTFail("期望 invalidConfiguration，实际 \(error)")
@@ -58,7 +59,7 @@ final class AIProviderTests: XCTestCase {
     }
     let local = AIProviderConfig(isEnabled: true, baseURL: "http://127.0.0.1:8899", model: "m")
     XCTAssertNoThrow(
-      try AIRequestBuilder.chatRequest(family: .openAICompatible, config: local, apiKey: "k", messages: [.user("hi")], stream: false)
+      try AIRequestBuilder.chatRequest(family: .openAICompatible, config: local, apiKey: "k", model: "m", messages: [.user("hi")], stream: false)
     )
   }
 
@@ -67,6 +68,7 @@ final class AIProviderTests: XCTestCase {
       family: .anthropic,
       config: anthropicConfig,
       apiKey: "sk-ant",
+      model: "claude-3-5-sonnet-latest",
       messages: [.system("你是翻译"), .user("第一段"), .assistant("译文"), .user("第二段")],
       stream: true,
       maxTokens: 1024
@@ -87,7 +89,7 @@ final class AIProviderTests: XCTestCase {
   /// 无 system 消息时 body 不携带 system 字段
   func testAnthropicRequestWithoutSystem() throws {
     let request = try AIRequestBuilder.chatRequest(
-      family: .anthropic, config: anthropicConfig, apiKey: "k", messages: [.user("hi")], stream: false
+      family: .anthropic, config: anthropicConfig, apiKey: "k", model: "m", messages: [.user("hi")], stream: false
     )
     let body = try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any]
     XCTAssertNil(body?["system"])
@@ -96,7 +98,7 @@ final class AIProviderTests: XCTestCase {
   func testInvalidBaseURLThrows() {
     let config = AIProviderConfig(isEnabled: true, baseURL: "ht tp://bad url", model: "m")
     XCTAssertThrowsError(
-      try AIRequestBuilder.chatRequest(family: .openAICompatible, config: config, apiKey: "k", messages: [.user("hi")], stream: false)
+      try AIRequestBuilder.chatRequest(family: .openAICompatible, config: config, apiKey: "k", model: "m", messages: [.user("hi")], stream: false)
     ) { error in
       guard case .invalidConfiguration = error as? AIServiceError else {
         return XCTFail("期望 invalidConfiguration，实际 \(error)")

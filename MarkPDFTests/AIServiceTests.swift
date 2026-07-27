@@ -34,7 +34,7 @@ final class AIServiceTests: XCTestCase {
       (Data(#"{"choices":[{"message":{"content":"pong"}}]}"#.utf8), self.httpResponse(200))
     }
     let service = AIService(transport: transport, keys: keyStore)
-    let text = try await service.complete(kind: .deepseek, config: deepseekConfig, messages: [.user("ping")])
+    let text = try await service.complete(kind: .deepseek, config: deepseekConfig, model: "deepseek-chat", messages: [.user("ping")])
     XCTAssertEqual(text, "pong")
   }
 
@@ -61,7 +61,7 @@ final class AIServiceTests: XCTestCase {
     })
     let service = AIService(transport: transport, keys: keyStore)
     var collected = ""
-    for try await delta in service.stream(kind: .anthropic, config: anthropicConfig, messages: [.user("hi")]) {
+    for try await delta in service.stream(kind: .anthropic, config: anthropicConfig, model: "claude-3-5-sonnet-latest", messages: [.user("hi")]) {
       collected += delta
     }
     XCTAssertEqual(collected, "你好，世界")
@@ -80,7 +80,7 @@ final class AIServiceTests: XCTestCase {
     })
     let service = AIService(transport: transport, keys: keyStore)
     var collected = ""
-    for try await delta in service.stream(kind: .deepseek, config: deepseekConfig, messages: [.user("hi")]) {
+    for try await delta in service.stream(kind: .deepseek, config: deepseekConfig, model: "deepseek-chat", messages: [.user("hi")]) {
       collected += delta
     }
     XCTAssertEqual(collected, "a")
@@ -91,7 +91,7 @@ final class AIServiceTests: XCTestCase {
     let keyStore = AIKeyStore(storage: InMemoryAIKeyStorage())
     let service = AIService(transport: MockAITransport(), keys: keyStore)
     do {
-      _ = try await service.complete(kind: .deepseek, config: deepseekConfig, messages: [.user("ping")])
+      _ = try await service.complete(kind: .deepseek, config: deepseekConfig, model: "deepseek-chat", messages: [.user("ping")])
       XCTFail("未配置 Key 应抛 missingAPIKey")
     } catch {
       XCTAssertEqual(error as? AIServiceError, .missingAPIKey)
@@ -107,7 +107,7 @@ final class AIServiceTests: XCTestCase {
     }
     let service = AIService(transport: transport, keys: keyStore)
     do {
-      _ = try await service.complete(kind: .deepseek, config: deepseekConfig, messages: [.user("ping")])
+      _ = try await service.complete(kind: .deepseek, config: deepseekConfig, model: "deepseek-chat", messages: [.user("ping")])
       XCTFail("401 应抛 httpStatus")
     } catch {
       guard case .httpStatus(let status, let snippet) = error as? AIServiceError else {

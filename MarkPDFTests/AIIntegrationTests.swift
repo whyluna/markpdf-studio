@@ -54,7 +54,7 @@ final class AIIntegrationTests: XCTestCase {
   @MainActor
   func testOpenAICompleteOverHTTP() async throws {
     let (service, config) = makeService(kind: .deepseek)
-    let text = try await service.complete(kind: .deepseek, config: config, messages: [.user("ping")])
+    let text = try await service.complete(kind: .deepseek, config: config, model: config.models[0], messages: [.user("ping")])
     XCTAssertEqual(text, "pong")
   }
 
@@ -62,7 +62,7 @@ final class AIIntegrationTests: XCTestCase {
   func testOpenAIStreamOverHTTP() async throws {
     let (service, config) = makeService(kind: .deepseek)
     var collected = ""
-    for try await delta in service.stream(kind: .deepseek, config: config, messages: [.user("hi")]) {
+    for try await delta in service.stream(kind: .deepseek, config: config, model: config.models[0], messages: [.user("hi")]) {
       collected += delta
     }
     XCTAssertEqual(collected, "你好")
@@ -71,7 +71,7 @@ final class AIIntegrationTests: XCTestCase {
   @MainActor
   func testAnthropicCompleteOverHTTP() async throws {
     let (service, config) = makeService(kind: .anthropic)
-    let text = try await service.complete(kind: .anthropic, config: config, messages: [.user("ping")])
+    let text = try await service.complete(kind: .anthropic, config: config, model: config.models[0], messages: [.user("ping")])
     XCTAssertEqual(text, "pong")
   }
 
@@ -79,7 +79,7 @@ final class AIIntegrationTests: XCTestCase {
   func testAnthropicStreamOverHTTP() async throws {
     let (service, config) = makeService(kind: .anthropic)
     var collected = ""
-    for try await delta in service.stream(kind: .anthropic, config: config, messages: [.user("hi")]) {
+    for try await delta in service.stream(kind: .anthropic, config: config, model: config.models[0], messages: [.user("hi")]) {
       collected += delta
     }
     XCTAssertEqual(collected, "你好")
@@ -89,7 +89,7 @@ final class AIIntegrationTests: XCTestCase {
   func testAuthFailureSurfacesStatusAndBody() async {
     let (service, config) = makeService(kind: .deepseek, key: "bad-key")
     do {
-      _ = try await service.complete(kind: .deepseek, config: config, messages: [.user("ping")])
+      _ = try await service.complete(kind: .deepseek, config: config, model: config.models[0], messages: [.user("ping")])
       XCTFail("bad-key 应被 mock 拒绝")
     } catch {
       guard case .httpStatus(let status, let snippet) = error as? AIServiceError else {
@@ -104,7 +104,7 @@ final class AIIntegrationTests: XCTestCase {
   func testStreamAuthFailureSurfacesStatusAndBody() async {
     let (service, config) = makeService(kind: .anthropic, key: "bad-key")
     do {
-      for try await _ in service.stream(kind: .anthropic, config: config, messages: [.user("hi")]) {}
+      for try await _ in service.stream(kind: .anthropic, config: config, model: config.models[0], messages: [.user("hi")]) {}
       XCTFail("bad-key 应被 mock 拒绝")
     } catch {
       guard case .httpStatus(let status, _) = error as? AIServiceError else {
