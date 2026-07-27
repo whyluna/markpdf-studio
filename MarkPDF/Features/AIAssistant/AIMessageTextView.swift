@@ -69,7 +69,7 @@ struct AIMessageTextView: View {
     switch Self.classifyLine(line) {
     case .header(let level, let text):
       Text(inlineRendered(text))
-        .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+        .font(.system(size: level <= 2 ? 15 : 14, weight: .semibold))
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -78,7 +78,7 @@ struct AIMessageTextView: View {
         Text(marker)
           .foregroundStyle(.secondary)
         Text(inlineRendered(text))
-          .font(.body)
+          .font(.system(size: 14))
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -86,7 +86,7 @@ struct AIMessageTextView: View {
       .padding(.leading, CGFloat(indent) * 12)
     case .plain(let text):
       Text(inlineRendered(text))
-        .font(.body)
+        .font(.system(size: 14))
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -131,7 +131,7 @@ struct AICodeBlockView: View {
       .padding(.vertical, 4)
       Divider()
       Text(code)
-        .font(.system(size: 12.5, design: .monospaced))
+        .font(.system(size: 13, design: .monospaced))
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)

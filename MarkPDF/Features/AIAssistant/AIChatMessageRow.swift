@@ -30,7 +30,7 @@ struct AIChatMessageRow: View {
   private var userRow: some View {
     VStack(alignment: .trailing, spacing: 3) {
       Text(message.content)
-        .font(.body)
+        .font(.system(size: 14))
         .textSelection(.enabled)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

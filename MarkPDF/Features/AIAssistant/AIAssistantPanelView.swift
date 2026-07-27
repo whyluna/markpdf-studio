@@ -48,7 +48,7 @@ struct AIAssistantPanelView: View {
           .font(.headline)
         if !chat.providerBadge.isEmpty {
           Text(chat.providerBadge)
-            .font(.caption2)
+            .font(.caption)
             .foregroundStyle(.tertiary)
             .lineLimit(1)
         }
@@ -71,7 +71,7 @@ struct AIAssistantPanelView: View {
       }
       // 会话线程归属（FR-AI.3：每文档一条线程，切文档自动切换）
       Text(threadCaption)
-        .font(.caption2)
+        .font(.caption)
         .foregroundStyle(.tertiary)
         .lineLimit(1)
     }
@@ -170,7 +170,7 @@ struct AIAssistantPanelView: View {
       HStack(alignment: .bottom, spacing: 8) {
         TextField("向 AI 提问…", text: $draft, axis: .vertical)
           .textFieldStyle(.plain)
-          .font(.body)
+          .font(.system(size: 14))
           .lineLimit(3...10)
           .padding(8)
           .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
@@ -222,15 +222,15 @@ struct AIAssistantPanelView: View {
 
   private func contextChip(title: String, isOn: Bool, toggle: @escaping () -> Void) -> some View {
     Button(action: toggle) {
-      HStack(spacing: 3) {
+      HStack(spacing: 4) {
         Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-          .font(.system(size: 9))
+          .font(.system(size: 11))
         Text(title)
-          .font(.caption2)
+          .font(.callout)
       }
       .foregroundStyle(isOn ? Color.accentColor : .secondary)
-      .padding(.horizontal, 7)
-      .padding(.vertical, 3)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 4)
       .background(
         (isOn ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.05)),
         in: Capsule()
