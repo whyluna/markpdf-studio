@@ -9,8 +9,8 @@ struct AIContextSources {
   var pdfSelection: () -> String? = { nil }
   /// md 选区（经桥；超时/未就绪回 nil）
   var mdSelection: (@escaping (String?) -> Void) -> Void = { $0(nil) }
-  /// 当前文档（名字 + 全文）；无激活文档 nil
-  var activeDocument: () -> (name: String, text: String)? = { nil }
+  /// 当前文档（名字 + 全文，按传入字符预算提取——大 PDF 逐页早停）；无激活文档 nil
+  var activeDocument: (Int) -> (name: String, text: String)? = { _ in nil }
 }
 
 /// AI 助手对话状态机（FR-AI.2）：多轮流式、可取消/重试；本批会话仅内存态（M5-D 落盘）。
@@ -108,14 +108,17 @@ final class AIChatStore: ObservableObject {
   private func dispatch(question: String, selection: AISettingsStore.ResolvedModel) {
     let includeSelection = settings.settings.contextIncludeSelection
     let includeDocument = settings.settings.contextIncludeDocument
-    let document = includeDocument ? contextSources.activeDocument() : nil
+    // 上下文动态预算（v1.2）：按所选模型窗口计算，取代固定 8000 字头截
+    let documentBudget = AIModelContext.documentCharBudget(forModel: selection.model)
+    let document = includeDocument ? contextSources.activeDocument(documentBudget) : nil
 
     let assemble: (String?) -> Void = { [weak self] selectionText in
       guard let self else { return }
       let built = AIContextBuilder.buildUserMessage(
         question: question,
         selection: includeSelection ? selectionText : nil,
-        document: document
+        document: document,
+        documentBudget: documentBudget
       )
       self.startStreaming(question: question, built: built, resolved: selection)
     }

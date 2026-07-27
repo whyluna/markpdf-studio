@@ -169,7 +169,7 @@ final class AIChatStoreTests: XCTestCase {
       }
     })
     let store = makeStore(transport: transport)
-    store.contextSources.activeDocument = { (name: "a.md", text: "很长的全文内容") }
+    store.contextSources.activeDocument = { _ in (name: "a.md", text: "很长的全文内容") }
 
     store.send("第一问")
     _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }

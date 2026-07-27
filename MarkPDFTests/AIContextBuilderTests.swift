@@ -47,6 +47,40 @@ final class AIContextBuilderTests: XCTestCase {
     XCTAssertNil(built.summary)
   }
 
+  func testDocumentBudgetParameterOverridesDefault() {
+    let text = String(repeating: "文", count: 10_000)
+    // 传大预算不截断（默认 8000 会截）
+    let big = AIContextBuilder.buildUserMessage(
+      question: "q", selection: nil, document: (name: "a.md", text: text), documentBudget: 20_000
+    )
+    XCTAssertFalse(big.userMessage.contains("…(truncated)"))
+    let small = AIContextBuilder.buildUserMessage(
+      question: "q", selection: nil, document: (name: "a.md", text: text), documentBudget: 5_000
+    )
+    XCTAssertTrue(small.userMessage.contains("…(truncated)"))
+  }
+
+  // MARK: - 模型上下文估算（v1.2 动态预算）
+
+  func testModelContextEstimation() {
+    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "moonshot-v1-8k"), 8_000)
+    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "moonshot-v1-128k"), 128_000)
+    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "claude-3-5-sonnet-latest"), 200_000)
+    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "gemini-2.0-flash"), 1_000_000)
+    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "deepseek-chat"), 64_000)
+    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "gpt-4o-mini"), 128_000)
+    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "some-unknown-model"), AIModelContext.conservativeTokens)
+  }
+
+  func testDocumentCharBudgetClamps() {
+    // 8k 模型：8000-8000=0 → 下限 4000（旧固定 8000 在 8k 模型上实际会超窗）
+    XCTAssertEqual(AIModelContext.documentCharBudget(forModel: "moonshot-v1-8k"), AIModelContext.minDocumentChars)
+    // 1M 模型：夹到上限
+    XCTAssertEqual(AIModelContext.documentCharBudget(forModel: "gemini-2.0-flash"), AIModelContext.maxDocumentChars)
+    // 64k 模型：64000-8000=56000
+    XCTAssertEqual(AIModelContext.documentCharBudget(forModel: "deepseek-chat"), 56_000)
+  }
+
   // MARK: - 历史裁剪
 
   func testTrimHistoryDropsEmptyAssistantAndCaps() {

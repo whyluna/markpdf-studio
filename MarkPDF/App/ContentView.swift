@@ -116,7 +116,7 @@ struct ContentView: View {
           completion((text?.isEmpty ?? true) ? nil : text)
         }
       }
-      aiChatStore.contextSources.activeDocument = { [weak tabStore, weak pdfStore] in
+      aiChatStore.contextSources.activeDocument = { [weak tabStore, weak pdfStore] budget in
         guard let tab = tabStore?.activeGroup.activeTab else { return nil }
         switch tab.kind {
         case .markdown:
@@ -124,10 +124,11 @@ struct ContentView: View {
           return (name: tab.title, text: store.text)
         case .pdf:
           guard let document = pdfStore?.pdfView?.document else { return nil }
-          // 逐页拼接、到预算即停（大 PDF 全量 string 提取可达百 ms 级）
+          // 逐页拼接、到预算即停（大 PDF 全量 string 提取可达百 ms 级；
+          // 预算随所选模型窗口动态传入，v1.2）
           var text = ""
           for index in 0..<document.pageCount {
-            guard text.count < AIContextBuilder.documentBudget else { break }
+            guard text.count < budget else { break }
             if let page = document.page(at: index)?.string {
               text += page + "\n"
             }

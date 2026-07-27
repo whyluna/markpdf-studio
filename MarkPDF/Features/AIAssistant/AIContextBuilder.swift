@@ -6,8 +6,8 @@ import Foundation
 enum AIContextBuilder {
   /// 选区预算（与划词翻译 TranslationStore.maxAIInputCharacters 同口径）
   static let selectionBudget = 2_000
-  /// 当前文档预算：默认模型里最小上下文为 8k token（moonshot-v1-8k），
-  /// 8000 字文档 + 2000 字选区 + 12 轮历史 + 4096 回复余量恰可容纳
+  /// 当前文档预算保守回退值（v1.2 起按模型动态计算，见 AIModelContext.documentCharBudget；
+  /// 此常量仅作未传参时的回退与测试基准）
   static let documentBudget = 8_000
   /// 送出的历史消息条数上限（12 轮 user+assistant）
   static let historyMessageCap = 24
@@ -29,11 +29,13 @@ enum AIContextBuilder {
     """
   }
 
-  /// 组装当轮 user 消息：`[Selection]`/`[Document: xxx]` 标签块 + `[Question]`
+  /// 组装当轮 user 消息：`[Selection]`/`[Document: xxx]` 标签块 + `[Question]`。
+  /// documentBudget 按所选模型动态传入（AIModelContext.documentCharBudget）
   static func buildUserMessage(
     question: String,
     selection: String?,
-    document: (name: String, text: String)?
+    document: (name: String, text: String)?,
+    documentBudget: Int = AIContextBuilder.documentBudget
   ) -> BuiltContext {
     var blocks: [String] = []
     var summaryParts: [String] = []
@@ -49,7 +51,7 @@ enum AIContextBuilder {
       )
     }
     if let document, !document.text.isEmpty {
-      let clipped = String(document.text.prefix(documentBudget))
+      let clipped = String(document.text.prefix(max(documentBudget, 0)))
       let truncated = clipped.count < document.text.count
       blocks.append("[Document: \(document.name)]\n\(clipped)\(truncated ? "\n…(truncated)" : "")")
       summaryParts.append(
