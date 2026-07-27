@@ -389,4 +389,17 @@ final class EditorStoreAsyncIOTests: XCTestCase {
     XCTAssertEqual(store.trashedFileURL, url)
     XCTAssertFalse(store.hasUnsavedChanges)
   }
+
+  /// 内核命令队列（FR-AI.2）：enqueue 入队发布、消费后清空
+  func testKernelRequestQueue() {
+    let store = EditorStore()
+    XCTAssertTrue(store.pendingKernelRequests.isEmpty)
+
+    store.enqueue(.insertAtCursor("文本"))
+    store.fetchSelection { _ in }
+    XCTAssertEqual(store.pendingKernelRequests.count, 2)
+
+    store.didHandleKernelRequests()
+    XCTAssertTrue(store.pendingKernelRequests.isEmpty)
+  }
 }
