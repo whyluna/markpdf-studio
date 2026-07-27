@@ -137,18 +137,48 @@ struct AIModelChoice: Codable, Equatable, Hashable {
   var model: String
 }
 
-/// 对话消息（FR-AI.2 多轮会话的基本单元）
+/// 模型请求的一次工具调用（FR-AI.2 v1.3 agent 循环）；arguments 为 JSON 字符串
+struct AIToolCall: Codable, Equatable {
+  let id: String
+  let name: String
+  let arguments: String
+}
+
+/// 工具定义（送入两族 tools 参数）；parametersJSON 为 JSON Schema 原文
+struct AITool: Equatable {
+  let name: String
+  let description: String
+  let parametersJSON: String
+}
+
+/// 对话消息（FR-AI.2 多轮会话的基本单元）。
+/// v1.3：支持工具轮——assistant 可携带 toolCalls；tool 角色为工具结果（toolCallID 配对）
 struct AIChatMessage: Codable, Equatable {
   enum Role: String, Codable {
     case system
     case user
     case assistant
+    case tool
   }
 
   var role: Role
   var content: String
+  /// assistant 请求的工具调用（agent 循环轮内使用）
+  var toolCalls: [AIToolCall]?
+  /// tool 角色：所应答的调用 id
+  var toolCallID: String?
+
+  init(role: Role, content: String, toolCalls: [AIToolCall]? = nil, toolCallID: String? = nil) {
+    self.role = role
+    self.content = content
+    self.toolCalls = toolCalls
+    self.toolCallID = toolCallID
+  }
 
   static func system(_ text: String) -> AIChatMessage { AIChatMessage(role: .system, content: text) }
   static func user(_ text: String) -> AIChatMessage { AIChatMessage(role: .user, content: text) }
   static func assistant(_ text: String) -> AIChatMessage { AIChatMessage(role: .assistant, content: text) }
+  static func toolResult(id: String, content: String) -> AIChatMessage {
+    AIChatMessage(role: .tool, content: content, toolCallID: id)
+  }
 }

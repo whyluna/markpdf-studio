@@ -45,26 +45,28 @@ enum AIRequestBuilder {
     model: String,
     messages: [AIChatMessage],
     stream: Bool,
-    maxTokens: Int = 4096
+    maxTokens: Int = 4096,
+    tools: [AITool]? = nil
   ) throws -> URLRequest {
     switch family {
     case .openAICompatible:
-      return try openAIRequest(config: config, apiKey: apiKey, model: model, messages: messages, stream: stream, maxTokens: maxTokens)
+      return try openAIRequest(config: config, apiKey: apiKey, model: model, messages: messages, stream: stream, maxTokens: maxTokens, tools: tools)
     case .anthropic:
-      return try anthropicRequest(config: config, apiKey: apiKey, model: model, messages: messages, stream: stream, maxTokens: maxTokens)
+      return try anthropicRequest(config: config, apiKey: apiKey, model: model, messages: messages, stream: stream, maxTokens: maxTokens, tools: tools)
     }
   }
 
-  // MARK: - OpenAI 兼容协议（POST {baseURL}/chat/completions）
-
-  private struct OpenAIChatBody: Encodable {
-    let model: String
-    let messages: [AIChatMessage]
-    let stream: Bool
-    // 回复上限与 Anthropic 口径统一（当前预设模型族均接受 max_tokens；
-    // OpenAI 新模型族改名 max_completion_tokens 属已知偏差，见进度文档）
-    let max_tokens: Int
+  /// 工具 schema JSON 字符串 → 对象（送 body 需嵌为对象而非字符串）
+  private static func schemaObject(_ json: String) -> Any {
+    (try? JSONSerialization.jsonObject(with: Data(json.utf8))) ?? [String: Any]()
   }
+
+  /// 工具调用 arguments JSON 字符串 → 对象（Anthropic input 需对象；解析失败给空对象）
+  private static func argumentsObject(_ json: String) -> Any {
+    (try? JSONSerialization.jsonObject(with: Data(json.utf8))) ?? [String: Any]()
+  }
+
+  // MARK: - OpenAI 兼容协议（POST {baseURL}/chat/completions）
 
   private static func openAIRequest(
     config: AIProviderConfig,
@@ -72,23 +74,42 @@ enum AIRequestBuilder {
     model: String,
     messages: [AIChatMessage],
     stream: Bool,
-    maxTokens: Int
+    maxTokens: Int,
+    tools: [AITool]?
   ) throws -> URLRequest {
     var request = try baseRequest(url: config.endpoint + "/chat/completions")
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-    request.httpBody = try JSONEncoder().encode(OpenAIChatBody(model: model, messages: messages, stream: stream, max_tokens: maxTokens))
+
+    let encodedMessages: [[String: Any]] = messages.map { message in
+      var body: [String: Any] = ["role": message.role.rawValue, "content": message.content]
+      if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+        body["tool_calls"] = toolCalls.map { call in
+          ["id": call.id, "type": "function", "function": ["name": call.name, "arguments": call.arguments]]
+        }
+      }
+      if message.role == .tool, let id = message.toolCallID {
+        body["tool_call_id"] = id
+      }
+      return body
+    }
+    var payload: [String: Any] = [
+      "model": model,
+      "messages": encodedMessages,
+      "stream": stream,
+      // 回复上限与 Anthropic 口径统一（当前预设模型族均接受 max_tokens；
+      // OpenAI 新模型族改名 max_completion_tokens 属已知偏差，见进度文档）
+      "max_tokens": maxTokens,
+    ]
+    if let tools, !tools.isEmpty {
+      payload["tools"] = tools.map { tool in
+        ["type": "function", "function": ["name": tool.name, "description": tool.description, "parameters": schemaObject(tool.parametersJSON)]]
+      }
+    }
+    request.httpBody = try JSONSerialization.data(withJSONObject: payload)
     return request
   }
 
   // MARK: - Anthropic Messages API（POST {baseURL}/v1/messages）
-
-  private struct AnthropicChatBody: Encodable {
-    let model: String
-    let max_tokens: Int
-    let messages: [AIChatMessage]
-    let system: String?
-    let stream: Bool
-  }
 
   private static func anthropicRequest(
     config: AIProviderConfig,
@@ -96,21 +117,60 @@ enum AIRequestBuilder {
     model: String,
     messages: [AIChatMessage],
     stream: Bool,
-    maxTokens: Int
+    maxTokens: Int,
+    tools: [AITool]?
   ) throws -> URLRequest {
     var request = try baseRequest(url: config.endpoint + "/v1/messages")
     request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
     // system 为顶层字段而非消息；多段 system 合并
     let system = messages.filter { $0.role == .system }.map(\.content).joined(separator: "\n\n")
-    let turns = messages.filter { $0.role != .system }
-    request.httpBody = try JSONEncoder().encode(AnthropicChatBody(
-      model: model,
-      max_tokens: maxTokens,
-      messages: turns,
-      system: system.isEmpty ? nil : system,
-      stream: stream
-    ))
+    var turns: [[String: Any]] = []
+    for message in messages where message.role != .system {
+      switch message.role {
+      case .assistant:
+        var blocks: [[String: Any]] = []
+        if !message.content.isEmpty {
+          blocks.append(["type": "text", "text": message.content])
+        }
+        for call in message.toolCalls ?? [] {
+          blocks.append(["type": "tool_use", "id": call.id, "name": call.name, "input": argumentsObject(call.arguments)])
+        }
+        turns.append(["role": "assistant", "content": blocks.isEmpty ? [["type": "text", "text": ""]] : blocks])
+      case .tool:
+        // 工具结果进 user 消息的 tool_result 块；连续多个结果合并进同一 user 消息（交替校验）
+        let block: [String: Any] = [
+          "type": "tool_result",
+          "tool_use_id": message.toolCallID ?? "",
+          "content": message.content,
+        ]
+        if var last = turns.last, last["role"] as? String == "user",
+          var content = last["content"] as? [[String: Any]],
+          content.allSatisfy({ ($0["type"] as? String) == "tool_result" }) {
+          content.append(block)
+          last["content"] = content
+          turns[turns.count - 1] = last
+        } else {
+          turns.append(["role": "user", "content": [block]])
+        }
+      default:
+        turns.append(["role": "user", "content": message.content])
+      }
+    }
+    var payload: [String: Any] = [
+      "model": model,
+      "max_tokens": maxTokens,
+      "messages": turns,
+      "stream": stream,
+    ]
+    if !system.isEmpty { payload["system"] = system }
+    if let tools, !tools.isEmpty {
+      payload["tools"] = tools.map { tool in
+        ["name": tool.name, "description": tool.description, "input_schema": schemaObject(tool.parametersJSON)]
+      }
+    }
+    request.httpBody = try JSONSerialization.data(withJSONObject: payload)
     return request
   }
 
