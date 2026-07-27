@@ -144,10 +144,13 @@ struct AIAssistantPanelView: View {
   private var composer: some View {
     VStack(alignment: .leading, spacing: 6) {
       contextChips
-      HStack(alignment: .bottom, spacing: 6) {
+      HStack(alignment: .bottom, spacing: 8) {
         TextField("向 AI 提问…", text: $draft, axis: .vertical)
           .textFieldStyle(.plain)
-          .lineLimit(1...6)
+          .font(.body)
+          .lineLimit(3...10)
+          .padding(8)
+          .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
           .focused($inputFocused)
           .onSubmit(sendDraft)
         if chat.phase == .streaming {
@@ -179,7 +182,7 @@ struct AIAssistantPanelView: View {
   private var contextChips: some View {
     HStack(spacing: 6) {
       contextChip(
-        title: String(localized: "选区"),
+        title: String(localized: "选中文字"),
         isOn: aiSettings.settings.contextIncludeSelection
       ) { aiSettings.update { $0.contextIncludeSelection.toggle() } }
       contextChip(

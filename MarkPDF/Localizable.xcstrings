@@ -3735,23 +3735,23 @@
         }
       }
     },
-    "选区": {
+    "选中文字": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Selection"
+            "value": "Selected Text"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "选区"
+            "value": "选中文字"
           }
         }
       }
     },
-    "选区 %lld 字": {
+    "选中文字 %lld 字": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -3762,12 +3762,12 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "选区 %lld 字"
+            "value": "选中文字 %lld 字"
           }
         }
       }
     },
-    "选区 %lld 字（截断）": {
+    "选中文字 %lld 字（截断）": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -3778,7 +3778,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "选区 %lld 字（截断）"
+            "value": "选中文字 %lld 字（截断）"
           }
         }
       }

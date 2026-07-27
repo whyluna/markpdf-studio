@@ -44,8 +44,8 @@ enum AIContextBuilder {
       blocks.append("[Selection]\n\(clipped)\(truncated ? "\n…(truncated)" : "")")
       summaryParts.append(
         truncated
-          ? String(localized: "选区 \(clipped.count) 字（截断）")
-          : String(localized: "选区 \(clipped.count) 字")
+          ? String(localized: "选中文字 \(clipped.count) 字（截断）")
+          : String(localized: "选中文字 \(clipped.count) 字")
       )
     }
     if let document, !document.text.isEmpty {

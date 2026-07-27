@@ -11,7 +11,7 @@ struct AIMessageTextView: View {
         switch segment {
         case .paragraph(let text):
           Text(inlineRendered(text))
-            .font(.callout)
+            .font(.body)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -60,7 +60,7 @@ struct AICodeBlockView: View {
       .padding(.vertical, 4)
       Divider()
       Text(code)
-        .font(.system(size: 12, design: .monospaced))
+        .font(.system(size: 12.5, design: .monospaced))
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)

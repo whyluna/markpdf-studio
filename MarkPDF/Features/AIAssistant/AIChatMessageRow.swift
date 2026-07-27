@@ -30,14 +30,14 @@ struct AIChatMessageRow: View {
   private var userRow: some View {
     VStack(alignment: .trailing, spacing: 3) {
       Text(message.content)
-        .font(.callout)
+        .font(.body)
         .textSelection(.enabled)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
       if let summary = message.contextSummary {
         Text("已附带：\(summary)")
-          .font(.caption2)
+          .font(.caption)
           .foregroundStyle(.tertiary)
       }
     }

@@ -20,7 +20,7 @@ final class AIContextBuilderTests: XCTestCase {
     XCTAssertTrue(built.userMessage.contains("[Selection]\nattention is all you need"))
     XCTAssertTrue(built.userMessage.contains("[Document: paper.pdf]\n全文内容"))
     XCTAssertTrue(built.userMessage.hasSuffix("[Question]\n翻译这段"))
-    XCTAssertEqual(built.summary, "选区 25 字 · 文档 paper.pdf")
+    XCTAssertEqual(built.summary, "选中文字 25 字 · 文档 paper.pdf")
   }
 
   func testSelectionTruncationAtBudget() {
