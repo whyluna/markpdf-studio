@@ -200,6 +200,34 @@ final class AIContextBuilderTests: XCTestCase {
     XCTAssertTrue(out[1].content.contains("assistant: 答 [§3.2]"))
   }
 
+  func testCompactionPromptHasSixSectionsAndMustRules() {
+    let system = AIContextBuilder.compactionMessages(existingSummary: nil, turns: [.user("q")])[0].content
+    for section in [
+      "Primary Question & Intent", "Documents & Anchors", "Findings & Conclusions",
+      "User Feedback & Preferences", "Open Questions", "Current Work & Next Step",
+    ] {
+      XCTAssertTrue(system.contains(section), "缺小节 \(section)")
+    }
+    XCTAssertTrue(system.contains("Rules (MUST):"))
+    XCTAssertTrue(system.contains("Preserve ALL anchors exactly as written"))
+    XCTAssertTrue(system.contains("omitting any section that would be empty"), "空节省略规则")
+    XCTAssertFalse(system.contains("800 words"), "移除绝对字数上限")
+  }
+
+  func testExtractAnchors() {
+    let text = "结论见 [§Methods] 与 [§实验 设置]，数据在 [p.5]，附录 [p.12-14]。重复 [§Methods] [p.5] 不重计。普通[方括号]不算。"
+    XCTAssertEqual(
+      AIContextBuilder.extractAnchors(in: text),
+      ["[§Methods]", "[§实验 设置]", "[p.5]", "[p.12-14]"]
+    )
+    XCTAssertTrue(AIContextBuilder.extractAnchors(in: "无锚点文本").isEmpty)
+  }
+
+  func testHistoryMessagesSummaryCarriesRetrievalHint() {
+    let out = AIContextBuilder.historyMessages([.user("问"), .assistant("答")], rollingSummary: "早期结论", charBudget: 10_000)
+    XCTAssertTrue(out[0].content.contains("should be asked for rather than assumed"), "防幻觉续接句")
+  }
+
   // MARK: - markdown 分块
 
   func testPlainParagraphs() {

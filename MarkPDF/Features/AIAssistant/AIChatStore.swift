@@ -297,7 +297,16 @@ final class AIChatStore: ObservableObject {
           maxTokens: AIContextBuilder.compactionMaxTokens(forInputChars: inputChars)
         )
         guard !Task.isCancelled, var thread = self.threads[docKey] else { return }
-        thread.rollingSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        var compactedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 锚点代码级兜底（学 Cline ensureFilesSection）：摘要漏掉的锚点由代码追加，防有损压缩丢引用
+        let sourceAnchors = AIContextBuilder.extractAnchors(
+          in: toCompact.map(\.content).joined(separator: "\n") + "\n" + (existing ?? "")
+        )
+        let missing = sourceAnchors.filter { !compactedSummary.contains($0) }
+        if !missing.isEmpty {
+          compactedSummary += "\n\nAnchors mentioned: " + missing.joined(separator: ", ")
+        }
+        thread.rollingSummary = compactedSummary
         thread.summarizedCount = min(summarized + compactCount, thread.messages.count)
         self.threads[docKey] = thread
         self.persistDebouncer.schedule { [weak self] in self?.persistNow() }

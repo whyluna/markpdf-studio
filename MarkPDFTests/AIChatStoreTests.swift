@@ -554,6 +554,48 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertFalse(second.contains("问题0号"), "被压部分不以原文出现")
   }
 
+  /// 锚点代码级兜底：压缩回复漏锚点 → 落盘摘要末尾补 Anchors mentioned 行
+  func testCompactionAppendsMissingAnchors() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AnchorTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    // 18 条短消息走条数触发，被压的第一轮含锚点；mock 摘要不含锚点
+    var stored: [AISessionStore.StoredMessage] = []
+    for index in 0..<9 {
+      let answer = index == 0 ? "结论在 [§Methods] 与 [p.5]" : "答\(index)"
+      stored.append(AISessionStore.StoredMessage(role: "user", content: "问\(index)", contextSummary: nil, promptQuestion: "问\(index)", wasCancelled: nil))
+      stored.append(AISessionStore.StoredMessage(role: "assistant", content: answer, contextSummary: nil, promptQuestion: nil, wasCancelled: nil))
+    }
+    try AISessionStore.save(
+      [AISessionStore.StoredSession(docPath: nil, messages: stored, updatedAt: Date())],
+      workspaceRoot: root
+    )
+
+    let transport = AIServiceTests.MockAITransport(
+      sendHandler: { _ in
+        (Data(#"{"choices":[{"message":{"content":"摘要没带锚点"}}]}"#.utf8),
+         HTTPURLResponse(url: URL(string: "https://x.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+      },
+      streamHandler: { _ in
+        AsyncThrowingStream { continuation in
+          continuation.yield(self.sse("答"))
+          continuation.finish()
+        }
+      }
+    )
+    let store = makeStore(transport: transport)
+    store.workspaceDidChange(root: root)
+    store.send("触发压缩")
+    _ = await waitUntil { store.phase == .idle }
+    let fixed = await waitUntil {
+      store.flush()
+      let sessions = (try? AISessionStore.load(workspaceRoot: root)) ?? []
+      return sessions.first?.rollingSummary?.contains("Anchors mentioned: [§Methods], [p.5]") == true
+    }
+    XCTAssertTrue(fixed, "漏掉的锚点由代码补全")
+  }
+
   func testNewSessionClears() async {
     let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
       AsyncThrowingStream { continuation in

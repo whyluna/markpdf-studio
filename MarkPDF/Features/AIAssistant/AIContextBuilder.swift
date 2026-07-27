@@ -126,23 +126,59 @@ enum AIContextBuilder {
       ? String(rollingSummary.prefix(summaryCap)) + "\n…(truncated)"
       : rollingSummary
     return [
-      .user("[Earlier conversation summary]\n\(clipped)"),
+      .user("""
+        [Earlier conversation summary]
+        \(clipped)
+
+        (The full conversation remains available to the user in the panel; earlier details \
+        not covered by this summary should be asked for rather than assumed.)
+        """),
       .assistant("OK."),
     ] + kept
   }
 
-  /// 压缩请求（后台异步；输入 = 旧摘要 + 待压缩轮次原文，输出新摘要整体替换）
+  /// 压缩请求（后台异步；输入 = 旧摘要 + 待压缩轮次原文，输出新摘要整体替换）。
+  /// 六小节结构化 + MUST 规则（对标 Claude Code compact / LobeChat 空节省略）：
+  /// 固定小节强制高密度，verbatim 直引防漂移
   static func compactionMessages(existingSummary: String?, turns: [AIChatMessage]) -> [AIChatMessage] {
     let transcript = turns.map { "\($0.role.rawValue): \($0.content)" }.joined(separator: "\n")
     let previous = existingSummary.map { "Previous summary:\n\($0)\n\n" } ?? ""
     return [
       .system("""
-        Compress the following conversation into a summary. Make its length proportionate to \
-        the input and keep it dense — do not over-shorten long conversations. \
-        Keep conclusions, cited anchors like [§Title]/[p.N], unresolved questions, and user preferences. \
-        Merge with the previous summary if given. Reply with the summary only.
+        You maintain a running summary of a conversation between a user and a research reading \
+        assistant. Compress the conversation below into a structured summary with these sections, \
+        omitting any section that would be empty:
+
+        1. Primary Question & Intent — what the user is researching; quote the latest question verbatim
+        2. Documents & Anchors — documents discussed and every anchor like [§Title] or [p.N]
+        3. Findings & Conclusions — confirmed findings, each with its anchors
+        4. User Feedback & Preferences — corrections and preferences, key phrases verbatim
+        5. Open Questions — unresolved questions
+        6. Current Work & Next Step — what was in progress at the cut point; quote the most recent exchange
+
+        Rules (MUST):
+        - Write in the same language as the conversation.
+        - Preserve ALL anchors exactly as written; never invent anchors or facts.
+        - Merge with the previous summary if given, removing details it makes outdated.
+        - Keep the length proportionate to the input and dense; do not over-shorten long conversations.
+        Reply with the summary only.
         """),
       .user(previous + "Conversation:\n" + transcript),
     ]
+  }
+
+  /// 提取文本中的锚点标记（`[§Title]` / `[p.N]` / `[p.N-M]`），去重保序。
+  /// 压缩兜底用：模型摘要漏掉的锚点由代码追加，防有损压缩丢引用
+  static func extractAnchors(in text: String) -> [String] {
+    let pattern = #"\[§[^\]\n]+\]|\[p\.\d+(?:-\d+)?\]"#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    var seen = Set<String>()
+    var anchors: [String] = []
+    for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+      guard let range = Range(match.range, in: text) else { continue }
+      let anchor = String(text[range])
+      if seen.insert(anchor).inserted { anchors.append(anchor) }
+    }
+    return anchors
   }
 }
