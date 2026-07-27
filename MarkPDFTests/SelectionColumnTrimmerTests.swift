@@ -47,15 +47,16 @@ final class SelectionColumnTrimmerTests: XCTestCase {
     XCTAssertEqual(kept, Array(bounds.indices))
   }
 
-  func testBackwardCrossColumnDragTrimsToStartColumn() {
+  func testBackwardCrossColumnDragKeepsEverything() {
     let bounds = twoColumnBounds()
-    // 逆向跨栏（右栏→左栏，阅读顺序倒序）：划过栏间距的误触，裁到起始栏（右栏）
+    // 逆向跨栏（右栏→左栏）同样视为有意跨栏保持原选区：缩进/公式会聚成伪栏，
+    // 「裁到起始栏」会让栏内向左回拖被误裁（该规则已回退，此为回归用例）
     let kept = SelectionColumnTrimmer.keptLineIndices(
       lineBounds: bounds,
       dragStart: NSPoint(x: 400, y: 95),
       dragEnd: NSPoint(x: 100, y: 30)
     )
-    XCTAssertEqual(kept, [4, 5, 6, 7])
+    XCTAssertEqual(kept, Array(bounds.indices))
   }
 
   func testSingleColumnKeepsEverything() {
