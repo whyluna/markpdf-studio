@@ -61,8 +61,8 @@ final class AIServiceTests: XCTestCase {
     })
     let service = AIService(transport: transport, keys: keyStore)
     var collected = ""
-    for try await delta in service.stream(kind: .anthropic, config: anthropicConfig, model: "claude-3-5-sonnet-latest", messages: [.user("hi")]) {
-      collected += delta
+    for try await event in service.stream(kind: .anthropic, config: anthropicConfig, model: "claude-3-5-sonnet-latest", messages: [.user("hi")]) {
+      if case .text(let delta) = event { collected += delta }
     }
     XCTAssertEqual(collected, "你好，世界")
   }
@@ -80,8 +80,8 @@ final class AIServiceTests: XCTestCase {
     })
     let service = AIService(transport: transport, keys: keyStore)
     var collected = ""
-    for try await delta in service.stream(kind: .deepseek, config: deepseekConfig, model: "deepseek-chat", messages: [.user("hi")]) {
-      collected += delta
+    for try await event in service.stream(kind: .deepseek, config: deepseekConfig, model: "deepseek-chat", messages: [.user("hi")]) {
+      if case .text(let delta) = event { collected += delta }
     }
     XCTAssertEqual(collected, "a")
   }

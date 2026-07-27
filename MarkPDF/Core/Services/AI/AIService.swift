@@ -86,6 +86,12 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
   }
 }
 
+/// 流式事件（FR-AI.2 v1.3）：文本增量实时到达；工具调用于流结束时整体给出（重组完成后）
+enum AIStreamEvent: Equatable {
+  case text(String)
+  case toolCalls([AIToolCall])
+}
+
 /// AI 服务门面（FR-AI.4）：请求构造 → 传输 → 增量解析；不持有任何 UI 状态。
 /// @MainActor 与全部 Store 一致（开发规范 §3.3）；网络等待为异步挂起，不占主线程。
 @MainActor
@@ -127,32 +133,61 @@ final class AIService {
     }
   }
 
-  /// 流式对话：逐段 yield 文本增量（AI 助手对话用）；取消消费方即断流
+  /// 流式对话：文本增量实时 yield，工具调用在流结束时整体 yield（AI 助手 agent 循环用）；
+  /// 取消消费方即断流
   func stream(
     kind: AIProviderKind,
     config: AIProviderConfig,
     model: String,
     messages: [AIChatMessage],
-    maxTokens: Int = 4096
-  ) -> AsyncThrowingStream<String, Error> {
+    maxTokens: Int = 4096,
+    tools: [AITool]? = nil
+  ) -> AsyncThrowingStream<AIStreamEvent, Error> {
     AsyncThrowingStream { continuation in
       let task = Task { [transport] in
         do {
-          let request = try makeRequest(kind: kind, config: config, model: model, messages: messages, stream: true, maxTokens: maxTokens)
+          let request = try makeRequest(kind: kind, config: config, model: model, messages: messages, stream: true, maxTokens: maxTokens, tools: tools)
           let chunks = try await transport.stream(request)
           var parser = AISSEParser()
+          var openAIAccumulator = AIToolCallAccumulator.OpenAI()
+          var anthropicAccumulator = AIToolCallAccumulator.Anthropic()
+
+          func process(_ event: AISSEParser.Event) throws {
+            switch kind.family {
+            case .openAICompatible:
+              guard let outcome = try AIChunkDecoder.openAIChunk(from: event.data) else { return }
+              if let text = outcome.text, !text.isEmpty {
+                continuation.yield(.text(text))
+              }
+              openAIAccumulator.ingest(outcome.toolCallDeltas)
+            case .anthropic:
+              switch try AIChunkDecoder.anthropicDelta(event: event.name, payload: event.data) {
+              case .delta(let text) where !text.isEmpty:
+                continuation.yield(.text(text))
+              case .toolUseStart(let index, let id, let name):
+                anthropicAccumulator.blockStart(index: index, id: id, name: name)
+              case .inputJSONDelta(let index, let partial):
+                anthropicAccumulator.ingest(index: index, partial: partial)
+              default:
+                break
+              }
+            }
+          }
+
           for try await chunk in chunks {
             for event in parser.feed(chunk) {
-              if let delta = try Self.delta(of: kind, from: event), !delta.isEmpty {
-                continuation.yield(delta)
-              }
+              try process(event)
             }
           }
           // 收尾：末尾事件无空行边界时由 finish 冲刷出来
           for event in parser.finish() {
-            if let delta = try Self.delta(of: kind, from: event), !delta.isEmpty {
-              continuation.yield(delta)
-            }
+            try process(event)
+          }
+          let calls = kind.family == .openAICompatible
+            ? openAIAccumulator.finalize()
+            : anthropicAccumulator.finalize()
+          if !calls.isEmpty {
+            continuation.yield(.toolCalls(calls))
           }
           continuation.finish()
         } catch {
@@ -160,19 +195,6 @@ final class AIService {
         }
       }
       continuation.onTermination = { _ in task.cancel() }
-    }
-  }
-
-  /// 单个 SSE 事件 → 文本增量（nil = 哨兵/无内容/忽略事件）
-  private static func delta(of kind: AIProviderKind, from event: AISSEParser.Event) throws -> String? {
-    switch kind.family {
-    case .openAICompatible:
-      return try AIChunkDecoder.openAIDelta(from: event.data)
-    case .anthropic:
-      if case .delta(let text) = try AIChunkDecoder.anthropicDelta(event: event.name, payload: event.data) {
-        return text
-      }
-      return nil
     }
   }
 
@@ -184,7 +206,8 @@ final class AIService {
     model: String,
     messages: [AIChatMessage],
     stream: Bool,
-    maxTokens: Int
+    maxTokens: Int,
+    tools: [AITool]? = nil
   ) throws -> URLRequest {
     guard let apiKey = keys.apiKey(for: kind.rawValue), !apiKey.isEmpty else {
       throw AIServiceError.missingAPIKey
@@ -198,7 +221,8 @@ final class AIService {
       model: model,
       messages: messages,
       stream: stream,
-      maxTokens: maxTokens
+      maxTokens: maxTokens,
+      tools: tools
     )
   }
 }

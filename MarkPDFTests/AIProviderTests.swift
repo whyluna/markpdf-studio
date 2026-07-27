@@ -182,14 +182,28 @@ final class AIProviderTests: XCTestCase {
   // MARK: - 流式增量解码
 
   func testOpenAIChunkDecoding() throws {
-    XCTAssertEqual(try AIChunkDecoder.openAIDelta(from: #"{"choices":[{"delta":{"content":"你好"}}]}"#), "你好")
-    XCTAssertNil(try AIChunkDecoder.openAIDelta(from: #"{"choices":[{"delta":{}}]}"#))
-    XCTAssertNil(try AIChunkDecoder.openAIDelta(from: "[DONE]"))
+    XCTAssertEqual(try AIChunkDecoder.openAIChunk(from: #"{"choices":[{"delta":{"content":"你好"}}]}"#)?.text, "你好")
+    XCTAssertNil(try AIChunkDecoder.openAIChunk(from: #"{"choices":[{"delta":{}}]}"#)?.text)
+    XCTAssertNil(try AIChunkDecoder.openAIChunk(from: "[DONE]"))
+  }
+
+  func testOpenAIChunkDecodesToolCallDeltas() throws {
+    let first = try AIChunkDecoder.openAIChunk(
+      from: #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"workspace_search","arguments":""}}]}}]}"#
+    )
+    XCTAssertEqual(first?.toolCallDeltas.first?.id, "call_1")
+    XCTAssertEqual(first?.toolCallDeltas.first?.name, "workspace_search")
+    let fragment = try AIChunkDecoder.openAIChunk(
+      from: #"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"que"}}]}}]}"#
+    )
+    XCTAssertEqual(fragment?.toolCallDeltas.first?.argumentsFragment, #"{"que"#)
+    let finish = try AIChunkDecoder.openAIChunk(from: #"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#)
+    XCTAssertEqual(finish?.finishReason, "tool_calls")
   }
 
   func testOpenAIErrorPayloadThrows() {
     XCTAssertThrowsError(
-      try AIChunkDecoder.openAIDelta(from: #"{"error":{"message":"Insufficient Balance"}}"#)
+      try AIChunkDecoder.openAIChunk(from: #"{"error":{"message":"Insufficient Balance"}}"#)
     ) { error in
       XCTAssertEqual(error as? AIServiceError, .provider("Insufficient Balance"))
     }
@@ -211,6 +225,64 @@ final class AIProviderTests: XCTestCase {
     ) { error in
       XCTAssertEqual(error as? AIServiceError, .provider("Overloaded"))
     }
+  }
+
+  func testAnthropicToolUseStreamEvents() throws {
+    let start = try AIChunkDecoder.anthropicDelta(
+      event: "content_block_start",
+      payload: #"{"index":1,"content_block":{"type":"tool_use","id":"tu_1","name":"workspace_search","input":{}}}"#
+    )
+    XCTAssertEqual(start, .toolUseStart(index: 1, id: "tu_1", name: "workspace_search"))
+    let delta = try AIChunkDecoder.anthropicDelta(
+      event: "content_block_delta",
+      payload: #"{"index":1,"delta":{"type":"input_json_delta","partial_json":"{\"query\":"}}"#
+    )
+    XCTAssertEqual(delta, .inputJSONDelta(index: 1, partial: #"{"query":"#))
+    // 普通 text 块的 content_block_start 忽略
+    let textStart = try AIChunkDecoder.anthropicDelta(
+      event: "content_block_start",
+      payload: #"{"index":0,"content_block":{"type":"text","text":""}}"#
+    )
+    XCTAssertEqual(textStart, .ignored)
+  }
+
+  // MARK: - 工具调用重组器（v1.3）
+
+  func testOpenAIAccumulatorReassemblesFragments() {
+    var accumulator = AIToolCallAccumulator.OpenAI()
+    accumulator.ingest([.init(index: 0, id: "call_1", name: "workspace_search", argumentsFragment: "")])
+    accumulator.ingest([.init(index: 0, id: nil, name: nil, argumentsFragment: #"{"query":"#)])
+    accumulator.ingest([.init(index: 0, id: nil, name: nil, argumentsFragment: #""att"}"#)])
+    // 并行第二个调用
+    accumulator.ingest([.init(index: 1, id: "call_2", name: "workspace_list_documents", argumentsFragment: "{}")])
+    let calls = accumulator.finalize()
+    XCTAssertEqual(calls.count, 2)
+    XCTAssertEqual(calls[0].id, "call_1")
+    XCTAssertEqual(calls[0].arguments, #"{"query":"att"}"#)
+    XCTAssertEqual(calls[1].name, "workspace_list_documents")
+  }
+
+  func testOpenAIAccumulatorDefendsMissingIndex() {
+    var accumulator = AIToolCallAccumulator.OpenAI()
+    accumulator.ingest([.init(index: 0, id: "call_1", name: "search", argumentsFragment: "{")])
+    // 兼容端点缺 index：回退最后槽位继续拼接
+    accumulator.ingest([.init(index: nil, id: nil, name: nil, argumentsFragment: "}")])
+    XCTAssertEqual(accumulator.finalize().first?.arguments, "{}")
+  }
+
+  func testAnthropicAccumulatorReassembles() {
+    var accumulator = AIToolCallAccumulator.Anthropic()
+    accumulator.blockStart(index: 1, id: "tu_1", name: "workspace_read_section")
+    accumulator.ingest(index: 1, partial: #"{"path":"#)
+    accumulator.ingest(index: 1, partial: #""a.md"}"#)
+    let calls = accumulator.finalize()
+    XCTAssertEqual(calls, [AIToolCall(id: "tu_1", name: "workspace_read_section", arguments: #"{"path":"a.md"}"#)])
+  }
+
+  func testAccumulatorEmptyArgumentsFallbackToEmptyObject() {
+    var accumulator = AIToolCallAccumulator.Anthropic()
+    accumulator.blockStart(index: 0, id: "tu_9", name: "workspace_list_documents")
+    XCTAssertEqual(accumulator.finalize().first?.arguments, "{}")
   }
 
   // MARK: - 非流式全量解码

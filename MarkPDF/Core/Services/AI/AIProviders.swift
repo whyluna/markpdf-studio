@@ -200,8 +200,27 @@ private extension AIProviderConfig {
 // MARK: - 流式增量解码
 
 enum AIChunkDecoder {
+  /// OpenAI 兼容流单块解码结果（v1.3：文本与工具调用增量可混排）
+  struct OpenAIOutcome: Equatable {
+    var text: String?
+    var toolCallDeltas: [OpenAIToolCallDelta] = []
+    var finishReason: String?
+  }
+
+  /// OpenAI 工具调用增量片段：首片带 index/id/name，后续片只有 arguments 碎片
+  struct OpenAIToolCallDelta: Equatable {
+    let index: Int?
+    let id: String?
+    let name: String?
+    let argumentsFragment: String?
+  }
+
   enum AnthropicOutcome: Equatable {
     case delta(String)
+    /// tool_use 内容块开始（携带 id/name；input 经 inputJSONDelta 逐片到达）
+    case toolUseStart(index: Int, id: String, name: String)
+    /// tool_use 参数 JSON 碎片
+    case inputJSONDelta(index: Int, partial: String)
     case finished
     case ignored
   }
@@ -213,8 +232,21 @@ enum AIChunkDecoder {
 
   private struct OpenAIChunk: Decodable {
     struct Choice: Decodable {
-      struct Delta: Decodable { let content: String? }
-      let delta: Delta
+      struct ToolCallDelta: Decodable {
+        struct Function: Decodable {
+          let name: String?
+          let arguments: String?
+        }
+        let index: Int?
+        let id: String?
+        let function: Function?
+      }
+      struct Delta: Decodable {
+        let content: String?
+        let tool_calls: [ToolCallDelta]?
+      }
+      let delta: Delta?
+      let finish_reason: String?
     }
     let choices: [Choice]
   }
@@ -225,22 +257,44 @@ enum AIChunkDecoder {
   }
 
   private struct AnthropicContentBlockDelta: Decodable {
-    struct Delta: Decodable { let text: String? }
+    struct Delta: Decodable {
+      let type: String?
+      let text: String?
+      let partial_json: String?
+    }
+    let index: Int?
     let delta: Delta
   }
 
-  /// OpenAI 兼容流：单个 data 载荷 → 文本增量；[DONE] 哨兵与无内容增量返回 nil；error 载荷抛错
-  static func openAIDelta(from payload: String) throws -> String? {
+  private struct AnthropicContentBlockStart: Decodable {
+    struct Block: Decodable {
+      let type: String
+      let id: String?
+      let name: String?
+    }
+    let index: Int?
+    let content_block: Block
+  }
+
+  /// OpenAI 兼容流：单个 data 载荷 → 文本/工具增量/结束原因；[DONE] 哨兵返回 nil；error 载荷抛错
+  static func openAIChunk(from payload: String) throws -> OpenAIOutcome? {
     if payload == "[DONE]" { return nil }
     guard let data = payload.data(using: .utf8) else { return nil }
     if let error = try? JSONDecoder().decode(OpenAIErrorPayload.self, from: data) {
       throw AIServiceError.provider(error.error.message)
     }
     let chunk = try JSONDecoder().decode(OpenAIChunk.self, from: data)
-    return chunk.choices.first?.delta.content
+    guard let choice = chunk.choices.first else { return OpenAIOutcome() }
+    var outcome = OpenAIOutcome()
+    outcome.text = choice.delta?.content
+    outcome.finishReason = choice.finish_reason
+    outcome.toolCallDeltas = (choice.delta?.tool_calls ?? []).map {
+      OpenAIToolCallDelta(index: $0.index, id: $0.id, name: $0.function?.name, argumentsFragment: $0.function?.arguments)
+    }
+    return outcome
   }
 
-  /// Anthropic 流：event + data → 增量/结束/忽略；error 事件抛错
+  /// Anthropic 流：event + data → 文本增量/工具块事件/结束/忽略；error 事件抛错
   static func anthropicDelta(event: String?, payload: String) throws -> AnthropicOutcome {
     guard let data = payload.data(using: .utf8) else { return .ignored }
     if event == "error" {
@@ -248,13 +302,22 @@ enum AIChunkDecoder {
       throw AIServiceError.provider(parsed?.error.message ?? String(localized: "Anthropic 返回错误"))
     }
     switch event {
+    case "content_block_start":
+      guard let parsed = try? JSONDecoder().decode(AnthropicContentBlockStart.self, from: data),
+        parsed.content_block.type == "tool_use",
+        let id = parsed.content_block.id, let name = parsed.content_block.name
+      else { return .ignored }
+      return .toolUseStart(index: parsed.index ?? 0, id: id, name: name)
     case "content_block_delta":
       let parsed = try JSONDecoder().decode(AnthropicContentBlockDelta.self, from: data)
+      if parsed.delta.type == "input_json_delta" {
+        return .inputJSONDelta(index: parsed.index ?? 0, partial: parsed.delta.partial_json ?? "")
+      }
       return .delta(parsed.delta.text ?? "")
     case "message_stop":
       return .finished
     default:
-      // message_start / content_block_start/stop / message_delta / ping 等
+      // message_start / content_block_stop / message_delta / ping 等
       return .ignored
     }
   }

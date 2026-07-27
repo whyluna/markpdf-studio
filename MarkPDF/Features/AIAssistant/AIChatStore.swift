@@ -362,9 +362,15 @@ final class AIChatStore: ObservableObject {
           messages: outgoing,
           maxTokens: maxTokens
         )
-        for try await delta in stream {
-          self.streamBuffer += delta
-          self.scheduleFlush()
+        for try await event in stream {
+          switch event {
+          case .text(let delta):
+            self.streamBuffer += delta
+            self.scheduleFlush()
+          case .toolCalls:
+            // agent 循环于 v1.3④ 消费；此前不带 tools 参数不会出现
+            break
+          }
         }
         guard !Task.isCancelled else { return }
         self.finalizeStreaming(cancelled: false)

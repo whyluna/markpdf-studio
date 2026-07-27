@@ -62,8 +62,8 @@ final class AIIntegrationTests: XCTestCase {
   func testOpenAIStreamOverHTTP() async throws {
     let (service, config) = makeService(kind: .deepseek)
     var collected = ""
-    for try await delta in service.stream(kind: .deepseek, config: config, model: config.models[0], messages: [.user("hi")]) {
-      collected += delta
+    for try await event in service.stream(kind: .deepseek, config: config, model: config.models[0], messages: [.user("hi")]) {
+      if case .text(let delta) = event { collected += delta }
     }
     XCTAssertEqual(collected, "你好")
   }
@@ -79,8 +79,8 @@ final class AIIntegrationTests: XCTestCase {
   func testAnthropicStreamOverHTTP() async throws {
     let (service, config) = makeService(kind: .anthropic)
     var collected = ""
-    for try await delta in service.stream(kind: .anthropic, config: config, model: config.models[0], messages: [.user("hi")]) {
-      collected += delta
+    for try await event in service.stream(kind: .anthropic, config: config, model: config.models[0], messages: [.user("hi")]) {
+      if case .text(let delta) = event { collected += delta }
     }
     XCTAssertEqual(collected, "你好")
   }
