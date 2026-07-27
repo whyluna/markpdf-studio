@@ -345,13 +345,16 @@ final class AIChatStoreTests: XCTestCase {
     let done = await waitUntil { store.phase == .idle && store.messages.count == 2 }
     XCTAssertTrue(done)
     XCTAssertEqual(requestBodies.count, 2, "工具轮 + 作答轮共两次请求")
-    // 首轮带 tools 定义
+    // 首轮带 tools 定义与使用纪律
     let first = String(decoding: requestBodies[0], as: UTF8.self)
     XCTAssertTrue(first.contains("workspace_search"), "tools 定义送出")
-    // 次轮带 assistant(tool_calls) 与工具结果
+    XCTAssertTrue(first.contains("Tool guidelines:"), "工具使用纪律入 system")
+    // 次轮带 assistant(tool_calls) 与工具结果 + 状态行
     let second = String(decoding: requestBodies[1], as: UTF8.self)
     XCTAssertTrue(second.contains("call_1"))
     XCTAssertTrue(second.contains("paper-notes.md"), "工具结果（文件清单）回传")
+    XCTAssertTrue(second.contains("[Status] turn 1"), "状态行并入最后一个工具结果尾部")
+    XCTAssertTrue(second.contains("tool calls used"), "状态行含调用计数（JSON 会把 / 转义故不整串断言）")
     // UI：活动 chip 完成态 + 最终回答
     let assistant = store.messages.last
     XCTAssertEqual(assistant?.content, "笔记里提到注意力机制")

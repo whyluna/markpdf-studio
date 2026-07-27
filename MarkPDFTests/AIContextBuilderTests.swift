@@ -60,6 +60,26 @@ final class AIContextBuilderTests: XCTestCase {
     XCTAssertTrue(small.userMessage.contains("…(truncated)"))
   }
 
+  // MARK: - 引用纪律四件套（v1.4）
+
+  func testSystemPromptHasCitationDiscipline() {
+    let prompt = AIContextBuilder.systemPrompt()
+    XCTAssertTrue(prompt.contains(#"reply "I cannot answer from the provided material.""#), "不可答哨兵")
+    XCTAssertTrue(prompt.contains("Valid:"), "正例")
+    XCTAssertTrue(prompt.contains("Invalid:"), "反例")
+    XCTAssertTrue(prompt.contains("at the end of that sentence"), "句末引用位置")
+    XCTAssertTrue(prompt.contains(#"If a "Valid anchors:" list is provided"#), "白名单约定")
+  }
+
+  func testDocumentBlockAppendsValidAnchorsWhenPresent() {
+    let text = "[§引言] 开头\n正文…\n[§结论] 收尾 [p.5] 相关"
+    let built = AIContextBuilder.buildUserMessage(question: "q", selection: nil, document: (name: "a.md", text: text))
+    XCTAssertTrue(built.userMessage.contains("Valid anchors: [§引言], [§结论], [p.5]"))
+    // 无锚点不附白名单行
+    let plain = AIContextBuilder.buildUserMessage(question: "q", selection: nil, document: (name: "a.md", text: "普通全文"))
+    XCTAssertFalse(plain.userMessage.contains("Valid anchors:"))
+  }
+
   // MARK: - 上下文预算（v1.3：窗口/回复上限均为用户设定）
 
   func testSuggestedTokensForPrefill() {

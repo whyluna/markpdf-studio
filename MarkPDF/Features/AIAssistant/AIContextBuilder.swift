@@ -26,15 +26,24 @@ enum AIContextBuilder {
     let summary: String?
   }
 
-  /// 固定人设（模型输入，英文写死不进 catalog；说明标签块/锚点/截断约定）
+  /// 固定人设（模型输入，英文写死不进 catalog；标签块约定 + 引用纪律四件套：
+  /// 正反例 / Valid anchors 白名单（buildUserMessage 附）/ 不可答哨兵 / 句末引用位置）
   static func systemPrompt() -> String {
     """
     You are a helpful assistant embedded in MarkPDF Studio, a Markdown + PDF reading and writing tool. \
     The user's question may include context blocks labeled [Selection] (text the user selected) and \
     [Document: name] (the current document, possibly truncated or reduced to selected sections). \
-    Sections may be prefixed with anchors like [§Title] or [p.5]; when your answer relies on a section, \
-    cite its anchor inline. Base document-related answers only on the provided context and tool results; \
-    say so plainly when they are insufficient. \
+    Base document-related answers only on the provided context and tool results. \
+    If they are insufficient, reply "I cannot answer from the provided material." and suggest \
+    what to search or open next.
+
+    Citation rules: sections may be prefixed with anchors like [§Title] or [p.5]. When a sentence \
+    relies on a section, cite the anchor at the end of that sentence, exactly as written. \
+    If a "Valid anchors:" list is provided, cite only anchors from it. \
+    Valid: "…improves recall [§Methods]." / "…as shown on [p.5]." \
+    Invalid: "(§Methods)"; "[§Methods, §Results]" (write each anchor separately); \
+    citing anchors that do not appear in the provided material.
+
     Answer in the language the user writes in. Prefer concise Markdown.
     """
   }
@@ -64,7 +73,15 @@ enum AIContextBuilder {
     if let document, !document.text.isEmpty {
       let clipped = String(document.text.prefix(max(documentBudget, 0)))
       let truncated = clipped.count < document.text.count
-      blocks.append("[Document: \(document.name)]\n\(clipped)\(truncated ? "\n…(truncated)" : "")")
+      var block = "[Document: \(document.name)]\n\(clipped)\(truncated ? "\n…(truncated)" : "")"
+      // 引用白名单（PaperQA2 Valid Keys）：本轮实际出现的锚点清单，约束模型只引真实锚点
+      let anchors = extractAnchors(in: clipped)
+      if !anchors.isEmpty {
+        let shown = anchors.prefix(40)
+        block += "\nValid anchors: " + shown.joined(separator: ", ")
+          + (anchors.count > shown.count ? ", …" : "")
+      }
+      blocks.append(block)
       if let documentAnnotation {
         summaryParts.append(String(localized: "文档 \(document.name)（\(documentAnnotation)）"))
       } else if truncated {

@@ -418,6 +418,7 @@ final class AIChatStore: ObservableObject {
   ) async {
     var outgoing = initial
     var turns = 0
+    var totalCalls = 0
     var executedResults: [String: String] = [:]  // name+args → result（重复调用去重）
     var streamedBase = 0  // 本轮开始时 assistant 消息的文本长度（提取当轮新文本）
 
@@ -460,7 +461,7 @@ final class AIChatStore: ObservableObject {
         outgoing.append(AIChatMessage(role: .assistant, content: turnText, toolCalls: received))
 
         var turnBudget = Self.toolResultsBudgetPerTurn
-        for call in received {
+        for (offset, call) in received.enumerated() {
           guard !Task.isCancelled else { return }
           let activityIndex = appendActivity(for: call)
           let dedupeKey = call.name + call.arguments
@@ -475,10 +476,15 @@ final class AIChatStore: ObservableObject {
             }.value
             executedResults[dedupeKey] = result
           }
-          let clipped = String(result.prefix(max(turnBudget, 500)))
+          var clipped = String(result.prefix(max(turnBudget, 500)))
           turnBudget = max(turnBudget - clipped.count, 0)
-          outgoing.append(.toolResult(id: call.id, content: clipped))
           completeActivity(at: activityIndex, result: clipped)
+          totalCalls += 1
+          if offset == received.indices.last {
+            // 每轮状态行（PaperQA2 状态注入）：并入最后一个工具结果尾部——预算感知收敛且不破坏消息交替
+            clipped += "\n\n[Status] turn \(turns + 1)/\(Self.maxToolTurns) · \(totalCalls) tool calls used · answer directly when you have enough evidence"
+          }
+          outgoing.append(.toolResult(id: call.id, content: clipped))
         }
         syncActiveThread()
         turns += 1

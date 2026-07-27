@@ -42,13 +42,18 @@ enum AIWorkspaceTools {
     ),
   ]
 
-  /// 系统提示的工具指引 + 工作区文件清单（≤50 个，让模型知道有什么可搜）
+  /// 系统提示的工具指引（v1.4 使用纪律，Cline 定义/纪律分离）+ 工作区文件清单（≤50 个）
   static func systemHint(fileNames: [String]) -> String {
     let list = fileNames.prefix(50).joined(separator: ", ")
     let more = fileNames.count > 50 ? " …and \(fileNames.count - 50) more" : ""
     return """
-      You can call workspace_* tools to consult other documents in the user's workspace. \
-      Search only when the provided context is insufficient; answer directly when it is. \
+      You can call workspace_* tools to consult other documents in the user's workspace.
+      Tool guidelines:
+      - Evaluate the provided context first; call tools only for information it lacks.
+      - The current document is already provided in full or in selected sections — do not re-read it with tools.
+      - Typical flow: workspace_search to locate → workspace_get_outline to see structure → workspace_read_section to expand.
+      - If a search returns nothing useful, retry once with fewer or broader keywords instead of repeating the same query.
+      - One reasoning step per turn: base each call on the previous result.
       Workspace files: \(list)\(more)
       """
   }
