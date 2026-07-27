@@ -212,6 +212,10 @@ struct AIAssistantPanelView: View {
         title: String(localized: "当前文档"),
         isOn: aiSettings.settings.contextIncludeDocument
       ) { aiSettings.update { $0.contextIncludeDocument.toggle() } }
+      contextChip(
+        title: String(localized: "工作区"),
+        isOn: aiSettings.settings.contextIncludeWorkspace
+      ) { aiSettings.update { $0.contextIncludeWorkspace.toggle() } }
       Spacer()
     }
   }

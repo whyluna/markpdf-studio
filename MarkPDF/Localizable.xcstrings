@@ -1702,6 +1702,38 @@
         }
       }
     },
+    "工作区": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工作区"
+          }
+        }
+      }
+    },
+    "工作区 %lld 处": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld workspace hits"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工作区 %lld 处"
+          }
+        }
+      }
+    },
     "左右分栏": {
       "localizations": {
         "en": {
@@ -1766,6 +1798,22 @@
         }
       }
     },
+    "已选 %lld 节": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld sections selected"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选 %lld 节"
+          }
+        }
+      }
+    },
     "已附带：%@": {
       "localizations": {
         "en": {
@@ -1810,6 +1858,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "开启只读标注模式"
+          }
+        }
+      }
+    },
+    "开头": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beginning"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开头"
           }
         }
       }
@@ -2258,6 +2322,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "文档 %@"
+          }
+        }
+      }
+    },
+    "文档 %@（%@）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "document %1$@ (%2$@)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文档 %@（%@）"
           }
         }
       }
@@ -3139,6 +3219,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "稍后"
+          }
+        }
+      }
+    },
+    "第 %lld 段": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Part %lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "第 %lld 段"
           }
         }
       }

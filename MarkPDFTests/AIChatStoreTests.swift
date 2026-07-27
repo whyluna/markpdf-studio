@@ -30,11 +30,13 @@ final class AIChatStoreTests: XCTestCase {
 
   private func makeStore(
     transport: AIServiceTests.MockAITransport,
-    hasKey: Bool = true
+    hasKey: Bool = true,
+    configure: ((AISettingsStore) -> Void)? = nil
   ) -> AIChatStore {
     let settings = AISettingsStore(defaults: defaults)
     settings.privacyNoticeAcknowledged = true
     settings.updateConfig(.deepseek) { $0.isEnabled = true }
+    configure?(settings)
     let keys = AIKeyStore(storage: InMemoryAIKeyStorage())
     if hasKey { keys.save("sk-test", for: AIProviderKind.deepseek.rawValue) }
     let service = AIService(transport: transport, keys: keys)
@@ -254,6 +256,69 @@ final class AIChatStoreTests: XCTestCase {
     store.flush()
     let data = try Data(contentsOf: dir.appendingPathComponent("ai-sessions.json"))
     XCTAssertEqual(String(decoding: data, as: UTF8.self), "broken", "原文件未被覆盖")
+  }
+
+  // MARK: - 结构选节两遍路由（v1.2）
+
+  /// 文档超预算时：第一遍路由选节（非流式），第二遍只带选中节流式作答
+  func testOverBudgetDocumentRoutesSections() async {
+    var streamBodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(
+      sendHandler: { _ in
+        // 路由第一遍：选第 1 节（结论）
+        (Data(#"{"choices":[{"message":{"content":"[1]"}}]}"#.utf8),
+         HTTPURLResponse(url: URL(string: "https://x.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+      },
+      streamHandler: { request in
+        streamBodies.append(request.httpBody ?? Data())
+        return AsyncThrowingStream { continuation in
+          continuation.yield(self.sse("答"))
+          continuation.finish()
+        }
+      }
+    )
+    // moonshot-v1-8k → 文档预算 4000；构造 5000 字双节文档触发路由
+    let store = makeStore(transport: transport) { settings in
+      settings.updateConfig(.deepseek) { $0.models = ["moonshot-v1-8k"] }
+    }
+    let intro = "# 引言\n" + String(repeating: "引", count: 2_500)
+    let conclusion = "# 结论\n" + String(repeating: "结", count: 2_500)
+    let full = intro + "\n" + conclusion
+    store.contextSources.activeDocument = { cap in (name: "paper.md", text: String(full.prefix(cap))) }
+    store.contextSources.documentSections = { DocumentSectioner.fromMarkdown(full) }
+
+    store.send("结论是什么")
+    let done = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    XCTAssertTrue(done)
+    let body = String(decoding: streamBodies.first ?? Data(), as: UTF8.self)
+    XCTAssertTrue(body.contains("结结"), "选中的结论节进入上下文")
+    XCTAssertFalse(body.contains("引引"), "未选中的引言节被排除（头截时代它必进）")
+    XCTAssertTrue(store.messages.first?.contextSummary?.contains("已选 1 节") == true)
+  }
+
+  /// 工作区检索层：命中注入 [Workspace] 块与摘要
+  func testWorkspaceHitsInjected() async {
+    var streamBodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      streamBodies.append(request.httpBody ?? Data())
+      return AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport) { settings in
+      settings.update { $0.contextIncludeWorkspace = true }
+    }
+    store.contextSources.workspaceHits = { _, completion in
+      completion([AIContextBuilder.WorkspaceHit(file: "other.md", anchor: "L3", snippet: "相关片段")])
+    }
+
+    store.send("问题")
+    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    let body = String(decoding: streamBodies.first ?? Data(), as: UTF8.self)
+    XCTAssertTrue(body.contains("[Workspace]"))
+    XCTAssertTrue(body.contains("other.md L3"))
+    XCTAssertTrue(store.messages.first?.contextSummary?.contains("工作区 1 处") == true)
   }
 
   func testNewSessionClears() async {

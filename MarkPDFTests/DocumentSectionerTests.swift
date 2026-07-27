@@ -1,0 +1,117 @@
+import XCTest
+@testable import MarkPDF
+
+/// 结构切节 / 路由解析 / 工作区召回（FR-AI.2 v1.2 纯函数）
+final class DocumentSectionerTests: XCTestCase {
+  // MARK: - md 切节
+
+  func testMarkdownSplitsByHeadings() {
+    let markdown = """
+      引言前文字
+
+      # 方法
+      方法内容
+
+      ## 数据集
+      数据集内容
+
+      # 结论
+      结论内容
+      """
+    let sections = DocumentSectioner.fromMarkdown(markdown)
+    XCTAssertEqual(sections.map(\.title), ["开头", "方法", "数据集", "结论"])
+    XCTAssertEqual(sections[1].anchor, "§方法")
+    XCTAssertEqual(sections[3].text, "结论内容")
+  }
+
+  func testFencedHashNotTreatedAsHeading() {
+    let markdown = """
+      # 真标题
+      ```
+      # 注释不是标题
+      ```
+      正文
+      """
+    XCTAssertEqual(DocumentSectioner.fromMarkdown(markdown).count, 1)
+  }
+
+  func testNoHeadingsFallsBackToChunks() {
+    let text = String(repeating: "字", count: DocumentSectioner.fallbackChunkChars + 100)
+    let sections = DocumentSectioner.fromMarkdown(text)
+    XCTAssertEqual(sections.count, 2)
+    XCTAssertEqual(sections[0].text.count, DocumentSectioner.fallbackChunkChars)
+  }
+
+  // MARK: - 目录摘要与拼装
+
+  func testOutlineDigestAndAssemble() {
+    let sections = [
+      DocumentSection(title: "方法", anchor: "§方法", text: "方法正文"),
+      DocumentSection(title: "实验", anchor: "p.5-8", text: "实验正文"),
+      DocumentSection(title: "结论", anchor: "§结论", text: "结论正文"),
+    ]
+    let digest = DocumentSectioner.outlineDigest(sections)
+    XCTAssertTrue(digest.contains("0. [§方法] 方法 — 方法正文"))
+    XCTAssertTrue(digest.contains("1. [p.5-8] 实验"))
+
+    let assembled = DocumentSectioner.assemble(sections: sections, picked: [2, 0], budget: 10_000)
+    XCTAssertTrue(assembled.hasPrefix("[§结论] 结论"), "按选中顺序拼装（最相关在前）")
+    XCTAssertTrue(assembled.contains("[§方法] 方法"))
+    XCTAssertFalse(assembled.contains("实验正文"), "未选中的节不进上下文")
+  }
+
+  func testAssembleRespectsBudget() {
+    let sections = [
+      DocumentSection(title: "A", anchor: "§A", text: String(repeating: "甲", count: 100)),
+      DocumentSection(title: "B", anchor: "§B", text: String(repeating: "乙", count: 100)),
+    ]
+    let assembled = DocumentSectioner.assemble(sections: sections, picked: [0, 1], budget: 60)
+    XCTAssertLessThanOrEqual(assembled.count, 60)
+    XCTAssertFalse(assembled.contains("乙"), "预算耗尽即停")
+  }
+
+  // MARK: - 路由解析
+
+  func testParsePickedNormalAndNoisy() {
+    XCTAssertEqual(AISectionRouter.parsePicked("[2,0,5]", sectionCount: 6), [2, 0, 5])
+    XCTAssertEqual(AISectionRouter.parsePicked("Sure! The answer is [1, 3].", sectionCount: 4), [1, 3])
+    // 越界丢弃、重复去重
+    XCTAssertEqual(AISectionRouter.parsePicked("[0, 9, 0, 1]", sectionCount: 3), [0, 1])
+  }
+
+  func testParsePickedGarbageReturnsNil() {
+    XCTAssertNil(AISectionRouter.parsePicked("无法确定", sectionCount: 5))
+    XCTAssertNil(AISectionRouter.parsePicked("[]", sectionCount: 5))
+    XCTAssertNil(AISectionRouter.parsePicked("[99]", sectionCount: 5))
+  }
+
+  // MARK: - 工作区召回
+
+  func testKeywordsTokenizesChineseAndEnglish() {
+    let words = AIWorkspaceRetriever.keywords(from: "Transformer 的注意力机制是什么")
+    XCTAssertTrue(words.contains("Transformer"))
+    XCTAssertTrue(words.contains { $0.contains("注意") || $0.contains("机制") })
+    XCTAssertFalse(words.contains("的"), "单字虚词不作检索词")
+  }
+
+  func testRetrieveFindsAndExcludesCurrentDoc() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("RetrieverTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let noteA = dir.appendingPathComponent("attention.md")
+    let noteB = dir.appendingPathComponent("current.md")
+    try "attention mechanism 详解\n第二行".write(to: noteA, atomically: true, encoding: .utf8)
+    try "attention 在当前文档里".write(to: noteB, atomically: true, encoding: .utf8)
+
+    let hits = AIWorkspaceRetriever.retrieve(
+      question: "解释 attention 机制",
+      files: [noteA, noteB],
+      excluding: noteB
+    )
+    XCTAssertEqual(hits.count, 1)
+    XCTAssertEqual(hits.first?.file, "attention.md")
+    XCTAssertEqual(hits.first?.anchor, "L1")
+    XCTAssertTrue(hits.first?.snippet.contains("attention") == true)
+  }
+}

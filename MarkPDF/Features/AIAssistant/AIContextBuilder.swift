@@ -19,12 +19,23 @@ enum AIContextBuilder {
     let summary: String?
   }
 
-  /// 固定人设（模型输入，英文写死不进 catalog；说明标签块与截断约定）
+  /// 工作区检索命中（第三层上下文；FullTextSearch 召回）
+  struct WorkspaceHit: Equatable {
+    let file: String
+    let anchor: String
+    let snippet: String
+  }
+
+  /// 固定人设（模型输入，英文写死不进 catalog；说明标签块/锚点/截断约定）
   static func systemPrompt() -> String {
     """
     You are a helpful assistant embedded in MarkPDF Studio, a Markdown + PDF reading and writing tool. \
-    The user's question may include context blocks labeled [Selection] (text the user selected) and \
-    [Document: name] (the current document, possibly truncated). Use them when relevant. \
+    The user's question may include context blocks labeled [Selection] (text the user selected), \
+    [Document: name] (the current document, possibly truncated or reduced to selected sections), and \
+    [Workspace] (snippets retrieved from other files in the workspace). \
+    Sections may be prefixed with anchors like [§Title] or [p.5]; when your answer relies on a section, \
+    cite its anchor inline. Base document-related answers only on the provided context; \
+    say so plainly when it is insufficient. \
     Answer in the language the user writes in. Prefer concise Markdown.
     """
   }
@@ -35,7 +46,9 @@ enum AIContextBuilder {
     question: String,
     selection: String?,
     document: (name: String, text: String)?,
-    documentBudget: Int = AIContextBuilder.documentBudget
+    documentBudget: Int = AIContextBuilder.documentBudget,
+    documentAnnotation: String? = nil,
+    workspaceHits: [WorkspaceHit] = []
   ) -> BuiltContext {
     var blocks: [String] = []
     var summaryParts: [String] = []
@@ -54,11 +67,18 @@ enum AIContextBuilder {
       let clipped = String(document.text.prefix(max(documentBudget, 0)))
       let truncated = clipped.count < document.text.count
       blocks.append("[Document: \(document.name)]\n\(clipped)\(truncated ? "\n…(truncated)" : "")")
-      summaryParts.append(
-        truncated
-          ? String(localized: "文档 \(document.name)（截断）")
-          : String(localized: "文档 \(document.name)")
-      )
+      if let documentAnnotation {
+        summaryParts.append(String(localized: "文档 \(document.name)（\(documentAnnotation)）"))
+      } else if truncated {
+        summaryParts.append(String(localized: "文档 \(document.name)（截断）"))
+      } else {
+        summaryParts.append(String(localized: "文档 \(document.name)"))
+      }
+    }
+    if !workspaceHits.isEmpty {
+      let lines = workspaceHits.map { "[\($0.file) \($0.anchor)] \($0.snippet)" }
+      blocks.append("[Workspace]\n\(lines.joined(separator: "\n"))")
+      summaryParts.append(String(localized: "工作区 \(workspaceHits.count) 处"))
     }
     blocks.append(blocks.isEmpty ? question : "[Question]\n\(question)")
     return BuiltContext(

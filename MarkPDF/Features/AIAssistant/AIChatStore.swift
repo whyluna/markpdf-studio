@@ -11,6 +11,10 @@ struct AIContextSources {
   var mdSelection: (@escaping (String?) -> Void) -> Void = { $0(nil) }
   /// 当前文档（名字 + 全文，按传入字符预算提取——大 PDF 逐页早停）；无激活文档 nil
   var activeDocument: (Int) -> (name: String, text: String)? = { _ in nil }
+  /// 当前文档的结构切节（超预算时两遍路由用）；无结构/无文档 nil
+  var documentSections: () -> [DocumentSection]? = { nil }
+  /// 工作区检索（第三层：FullTextSearch 召回，后台执行回调主线程）
+  var workspaceHits: (String, @escaping ([AIContextBuilder.WorkspaceHit]) -> Void) -> Void = { $1([]) }
 }
 
 /// AI 助手对话状态机（FR-AI.2）：多轮流式、可取消/重试；本批会话仅内存态（M5-D 落盘）。
@@ -199,31 +203,91 @@ final class AIChatStore: ObservableObject {
 
   // MARK: - 私有
 
-  /// 采集两层上下文（选区/当前文档，按设置开关；工作区检索层 M5-D）并发起流式请求。
-  /// md 选区经桥异步，超时回 nil 不阻塞发送
+  /// 采集三层上下文（选区/当前文档/工作区检索，按设置开关）并发起流式请求。
+  /// md 选区经桥异步（超时回 nil 不阻塞）；文档超预算走结构选节两遍路由（v1.2）
   private func dispatch(question: String, selection: AISettingsStore.ResolvedModel) {
+    streamTask = Task { [weak self] in
+      await self?.prepareAndStream(question: question, resolved: selection)
+    }
+  }
+
+  private func prepareAndStream(question: String, resolved: AISettingsStore.ResolvedModel) async {
     let includeSelection = settings.settings.contextIncludeSelection
     let includeDocument = settings.settings.contextIncludeDocument
+    let includeWorkspace = settings.settings.contextIncludeWorkspace
     // 上下文动态预算（v1.2）：按所选模型窗口计算，取代固定 8000 字头截
-    let documentBudget = AIModelContext.documentCharBudget(forModel: selection.model)
-    let document = includeDocument ? contextSources.activeDocument(documentBudget) : nil
+    let documentBudget = AIModelContext.documentCharBudget(forModel: resolved.model)
 
-    let assemble: (String?) -> Void = { [weak self] selectionText in
-      guard let self else { return }
-      let built = AIContextBuilder.buildUserMessage(
-        question: question,
-        selection: includeSelection ? selectionText : nil,
-        document: document,
-        documentBudget: documentBudget
-      )
-      self.startStreaming(question: question, built: built, resolved: selection)
+    // ① 选区
+    var selectionText: String?
+    if includeSelection {
+      if contextSources.isPDFActive() {
+        selectionText = contextSources.pdfSelection()
+      } else {
+        selectionText = await withCheckedContinuation { continuation in
+          contextSources.mdSelection { continuation.resume(returning: $0) }
+        }
+      }
     }
-    if !includeSelection {
-      assemble(nil)
-    } else if contextSources.isPDFActive() {
-      assemble(contextSources.pdfSelection())
-    } else {
-      contextSources.mdSelection { assemble($0) }
+    guard !Task.isCancelled else { return }
+
+    // ② 工作区检索（第三层：FullTextSearch 召回，后台执行）
+    var hits: [AIContextBuilder.WorkspaceHit] = []
+    if includeWorkspace {
+      hits = await withCheckedContinuation { continuation in
+        contextSources.workspaceHits(question) { continuation.resume(returning: $0) }
+      }
+    }
+    guard !Task.isCancelled else { return }
+
+    // ③ 当前文档：预算内整文；超预算且可切节 → 两遍路由（失败回退头部截断）
+    var document = includeDocument ? contextSources.activeDocument(documentBudget + 1) : nil
+    var annotation: String?
+    if let doc = document, doc.text.count > documentBudget,
+      let sections = contextSources.documentSections(), sections.count > 1,
+      let routed = await routeSections(question: question, sections: sections, resolved: resolved, budget: documentBudget) {
+      document = (name: doc.name, text: routed.text)
+      annotation = routed.note
+    }
+    guard !Task.isCancelled else { return }
+
+    let built = AIContextBuilder.buildUserMessage(
+      question: question,
+      selection: selectionText,
+      document: document,
+      documentBudget: documentBudget,
+      documentAnnotation: annotation,
+      workspaceHits: hits
+    )
+    startStreaming(question: question, built: built, resolved: resolved)
+  }
+
+  /// 两遍路由第一遍：目录摘要给模型选节；任何失败返回 nil（调用方回退头部截断）
+  private func routeSections(
+    question: String,
+    sections: [DocumentSection],
+    resolved: AISettingsStore.ResolvedModel,
+    budget: Int
+  ) async -> (text: String, note: String)? {
+    do {
+      let reply = try await service.complete(
+        kind: resolved.kind,
+        config: resolved.config,
+        model: resolved.model,
+        messages: AISectionRouter.routingMessages(
+          question: question,
+          outline: DocumentSectioner.outlineDigest(sections)
+        ),
+        maxTokens: AISectionRouter.maxTokens
+      )
+      guard let picked = AISectionRouter.parsePicked(reply, sectionCount: sections.count) else { return nil }
+      let text = DocumentSectioner.assemble(sections: sections, picked: picked, budget: budget)
+      guard !text.isEmpty else { return nil }
+      Logger.ai.debug("路由选节: \(picked.count) 节 / 共 \(sections.count) 节")
+      return (text, String(localized: "已选 \(picked.count) 节"))
+    } catch {
+      Logger.ai.error("路由选节失败，回退头部截断: \((error as? AIServiceError)?.logSafeDescription ?? "未知错误", privacy: .public)")
+      return nil
     }
   }
 
