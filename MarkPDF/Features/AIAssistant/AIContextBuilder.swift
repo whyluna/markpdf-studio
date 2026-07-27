@@ -12,7 +12,7 @@ enum AIContextBuilder {
   /// L1 工作记忆：送出的历史消息条数上限（8 轮 user+assistant；更早并入滚动摘要）
   static let historyMessageCap = 16
   /// 滚动摘要压缩请求的回复上限
-  static let compactionMaxTokens = 600
+  static let compactionMaxTokens = 1_600
 
   struct BuiltContext: Equatable {
     /// 组装后的当轮 user 消息（标签块 + 问题）
@@ -110,7 +110,7 @@ enum AIContextBuilder {
     let previous = existingSummary.map { "Previous summary:\n\($0)\n\n" } ?? ""
     return [
       .system("""
-        Compress the following conversation into a concise summary (≤400 words). \
+        Compress the following conversation into a summary of at most 800 words. \
         Keep conclusions, cited anchors like [§Title]/[p.N], unresolved questions, and user preferences. \
         Merge with the previous summary if given. Reply with the summary only.
         """),

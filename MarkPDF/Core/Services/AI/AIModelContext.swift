@@ -13,7 +13,7 @@ enum AIModelContext {
   /// system 提示 + 工具 schema + 选区 + 问题的预留（tokens）
   static let overheadTokens = 5_000
   /// 历史区字符预算上限
-  static let maxHistoryChars = 24_000
+  static let maxHistoryChars = 60_000
   /// 用户设定的回复上限异常时（≥窗口）夹取到窗口的比例
   static let replyClampRatio = 2
 
@@ -42,9 +42,10 @@ enum AIModelContext {
     return userSetting >= contextTokens ? contextTokens / replyClampRatio : userSetting
   }
 
-  /// 历史区字符预算：窗口的 20%，封顶 maxHistoryChars
+  /// 历史区字符预算：窗口的 25%，封顶 maxHistoryChars（窗口主要分给当前文档与历史，
+  /// 大窗口模型不必对历史吝啬；文档区取剩余余量且有自身 150k 上限）
   static func historyCharBudget(contextTokens: Int) -> Int {
-    min(contextTokens / 5, maxHistoryChars)
+    min(contextTokens / 4, maxHistoryChars)
   }
 
   /// 当前文档字符预算 = 窗口 − 回复 − 历史 − 固定预留，夹取 [min, max]。

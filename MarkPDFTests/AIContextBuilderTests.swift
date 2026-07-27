@@ -80,17 +80,19 @@ final class AIContextBuilderTests: XCTestCase {
   }
 
   func testDocumentCharBudgetMatrix() {
-    // 8k 窗口 + 回复 8192（被夹到 4000）：8000-4000-1600-5000 < 0 → 下限 2000
+    // 8k 窗口 + 回复 8192（被夹到 4000）：8000-4000-2000-5000 < 0 → 下限 2000
     XCTAssertEqual(AIModelContext.documentCharBudget(contextTokens: 8_000, replyTokens: 8192), AIModelContext.minDocumentChars)
-    // 64k 窗口 + 回复 8192：64000-8192-12800-5000 = 38008
-    XCTAssertEqual(AIModelContext.documentCharBudget(contextTokens: 64_000, replyTokens: 8192), 38_008)
+    // 64k 窗口 + 回复 8192：64000-8192-16000-5000 = 34808
+    XCTAssertEqual(AIModelContext.documentCharBudget(contextTokens: 64_000, replyTokens: 8192), 34_808)
     // 1M 窗口：夹到上限
     XCTAssertEqual(AIModelContext.documentCharBudget(contextTokens: 1_000_000, replyTokens: 8192), AIModelContext.maxDocumentChars)
   }
 
   func testHistoryCharBudget() {
-    XCTAssertEqual(AIModelContext.historyCharBudget(contextTokens: 64_000), 12_800)
-    XCTAssertEqual(AIModelContext.historyCharBudget(contextTokens: 200_000), AIModelContext.maxHistoryChars)
+    // 窗口 25%：64k → 16000；200k → 50000（<60k 封顶）；1M → 封顶 60000
+    XCTAssertEqual(AIModelContext.historyCharBudget(contextTokens: 64_000), 16_000)
+    XCTAssertEqual(AIModelContext.historyCharBudget(contextTokens: 200_000), 50_000)
+    XCTAssertEqual(AIModelContext.historyCharBudget(contextTokens: 1_000_000), AIModelContext.maxHistoryChars)
   }
 
   // MARK: - 历史裁剪
