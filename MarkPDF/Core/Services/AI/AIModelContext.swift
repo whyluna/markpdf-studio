@@ -48,6 +48,12 @@ enum AIModelContext {
     min(contextTokens / 4, maxHistoryChars)
   }
 
+  /// 近期原文保留区（v1.4，历史预算的 70%）：最近轮次完整保留原文，
+  /// 压缩只并入滚出保留区的旧增量；其余 30% 留给摘要注入区
+  static func preserveRecentChars(contextTokens: Int) -> Int {
+    historyCharBudget(contextTokens: contextTokens) * 7 / 10
+  }
+
   /// 当前文档字符预算 = 窗口 − 回复 − 历史 − 固定预留，夹取 [min, max]。
   /// 装得下整文喂入（单篇论文 QA 实证优于 RAG）；超预算由结构选节降级
   static func documentCharBudget(contextTokens: Int, replyTokens: Int) -> Int {

@@ -95,6 +95,52 @@ final class AIContextBuilderTests: XCTestCase {
     XCTAssertEqual(AIModelContext.historyCharBudget(contextTokens: 1_000_000), AIModelContext.maxHistoryChars)
   }
 
+  func testPreserveRecentCharsIs70PercentOfHistoryBudget() {
+    // 64k 窗口：历史 16000 → 保留区 11200
+    XCTAssertEqual(AIModelContext.preserveRecentChars(contextTokens: 64_000), 11_200)
+  }
+
+  // MARK: - 保留区分割（v1.4）
+
+  func testSplitForPreservationAllFitsCompactsNothing() {
+    let history: [AIChatMessage] = [.user("问1"), .assistant("答1"), .user("问2"), .assistant("答2")]
+    let split = AIContextBuilder.splitForPreservation(history, preserveChars: 1_000)
+    XCTAssertTrue(split.toCompact.isEmpty)
+    XCTAssertEqual(split.preserved.count, 4)
+  }
+
+  func testSplitForPreservationAlignsToTurnBoundary() {
+    let history: [AIChatMessage] = [
+      .user(String(repeating: "一", count: 10)),
+      .assistant(String(repeating: "答", count: 10)),
+      .user(String(repeating: "二", count: 10)),
+      .assistant(String(repeating: "复", count: 10)),
+    ]
+    // 预算 25：尾部 user+assistant（20 字）装得下，再往前会劈开第一轮 → 分割点落轮次边界
+    let split = AIContextBuilder.splitForPreservation(history, preserveChars: 25)
+    XCTAssertEqual(split.toCompact.count, 2, "第一轮整体滚出")
+    XCTAssertEqual(split.preserved.first?.role, .user, "preserved 首条必须是 user（不劈轮）")
+    XCTAssertEqual(split.preserved.count, 2)
+  }
+
+  func testSplitForPreservationOverlongLastTurnStillPreserved() {
+    let history: [AIChatMessage] = [
+      .user("旧问"), .assistant("旧答"),
+      .user("新问"), .assistant(String(repeating: "超", count: 500)),
+    ]
+    // 最后一轮已超预算 → 保底保留最后一轮完整原文，其余滚出
+    let split = AIContextBuilder.splitForPreservation(history, preserveChars: 100)
+    XCTAssertEqual(split.toCompact.map(\.content), ["旧问", "旧答"])
+    XCTAssertEqual(split.preserved.first?.content, "新问")
+  }
+
+  func testCompactionMaxTokensProportionalWithClamp() {
+    // 小输入夹到下限 512；2 万字 → 3000；超大夹到上限 4096
+    XCTAssertEqual(AIContextBuilder.compactionMaxTokens(forInputChars: 3_000), 512)
+    XCTAssertEqual(AIContextBuilder.compactionMaxTokens(forInputChars: 20_000), 3_000)
+    XCTAssertEqual(AIContextBuilder.compactionMaxTokens(forInputChars: 100_000), 4_096)
+  }
+
   // MARK: - 历史裁剪
 
   func testTrimHistoryDropsEmptyAssistantAndCaps() {
@@ -131,6 +177,16 @@ final class AIContextBuilderTests: XCTestCase {
     XCTAssertEqual(out.map(\.content).last, "新答")
     XCTAssertTrue(out.count < 4, "超字符预算从旧端掐头")
     XCTAssertEqual(out.first?.content, "新问", "保最新")
+  }
+
+  func testHistoryMessagesClipsOverlongSummaryTo30Percent() {
+    let long = String(repeating: "摘", count: 500)
+    let out = AIContextBuilder.historyMessages([.user("问"), .assistant("答")], rollingSummary: long, charBudget: 1_000)
+    // 注入区上限 = 1000 × 30% = 300 字 + 截断标记
+    let injected = out[0].content
+    XCTAssertTrue(injected.contains("…(truncated)"))
+    XCTAssertTrue(injected.contains(String(repeating: "摘", count: 300)))
+    XCTAssertFalse(injected.contains(String(repeating: "摘", count: 301)))
   }
 
   func testCompactionMessagesShape() {

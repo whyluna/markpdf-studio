@@ -492,6 +492,68 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertGreaterThan(sessions.first?.summarizedCount ?? 0, 0)
   }
 
+  /// 压缩范围 = 滚出保留区的旧增量（v1.4）：近期轮次不进压缩请求，压缩后仍以原文送出
+  func testCompactionOnlyCoversRolledOutIncrement() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("PreserveTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    // 4 轮 × 6000 字 = 24000 字 > 历史预算 16000（deepseek 默认 64k 窗口）触发字符压缩；
+    // 保留区 11200 → 最后一轮（问题3号/回答3号）留原文，前三轮滚出并入摘要
+    var stored: [AISessionStore.StoredMessage] = []
+    for index in 0..<4 {
+      let question = "问题\(index)号" + String(repeating: "长", count: 3_000)
+      let answer = "回答\(index)号" + String(repeating: "久", count: 3_000)
+      stored.append(AISessionStore.StoredMessage(role: "user", content: question, contextSummary: nil, promptQuestion: question, wasCancelled: nil))
+      stored.append(AISessionStore.StoredMessage(role: "assistant", content: answer, contextSummary: nil, promptQuestion: nil, wasCancelled: nil))
+    }
+    try AISessionStore.save(
+      [AISessionStore.StoredSession(docPath: nil, messages: stored, updatedAt: Date())],
+      workspaceRoot: root
+    )
+
+    var compactionBodies: [Data] = []
+    var streamBodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(
+      sendHandler: { request in
+        compactionBodies.append(request.httpBody ?? Data())
+        return (Data(#"{"choices":[{"message":{"content":"压缩摘要：前三轮结论"}}]}"#.utf8),
+                HTTPURLResponse(url: URL(string: "https://x.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+      },
+      streamHandler: { request in
+        streamBodies.append(request.httpBody ?? Data())
+        return AsyncThrowingStream { continuation in
+          continuation.yield(self.sse("答"))
+          continuation.finish()
+        }
+      }
+    )
+    let store = makeStore(transport: transport)
+    store.workspaceDidChange(root: root)
+    store.send("第一问")
+    _ = await waitUntil { store.phase == .idle }
+    let compacted = await waitUntil {
+      store.flush()
+      let sessions = (try? AISessionStore.load(workspaceRoot: root)) ?? []
+      return sessions.first?.rollingSummary?.contains("压缩摘要") == true
+    }
+    XCTAssertTrue(compacted)
+
+    // 压缩请求只含滚出的前三轮，不含保留区最后一轮
+    let compactionBody = String(decoding: compactionBodies.first ?? Data(), as: UTF8.self)
+    XCTAssertTrue(compactionBody.contains("问题0号"))
+    XCTAssertTrue(compactionBody.contains("问题2号"))
+    XCTAssertFalse(compactionBody.contains("问题3号"), "保留区轮次不进压缩")
+
+    // 压缩后下一轮请求：保留区原文 + 摘要注入；被压部分不再以原文出现
+    store.send("第二问")
+    _ = await waitUntil { store.phase == .idle && streamBodies.count == 2 }
+    let second = String(decoding: streamBodies.last ?? Data(), as: UTF8.self)
+    XCTAssertTrue(second.contains("问题3号"), "保留区消息仍以原文送出")
+    XCTAssertTrue(second.contains("[Earlier conversation summary]"))
+    XCTAssertFalse(second.contains("问题0号"), "被压部分不以原文出现")
+  }
+
   func testNewSessionClears() async {
     let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
       AsyncThrowingStream { continuation in

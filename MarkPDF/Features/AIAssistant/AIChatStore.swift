@@ -261,14 +261,29 @@ final class AIChatStore: ObservableObject {
     let live = Array(messages[summarized...])
     let liveChars = live.reduce(0) { $0 + $1.content.count }
     let budget = AIModelContext.historyCharBudget(contextTokens: resolved.contextTokens)
-    guard live.count > AIContextBuilder.historyMessageCap || liveChars > budget else { return }
+    // 触发：字符比例主导（超历史预算）；条数上限为下限保护（长对话短消息也归档）
+    guard liveChars > budget || live.count > AIContextBuilder.historyMessageCap else { return }
 
-    // 压最旧一半（至少一整轮）
-    let compactCount = max(live.count / 2, 2)
-    let toCompact = live.prefix(compactCount).map { message in
+    // 压缩范围 = 滚出保留区的旧增量（v1.4）：近期原文完整保留，只压新滚出部分（不重压已压过的）
+    let liveMessages = live.map { message in
       AIChatMessage(role: message.role, content: message.role == .user ? (message.promptQuestion ?? message.content) : message.content)
     }
+    let preserveChars = AIModelContext.preserveRecentChars(contextTokens: resolved.contextTokens)
+    var toCompact = AIContextBuilder.splitForPreservation(liveMessages, preserveChars: preserveChars).toCompact
+    if toCompact.isEmpty, live.count > AIContextBuilder.historyMessageCap {
+      // 条数触发但字符量都在保留区内：把超 cap 的最旧轮次并入摘要（分割点仍对齐轮次边界）
+      var index = live.count - AIContextBuilder.historyMessageCap
+      while index < liveMessages.count,
+        !(liveMessages[index].role == .user && liveMessages[index - 1].role != .user) {
+        index += 1
+      }
+      toCompact = Array(liveMessages[..<index])
+    }
+    guard !toCompact.isEmpty else { return }
+    let compactCount = toCompact.count
+
     let existing = thread.rollingSummary
+    let inputChars = toCompact.reduce(0) { $0 + $1.content.count } + (existing?.count ?? 0)
     let docKey = activeDocKey
     compactionTask = Task { [weak self] in
       guard let self else { return }
@@ -278,15 +293,15 @@ final class AIChatStore: ObservableObject {
           kind: resolved.kind,
           config: resolved.config,
           model: resolved.model,
-          messages: AIContextBuilder.compactionMessages(existingSummary: existing, turns: Array(toCompact)),
-          maxTokens: AIContextBuilder.compactionMaxTokens
+          messages: AIContextBuilder.compactionMessages(existingSummary: existing, turns: toCompact),
+          maxTokens: AIContextBuilder.compactionMaxTokens(forInputChars: inputChars)
         )
         guard !Task.isCancelled, var thread = self.threads[docKey] else { return }
         thread.rollingSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         thread.summarizedCount = min(summarized + compactCount, thread.messages.count)
         self.threads[docKey] = thread
         self.persistDebouncer.schedule { [weak self] in self?.persistNow() }
-        Logger.ai.debug("历史压缩完成: 并入 \(compactCount) 条，摘要 \(summary.count) 字")
+        Logger.ai.debug("历史压缩完成: 并入 \(compactCount) 条（\(inputChars) 字），摘要 \(summary.count) 字")
       } catch {
         // 失败降级：维持硬截断（historyMessages 自带），间隔一轮再试
         self.skipCompactionOnce = true
