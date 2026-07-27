@@ -9,6 +9,8 @@ final class InMemoryAIKeyStorage: AIKeyStorage {
 
   func string(for account: String) -> String? { map[account] }
 
+  func exists(for account: String) -> Bool { map[account] != nil }
+
   func set(_ value: String?, for account: String) {
     guard let value, !value.isEmpty else {
       map.removeValue(forKey: account)

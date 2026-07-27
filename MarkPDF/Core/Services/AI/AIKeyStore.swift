@@ -4,6 +4,8 @@ import Security
 /// API Key 存储抽象（FR-AI.4）：生产走系统钥匙串，测试走内存
 protocol AIKeyStorage {
   func string(for account: String) -> String?
+  /// 是否已存有该条（不读明文——启动检查用，见 KeychainAIKeyStorage.exists）
+  func exists(for account: String) -> Bool
   /// value 为 nil 或空串时删除该条
   func set(_ value: String?, for account: String)
 }
@@ -26,6 +28,19 @@ struct KeychainAIKeyStorage: AIKeyStorage {
           let data = item as? Data
     else { return nil }
     return String(data: data, encoding: .utf8)
+  }
+
+  /// 只查存在性、不读明文数据：钥匙串 ACL 只保护 kSecValueData，查属性不弹授权窗。
+  /// ad-hoc 签名（无开发证书）下每次构建二进制指纹变化，启动即读明文会导致
+  /// 每次 build 后启动都弹「输入钥匙串密码」——启动检查必须走此通道
+  func exists(for account: String) -> Bool {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+      kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
   }
 
   func set(_ value: String?, for account: String) {
@@ -60,7 +75,8 @@ final class AIKeyStore: ObservableObject {
 
   init(storage: AIKeyStorage = KeychainAIKeyStorage()) {
     self.storage = storage
-    configuredAccounts = Set(AIProviderKind.allCases.map(\.rawValue).filter { storage.string(for: $0) != nil })
+    // 启动只查存在性不读明文（读明文会在 ad-hoc 签名下每次 build 后弹钥匙串授权）
+    configuredAccounts = Set(AIProviderKind.allCases.map(\.rawValue).filter { storage.exists(for: $0) })
   }
 
   func apiKey(for account: String) -> String? {
