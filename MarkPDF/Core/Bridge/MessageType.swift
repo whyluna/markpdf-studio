@@ -16,6 +16,10 @@ enum BridgeMessageType: String {
   case setTypewriter = "editor.setTypewriter"
   /// 专注模式开关（FR-2.10）
   case setFocusMode = "editor.setFocusMode"
+  /// 取当前选区（FR-AI.2；带 id 请求-响应，应答 {text, from, to}，无选区 text=""）
+  case getSelection = "editor.getSelection"
+  /// 替换选区（FR-AI.2；带 id 请求-响应，应答 {replaced}；空选区拒绝不落改动）
+  case replaceSelection = "editor.replaceSelection"
 
   // web → native
   case ready = "editor.ready"

@@ -81,6 +81,8 @@ struct MarkdownTabView: View {
       mode: store.mode,
       theme: colorScheme == .dark ? .dark : .light,
       scrollToLine: store.pendingScrollLine,
+      // FR-AI.2：AI 助手编辑器动作（插入/替换/取选区）经队列送达活体桥
+      kernelRequests: store.pendingKernelRequests,
       // FR-1.6：载入即恢复上次编辑行；光标变化经内核防抖上报回存
       initialLine: store.currentFileURL.flatMap { stateStore.cursorLine(for: $0) },
       // FR-2.5：图片粘贴/拖拽存工作区 assets/
@@ -100,6 +102,9 @@ struct MarkdownTabView: View {
       },
       onScrollHandled: {
         store.didHandleScroll()
+      },
+      onKernelRequestsHandled: {
+        store.didHandleKernelRequests()
       },
       onCursorMoved: { line in
         store.cursorDidMove(to: line)

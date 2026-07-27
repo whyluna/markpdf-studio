@@ -316,6 +316,23 @@ Bridge.onMessage("editor.insertAtCursor", (p) => {
   view.dispatch(view.state.replaceSelection(p.text ?? ""));
 });
 
+// AI 助手（FR-AI.2）：取当前选区（无选区应答 text=""）
+Bridge.onMessage("editor.getSelection", (_p, id) => {
+  const { from, to } = view.state.selection.main;
+  Bridge.respond(id, { text: view.state.sliceDoc(from, to), from, to });
+});
+
+// AI 助手（FR-AI.2）：替换选区。空选区显式拒绝（与 insertAtCursor 的
+// 「空选区=光标处插入」语义区分）；正常 dispatch 入撤销栈，⌘Z 可回
+Bridge.onMessage("editor.replaceSelection", (p, id) => {
+  if (view.state.selection.main.empty) {
+    Bridge.respond(id, { replaced: false });
+    return;
+  }
+  view.dispatch(view.state.replaceSelection(p.text ?? ""));
+  Bridge.respond(id, { replaced: true });
+});
+
 // 导出独立 HTML（FR-2.9）：阅读模式离屏重渲染，应答 {title, html}
 Bridge.onMessage("editor.exportHTML", (_p, id) => {
   buildExport({

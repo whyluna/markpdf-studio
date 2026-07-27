@@ -25,6 +25,34 @@ final class EditorStore: ObservableObject {
   /// 请求内核滚动到指定行（大纲跳转）；由 MarkdownEditorView 消费后清零
   @Published private(set) var pendingScrollLine: Int?
 
+  /// 内核命令请求（FR-AI.2 编辑器动作）：桥活在 MarkdownEditorView.Coordinator，
+  /// Store 不持桥——沿 pendingScrollLine 同款模式经 @Published 队列送达活体视图
+  enum KernelRequest {
+    /// 光标处插入（空选区插入 / 有选区替换，内核 insertAtCursor 语义）
+    case insertAtCursor(String)
+    /// 替换选区（空选区拒绝，回调 false）
+    case replaceSelection(String, (Bool) -> Void)
+    /// 取当前选区文本（无选区回 ""；桥超时/未就绪回 nil）
+    case fetchSelection((String?) -> Void)
+  }
+
+  /// 待内核消费的命令队列（MarkdownEditorView.updateNSView 逐条派发后清空）
+  @Published private(set) var pendingKernelRequests: [KernelRequest] = []
+
+  func enqueue(_ request: KernelRequest) {
+    pendingKernelRequests.append(request)
+  }
+
+  /// 取当前选区（AI 助手上下文采集用）
+  func fetchSelection(_ completion: @escaping (String?) -> Void) {
+    enqueue(.fetchSelection(completion))
+  }
+
+  /// MarkdownEditorView 消费队列后调用（异步清空，避免视图更新途中改 @Published）
+  func didHandleKernelRequests() {
+    pendingKernelRequests = []
+  }
+
   /// 最近一次与磁盘一致的文本（识别 setContent 回显，避免无意义写盘）
   private var lastPersistedText: String = EditorStore.welcomeDocument
   /// 防抖中的保存任务

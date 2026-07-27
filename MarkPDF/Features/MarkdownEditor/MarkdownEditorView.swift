@@ -35,6 +35,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   let theme: EditorTheme
   /// 请求内核滚动到指定行（FR-2.6 大纲跳转）；消费后经 `onScrollHandled` 清零
   let scrollToLine: Int?
+  /// 内核命令队列（FR-AI.2 编辑器动作）；消费后经 `onKernelRequestsHandled` 清空
+  let kernelRequests: [EditorStore.KernelRequest]
   /// 载入文档时恢复的上次编辑行（FR-1.6 编辑位置记忆）；nil 不跳转
   let initialLine: Int?
   /// 工作区根目录（FR-2.5 图片存 assets/ 用）；nil = 无工作区
@@ -52,6 +54,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   var onOutlineChanged: (([Heading]) -> Void)?
   /// 滚动请求已消费回调
   var onScrollHandled: (() -> Void)?
+  /// 内核命令队列已消费回调
+  var onKernelRequestsHandled: (() -> Void)?
   /// 光标行变化回调（FR-1.6；内核 500ms 防抖上报）
   var onCursorMoved: ((Int) -> Void)?
   /// 文件回链打开回调（FR-5.3；参数为解析后的文件 URL 与可选页码）
@@ -63,6 +67,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     mode: EditorMode = .wysiwyg,
     theme: EditorTheme = .light,
     scrollToLine: Int? = nil,
+    kernelRequests: [EditorStore.KernelRequest] = [],
     initialLine: Int? = nil,
     workspaceRoot: URL? = nil,
     fontCSS: String = "",
@@ -73,6 +78,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     onContentChanged: ((String) -> Void)? = nil,
     onOutlineChanged: (([Heading]) -> Void)? = nil,
     onScrollHandled: (() -> Void)? = nil,
+    onKernelRequestsHandled: (() -> Void)? = nil,
     onCursorMoved: ((Int) -> Void)? = nil,
     onOpenFileLink: ((URL, Int?) -> Void)? = nil
   ) {
@@ -81,6 +87,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.mode = mode
     self.theme = theme
     self.scrollToLine = scrollToLine
+    self.kernelRequests = kernelRequests
     self.initialLine = initialLine
     self.workspaceRoot = workspaceRoot
     self.fontCSS = fontCSS
@@ -91,6 +98,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.onContentChanged = onContentChanged
     self.onOutlineChanged = onOutlineChanged
     self.onScrollHandled = onScrollHandled
+    self.onKernelRequestsHandled = onKernelRequestsHandled
     self.onCursorMoved = onCursorMoved
     self.onOpenFileLink = onOpenFileLink
   }
@@ -173,6 +181,15 @@ struct MarkdownEditorView: NSViewRepresentable {
       context.coordinator.scrollTo(line: line)
       DispatchQueue.main.async {
         self.onScrollHandled?()
+      }
+    }
+    // 内核命令队列（FR-AI.2 编辑器动作）：逐条派发后异步清空
+    if !kernelRequests.isEmpty {
+      for request in kernelRequests {
+        context.coordinator.perform(request)
+      }
+      DispatchQueue.main.async {
+        self.onKernelRequestsHandled?()
       }
     }
   }
@@ -301,6 +318,27 @@ extension MarkdownEditorView {
         return
       }
       bridge.notify(.scrollToLine, payload: ["line": line])
+    }
+
+    /// 内核命令（FR-AI.2 编辑器动作）：失败/超时/未就绪必回调（不静默悬挂）
+    func perform(_ request: EditorStore.KernelRequest) {
+      switch request {
+      case .insertAtCursor(let text):
+        guard isReady else { return }
+        bridge.notify(.insertAtCursor, payload: ["text": text])
+      case .replaceSelection(let text, let completion):
+        guard isReady else { return completion(false) }
+        bridge.request(.replaceSelection, payload: ["text": text]) { result in
+          let replaced = (try? result.get())?["replaced"] as? Bool ?? false
+          Task { @MainActor in completion(replaced) }
+        }
+      case .fetchSelection(let completion):
+        guard isReady else { return completion(nil) }
+        bridge.request(.getSelection) { result in
+          let text = (try? result.get())?["text"] as? String
+          Task { @MainActor in completion(text) }
+        }
+      }
     }
 
     /// 外部载入新文档（打开文件时使用）；整体替换内容并重置内核撤销栈（换档即重置，防跨档 ⌘Z 串档）

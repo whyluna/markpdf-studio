@@ -162,3 +162,48 @@ describe("图片粘贴失败上报", () => {
     }
   });
 });
+
+// FR-AI.2：AI 助手编辑器动作的桥消息
+describe("AI 助手桥消息（getSelection / replaceSelection）", () => {
+  const handler = (type) =>
+    Bridge.onMessage.mock.calls.find(([t]) => t === type)?.[1];
+
+  it("getSelection：有选区应答文本与区间", () => {
+    Bridge.respond.mockClear();
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: "选中我这段文字" },
+      selection: { anchor: 0 },
+    });
+    view.dispatch({ selection: { anchor: 2, head: 5 } });
+    handler("editor.getSelection")({}, "req-1");
+    expect(Bridge.respond).toHaveBeenCalledWith("req-1", { text: "我这段", from: 2, to: 5 });
+  });
+
+  it("getSelection：无选区应答空文本", () => {
+    Bridge.respond.mockClear();
+    view.dispatch({ selection: { anchor: 1 } });
+    handler("editor.getSelection")({}, "req-2");
+    expect(Bridge.respond).toHaveBeenCalledWith("req-2", { text: "", from: 1, to: 1 });
+  });
+
+  it("replaceSelection：空选区拒绝且文档不变", () => {
+    Bridge.respond.mockClear();
+    const before = view.state.doc.toString();
+    view.dispatch({ selection: { anchor: 0 } });
+    handler("editor.replaceSelection")({ text: "不该出现" }, "req-3");
+    expect(Bridge.respond).toHaveBeenCalledWith("req-3", { replaced: false });
+    expect(view.state.doc.toString()).toBe(before);
+  });
+
+  it("replaceSelection：非空选区替换成功", () => {
+    Bridge.respond.mockClear();
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: "abcdef" },
+      selection: { anchor: 0 },
+    });
+    view.dispatch({ selection: { anchor: 1, head: 4 } });
+    handler("editor.replaceSelection")({ text: "XY" }, "req-4");
+    expect(Bridge.respond).toHaveBeenCalledWith("req-4", { replaced: true });
+    expect(view.state.doc.toString()).toBe("aXYef");
+  });
+});
