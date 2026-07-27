@@ -8,6 +8,8 @@ struct AISettingsView: View {
 
   @State private var keyDrafts: [String: String] = [:]
   @State private var testStates: [String: ConnectionTestState] = [:]
+  /// 模型名/窗口框焦点（回车与点击背景显式退出，光标不再滞留闪烁）
+  @FocusState private var focusedModelField: String?
 
   private enum ConnectionTestState: Equatable {
     case testing
@@ -66,6 +68,8 @@ struct AISettingsView: View {
     }
     .formStyle(.grouped)
     .padding()
+    // 点击表单空白处退出文本框焦点（macOS 默认不主动 resign，光标会一直闪）
+    .onTapGesture { focusedModelField = nil }
   }
 
   // MARK: - Provider 行
@@ -177,26 +181,53 @@ struct AISettingsView: View {
     )
   }
 
-  /// 模型逐行编辑（v1.3）：名称 + 上下文窗口 tokens（用户设定，不猜测）+ 删除/添加
+  /// 模型逐行编辑（v1.3）：名称 + 上下文窗口 tokens（用户设定，不猜测）+ 删除/添加。
+  /// LabeledContent 真标签锚定左缘：macOS Form 对无标签自定义行一律按固有宽度
+  /// 顶到右缘（frame/Spacer/containerRelativeFrame 均无效，探针实锤），
+  /// 走 Form 原生「标签+内容」两栏才对齐
   @ViewBuilder
   private func modelSpecsEditor(_ kind: AIProviderKind) -> some View {
     let specs = aiSettings.config(for: kind).modelSpecs
     ForEach(Array(specs.enumerated()), id: \.offset) { index, _ in
-      HStack(spacing: 6) {
-        TextField("模型名", text: specBinding(kind, index, \.name))
-        TextField("窗口 tokens", value: specTokensBinding(kind, index), format: .number.grouping(.never))
-          .frame(width: 90)
-          .help("该模型的上下文窗口（输入与输出共享），文档/历史预算据此分配")
-        Button {
-          aiSettings.updateConfig(kind) { config in
-            guard config.modelSpecs.indices.contains(index) else { return }
-            config.modelSpecs.remove(at: index)
+      LabeledContent {
+        HStack(spacing: 6) {
+          // 名称框定宽：LabeledContent 首行会抢宽（实测首行明显更长），定宽各行一致
+          TextField("", text: specBinding(kind, index, \.name), prompt: Text("模型名"))
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .frame(width: 140)
+            .focused($focusedModelField, equals: "\(kind.rawValue)#\(index)")
+            .onSubmit { focusedModelField = nil }
+          Text("窗口")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize()
+          TextField("", value: specTokensBinding(kind, index), format: .number.grouping(.never))
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .frame(width: 64)
+            .multilineTextAlignment(.trailing)
+            .focused($focusedModelField, equals: "\(kind.rawValue)#\(index)-tokens")
+            .onSubmit { focusedModelField = nil }
+            .help("该模型的上下文窗口（输入与输出共享），文档/历史预算据此分配")
+          Text("tokens")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize()
+          Button {
+            aiSettings.updateConfig(kind) { config in
+              guard config.modelSpecs.indices.contains(index) else { return }
+              config.modelSpecs.remove(at: index)
+            }
+          } label: {
+            Image(systemName: "minus.circle")
           }
-        } label: {
-          Image(systemName: "minus.circle")
+          .buttonStyle(.plain)
+          .controlSize(.small)
+          .help("删除该模型")
         }
-        .buttonStyle(.plain)
-        .help("删除该模型")
+      } label: {
+        Text("模型名")
       }
     }
     Button {
