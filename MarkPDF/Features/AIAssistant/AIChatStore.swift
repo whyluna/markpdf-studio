@@ -13,8 +13,8 @@ struct AIContextSources {
   var activeDocument: (Int) -> (name: String, text: String)? = { _ in nil }
   /// 当前文档的结构切节（超预算时两遍路由用）；无结构/无文档 nil
   var documentSections: () -> [DocumentSection]? = { nil }
-  /// 工作区检索（第三层：FullTextSearch 召回，后台执行回调主线程）
-  var workspaceHits: (String, @escaping ([AIContextBuilder.WorkspaceHit]) -> Void) -> Void = { $1([]) }
+  /// 工作区检索候选（第三层：召回命中文件并切节，后台执行回调主线程）
+  var workspaceCandidates: (String, @escaping ([AIWorkspaceRetriever.Candidate]) -> Void) -> Void = { $1([]) }
 }
 
 /// AI 助手对话状态机（FR-AI.2）：多轮流式、可取消/重试；本批会话仅内存态（M5-D 落盘）。
@@ -231,11 +231,20 @@ final class AIChatStore: ObservableObject {
     }
     guard !Task.isCancelled else { return }
 
-    // ② 工作区检索（第三层：FullTextSearch 召回，后台执行）
+    // ② 工作区检索（第三层，v1.2 完整形态）：召回文件切节 → 候选少直接全注入
+    //（省一遍调用），多则 LLM 目录选节，路由失败回退片段
     var hits: [AIContextBuilder.WorkspaceHit] = []
     if includeWorkspace {
-      hits = await withCheckedContinuation { continuation in
-        contextSources.workspaceHits(question) { continuation.resume(returning: $0) }
+      let candidates = await withCheckedContinuation { continuation in
+        contextSources.workspaceCandidates(question) { continuation.resume(returning: $0) }
+      }
+      guard !Task.isCancelled else { return }
+      if candidates.count <= AIWorkspaceRetriever.directInjectThreshold {
+        hits = AIWorkspaceRetriever.assembleHits(candidates: candidates, picked: Array(candidates.indices))
+      } else if let picked = await routeWorkspace(question: question, candidates: candidates, resolved: resolved) {
+        hits = AIWorkspaceRetriever.assembleHits(candidates: candidates, picked: picked)
+      } else {
+        hits = AIWorkspaceRetriever.fallbackHits(candidates: candidates)
       }
     }
     guard !Task.isCancelled else { return }
@@ -260,6 +269,32 @@ final class AIChatStore: ObservableObject {
       workspaceHits: hits
     )
     startStreaming(question: question, built: built, resolved: resolved)
+  }
+
+  /// 工作区候选选节（第三层的路由第一遍）；失败返回 nil（调用方回退片段注入）
+  private func routeWorkspace(
+    question: String,
+    candidates: [AIWorkspaceRetriever.Candidate],
+    resolved: AISettingsStore.ResolvedModel
+  ) async -> [Int]? {
+    do {
+      let reply = try await service.complete(
+        kind: resolved.kind,
+        config: resolved.config,
+        model: resolved.model,
+        messages: AISectionRouter.routingMessages(
+          question: question,
+          outline: AIWorkspaceRetriever.routingOutline(candidates)
+        ),
+        maxTokens: AISectionRouter.maxTokens
+      )
+      let picked = AISectionRouter.parsePicked(reply, sectionCount: candidates.count)
+      Logger.ai.debug("工作区路由选节: \(picked?.count ?? 0) 节 / 候选 \(candidates.count) 节")
+      return picked
+    } catch {
+      Logger.ai.error("工作区路由失败，回退片段: \((error as? AIServiceError)?.logSafeDescription ?? "未知错误", privacy: .public)")
+      return nil
+    }
   }
 
   /// 两遍路由第一遍：目录摘要给模型选节；任何失败返回 nil（调用方回退头部截断）

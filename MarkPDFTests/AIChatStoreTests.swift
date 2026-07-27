@@ -296,8 +296,8 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertTrue(store.messages.first?.contextSummary?.contains("已选 1 节") == true)
   }
 
-  /// 工作区检索层：命中注入 [Workspace] 块与摘要
-  func testWorkspaceHitsInjected() async {
+  /// 工作区检索层：候选 ≤ 阈值直接全注入（免路由），[Workspace] 块与摘要
+  func testWorkspaceCandidatesDirectInjected() async {
     var streamBodies: [Data] = []
     let transport = AIServiceTests.MockAITransport(streamHandler: { request in
       streamBodies.append(request.httpBody ?? Data())
@@ -309,16 +309,56 @@ final class AIChatStoreTests: XCTestCase {
     let store = makeStore(transport: transport) { settings in
       settings.update { $0.contextIncludeWorkspace = true }
     }
-    store.contextSources.workspaceHits = { _, completion in
-      completion([AIContextBuilder.WorkspaceHit(file: "other.md", anchor: "L3", snippet: "相关片段")])
+    store.contextSources.workspaceCandidates = { _, completion in
+      completion([AIWorkspaceRetriever.Candidate(
+        file: "other.md",
+        section: DocumentSection(title: "原理", anchor: "§原理", text: "节的完整内容")
+      )])
     }
 
     store.send("问题")
     _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
     let body = String(decoding: streamBodies.first ?? Data(), as: UTF8.self)
     XCTAssertTrue(body.contains("[Workspace]"))
-    XCTAssertTrue(body.contains("other.md L3"))
+    XCTAssertTrue(body.contains("other.md §原理"))
+    XCTAssertTrue(body.contains("节的完整内容"), "注入节全文而非片段")
     XCTAssertTrue(store.messages.first?.contextSummary?.contains("工作区 1 处") == true)
+  }
+
+  /// 工作区候选超阈值：先路由选节，仅选中节注入
+  func testWorkspaceCandidatesRoutedWhenMany() async {
+    var streamBodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(
+      sendHandler: { _ in
+        // 路由：选第 4 节
+        (Data(#"{"choices":[{"message":{"content":"[4]"}}]}"#.utf8),
+         HTTPURLResponse(url: URL(string: "https://x.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+      },
+      streamHandler: { request in
+        streamBodies.append(request.httpBody ?? Data())
+        return AsyncThrowingStream { continuation in
+          continuation.yield(self.sse("答"))
+          continuation.finish()
+        }
+      }
+    )
+    let store = makeStore(transport: transport) { settings in
+      settings.update { $0.contextIncludeWorkspace = true }
+    }
+    store.contextSources.workspaceCandidates = { _, completion in
+      completion((0..<6).map {
+        AIWorkspaceRetriever.Candidate(
+          file: "f.md",
+          section: DocumentSection(title: "节\($0)", anchor: "§节\($0)", text: "内容\($0)")
+        )
+      })
+    }
+
+    store.send("问题")
+    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    let body = String(decoding: streamBodies.first ?? Data(), as: UTF8.self)
+    XCTAssertTrue(body.contains("内容4"), "路由选中的节注入")
+    XCTAssertFalse(body.contains("内容0"), "未选中节不注入")
   }
 
   func testNewSessionClears() async {

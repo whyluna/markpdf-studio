@@ -94,24 +94,42 @@ final class DocumentSectionerTests: XCTestCase {
     XCTAssertFalse(words.contains("的"), "单字虚词不作检索词")
   }
 
-  func testRetrieveFindsAndExcludesCurrentDoc() throws {
+  func testCandidateSectionsFindsAndExcludesCurrentDoc() throws {
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("RetrieverTests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let noteA = dir.appendingPathComponent("attention.md")
     let noteB = dir.appendingPathComponent("current.md")
-    try "attention mechanism 详解\n第二行".write(to: noteA, atomically: true, encoding: .utf8)
+    try "# 原理\nattention mechanism 详解\n\n# 实现\n实现细节".write(to: noteA, atomically: true, encoding: .utf8)
     try "attention 在当前文档里".write(to: noteB, atomically: true, encoding: .utf8)
 
-    let hits = AIWorkspaceRetriever.retrieve(
+    let candidates = AIWorkspaceRetriever.candidateSections(
       question: "解释 attention 机制",
       files: [noteA, noteB],
       excluding: noteB
     )
+    XCTAssertEqual(Set(candidates.map(\.file)), ["attention.md"], "当前文档被排除")
+    XCTAssertEqual(candidates.map(\.section.title), ["原理", "实现"], "命中文件按标题树切节")
+
+    // 目录摘要含文件名+锚点；拼装选节带全文并按份额截断
+    let outline = AIWorkspaceRetriever.routingOutline(candidates)
+    XCTAssertTrue(outline.contains("0. [attention.md §原理] 原理"))
+    let hits = AIWorkspaceRetriever.assembleHits(candidates: candidates, picked: [1])
     XCTAssertEqual(hits.count, 1)
-    XCTAssertEqual(hits.first?.file, "attention.md")
-    XCTAssertEqual(hits.first?.anchor, "L1")
-    XCTAssertTrue(hits.first?.snippet.contains("attention") == true)
+    XCTAssertEqual(hits.first?.anchor, "§实现")
+    XCTAssertEqual(hits.first?.snippet, "实现细节")
+  }
+
+  func testFallbackHitsTruncates() {
+    let candidates = (0..<5).map {
+      AIWorkspaceRetriever.Candidate(
+        file: "f\($0).md",
+        section: DocumentSection(title: "节", anchor: "§节", text: String(repeating: "字", count: 500))
+      )
+    }
+    let hits = AIWorkspaceRetriever.fallbackHits(candidates: candidates)
+    XCTAssertEqual(hits.count, 3)
+    XCTAssertEqual(hits.first?.snippet.count, 300)
   }
 }

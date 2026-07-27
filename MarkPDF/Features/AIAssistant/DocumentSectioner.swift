@@ -48,8 +48,9 @@ enum DocumentSectioner {
     return sections
   }
 
-  /// PDF 按书签切节（取全部叶子/顶层书签的页范围）；无书签退化为每页一节
-  @MainActor
+  /// PDF 按书签切节（取全部叶子/顶层书签的页范围）；无书签退化为每页一节。
+  /// 非隔离：PDFDocument 由调用方保证单线程归属（主线程 pdfView.document /
+  /// 后台自建 PDFDocument(url:) 均可，不得跨线程共享同一对象）
   static func fromPDF(_ document: PDFDocument) -> [DocumentSection] {
     let pageCount = document.pageCount
     guard pageCount > 0 else { return [] }
@@ -126,7 +127,6 @@ enum DocumentSectioner {
     return sections
   }
 
-  @MainActor
   private static func flattenedBookmarks(_ document: PDFDocument) -> [(title: String, page: Int)] {
     guard let root = document.outlineRoot else { return [] }
     var result: [(String, Int)] = []

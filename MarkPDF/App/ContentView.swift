@@ -156,16 +156,16 @@ struct ContentView: View {
           return nil
         }
       }
-      // 工作区检索（第三层，v1.2）：后台全文召回，排除当前文档
-      aiChatStore.contextSources.workspaceHits = { [weak workspaceStore, weak tabStore] question, completion in
+      // 工作区检索（第三层，v1.2 完整形态）：后台召回命中文件并结构切节，排除当前文档
+      aiChatStore.contextSources.workspaceCandidates = { [weak workspaceStore, weak tabStore] question, completion in
         let files = workspaceStore?.allFiles
           .filter { $0.kind == .markdown || $0.kind == .pdf }
           .map(\.id) ?? []
         let current = tabStore?.activeGroup.activeTab?.url
         guard !files.isEmpty else { return completion([]) }
         Task.detached(priority: .userInitiated) {
-          let hits = AIWorkspaceRetriever.retrieve(question: question, files: files, excluding: current)
-          await MainActor.run { completion(hits) }
+          let candidates = AIWorkspaceRetriever.candidateSections(question: question, files: files, excluding: current)
+          await MainActor.run { completion(candidates) }
         }
       }
     }
