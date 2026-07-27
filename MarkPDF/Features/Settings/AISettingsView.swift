@@ -7,7 +7,6 @@ struct AISettingsView: View {
   @EnvironmentObject private var aiKeys: AIKeyStore
 
   @State private var keyDrafts: [String: String] = [:]
-  @State private var modelDrafts: [String: String] = [:]
   @State private var testStates: [String: ConnectionTestState] = [:]
 
   private enum ConnectionTestState: Equatable {
@@ -49,6 +48,12 @@ struct AISettingsView: View {
           selection: settingsBinding(\.chatModel),
           nilLabel: String(localized: "自动（第一个可用）")
         )
+        TextField(
+          "回复长度上限（tokens）",
+          value: settingsBinding(\.chatMaxReplyTokens),
+          format: .number.grouping(.never)
+        )
+        .help("请求的 max_tokens；超过模型窗口时自动夹取到窗口一半")
         Toggle("提问时附带选中文本", isOn: settingsBinding(\.contextIncludeSelection))
         Toggle("附带当前文档全文", isOn: settingsBinding(\.contextIncludeDocument))
         Toggle("检索工作区其他文件", isOn: settingsBinding(\.contextIncludeWorkspace))
@@ -69,7 +74,7 @@ struct AISettingsView: View {
   private func providerRow(_ kind: AIProviderKind) -> some View {
     DisclosureGroup {
       TextField("Base URL", text: configBinding(kind, \.baseURL))
-      TextField("模型（多个用逗号分隔）", text: modelsBinding(kind))
+      modelSpecsEditor(kind)
       HStack {
         SecureField(
           aiKeys.configuredAccounts.contains(kind.rawValue) ? String(localized: "API Key（已保存，输入以更换）") : String(localized: "API Key"),
@@ -172,18 +177,69 @@ struct AISettingsView: View {
     )
   }
 
-  /// 模型列表编辑：TextField 显示草稿原文（否则输入逗号途中被规范化回读吃掉），
-  /// 每次变化把切分去空后的列表持久化
-  private func modelsBinding(_ kind: AIProviderKind) -> Binding<String> {
+  /// 模型逐行编辑（v1.3）：名称 + 上下文窗口 tokens（用户设定，不猜测）+ 删除/添加
+  @ViewBuilder
+  private func modelSpecsEditor(_ kind: AIProviderKind) -> some View {
+    let specs = aiSettings.config(for: kind).modelSpecs
+    ForEach(Array(specs.enumerated()), id: \.offset) { index, _ in
+      HStack(spacing: 6) {
+        TextField("模型名", text: specBinding(kind, index, \.name))
+        TextField("窗口 tokens", value: specTokensBinding(kind, index), format: .number.grouping(.never))
+          .frame(width: 90)
+          .help("该模型的上下文窗口（输入与输出共享），文档/历史预算据此分配")
+        Button {
+          aiSettings.updateConfig(kind) { config in
+            guard config.modelSpecs.indices.contains(index) else { return }
+            config.modelSpecs.remove(at: index)
+          }
+        } label: {
+          Image(systemName: "minus.circle")
+        }
+        .buttonStyle(.plain)
+        .help("删除该模型")
+      }
+    }
+    Button {
+      aiSettings.updateConfig(kind) {
+        $0.modelSpecs.append(AIModelSpec(name: "", contextTokens: AIModelContext.conservativeTokens))
+      }
+    } label: {
+      Label("添加模型", systemImage: "plus.circle")
+        .font(.callout)
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func specBinding(_ kind: AIProviderKind, _ index: Int, _ keyPath: WritableKeyPath<AIModelSpec, String>) -> Binding<String> {
     Binding(
-      get: { modelDrafts[kind.rawValue] ?? aiSettings.config(for: kind).models.joined(separator: ", ") },
+      get: {
+        let specs = aiSettings.config(for: kind).modelSpecs
+        return specs.indices.contains(index) ? specs[index][keyPath: keyPath] : ""
+      },
       set: { newValue in
-        modelDrafts[kind.rawValue] = newValue
-        let models = newValue
-          .split(separator: ",")
-          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-          .filter { !$0.isEmpty }
-        aiSettings.updateConfig(kind) { $0.models = models }
+        aiSettings.updateConfig(kind) { config in
+          guard config.modelSpecs.indices.contains(index) else { return }
+          config.modelSpecs[index][keyPath: keyPath] = newValue
+          // 名称首次填写时按模型名预填建议窗口（用户可再改）
+          if keyPath == \.name, config.modelSpecs[index].contextTokens == AIModelContext.conservativeTokens {
+            config.modelSpecs[index].contextTokens = AIModelContext.suggestedTokens(forModel: newValue)
+          }
+        }
+      }
+    )
+  }
+
+  private func specTokensBinding(_ kind: AIProviderKind, _ index: Int) -> Binding<Int> {
+    Binding(
+      get: {
+        let specs = aiSettings.config(for: kind).modelSpecs
+        return specs.indices.contains(index) ? specs[index].contextTokens : AIModelContext.conservativeTokens
+      },
+      set: { newValue in
+        aiSettings.updateConfig(kind) { config in
+          guard config.modelSpecs.indices.contains(index) else { return }
+          config.modelSpecs[index].contextTokens = max(newValue, 1_000)
+        }
       }
     )
   }

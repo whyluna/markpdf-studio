@@ -60,25 +60,37 @@ final class AIContextBuilderTests: XCTestCase {
     XCTAssertTrue(small.userMessage.contains("…(truncated)"))
   }
 
-  // MARK: - 模型上下文估算（v1.2 动态预算）
+  // MARK: - 上下文预算（v1.3：窗口/回复上限均为用户设定）
 
-  func testModelContextEstimation() {
-    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "moonshot-v1-8k"), 8_000)
-    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "moonshot-v1-128k"), 128_000)
-    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "claude-3-5-sonnet-latest"), 200_000)
-    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "gemini-2.0-flash"), 1_000_000)
-    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "deepseek-chat"), 64_000)
-    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "gpt-4o-mini"), 128_000)
-    XCTAssertEqual(AIModelContext.estimatedTokens(forModel: "some-unknown-model"), AIModelContext.conservativeTokens)
+  func testSuggestedTokensForPrefill() {
+    XCTAssertEqual(AIModelContext.suggestedTokens(forModel: "moonshot-v1-8k"), 8_000)
+    XCTAssertEqual(AIModelContext.suggestedTokens(forModel: "claude-3-5-sonnet-latest"), 200_000)
+    XCTAssertEqual(AIModelContext.suggestedTokens(forModel: "gemini-2.0-flash"), 1_000_000)
+    XCTAssertEqual(AIModelContext.suggestedTokens(forModel: "deepseek-chat"), 64_000)
+    XCTAssertEqual(AIModelContext.suggestedTokens(forModel: "some-unknown-model"), AIModelContext.conservativeTokens)
   }
 
-  func testDocumentCharBudgetClamps() {
-    // 8k 模型：8000-8000=0 → 下限 4000（旧固定 8000 在 8k 模型上实际会超窗）
-    XCTAssertEqual(AIModelContext.documentCharBudget(forModel: "moonshot-v1-8k"), AIModelContext.minDocumentChars)
-    // 1M 模型：夹到上限
-    XCTAssertEqual(AIModelContext.documentCharBudget(forModel: "gemini-2.0-flash"), AIModelContext.maxDocumentChars)
-    // 64k 模型：64000-8000=56000
-    XCTAssertEqual(AIModelContext.documentCharBudget(forModel: "deepseek-chat"), 56_000)
+  func testEffectiveReplyTokensClampsToHalfWindow() {
+    // 正常：用户值直用
+    XCTAssertEqual(AIModelContext.effectiveReplyTokens(userSetting: 8192, contextTokens: 64_000), 8192)
+    // 用户设定 ≥ 窗口（输入输出共享，回复占满则无输入空间）→ 夹到窗口一半
+    XCTAssertEqual(AIModelContext.effectiveReplyTokens(userSetting: 10_000, contextTokens: 8_000), 4_000)
+    // 非法 0 → 窗口一半
+    XCTAssertEqual(AIModelContext.effectiveReplyTokens(userSetting: 0, contextTokens: 8_000), 4_000)
+  }
+
+  func testDocumentCharBudgetMatrix() {
+    // 8k 窗口 + 回复 8192（被夹到 4000）：8000-4000-1600-5000 < 0 → 下限 2000
+    XCTAssertEqual(AIModelContext.documentCharBudget(contextTokens: 8_000, replyTokens: 8192), AIModelContext.minDocumentChars)
+    // 64k 窗口 + 回复 8192：64000-8192-12800-5000 = 38008
+    XCTAssertEqual(AIModelContext.documentCharBudget(contextTokens: 64_000, replyTokens: 8192), 38_008)
+    // 1M 窗口：夹到上限
+    XCTAssertEqual(AIModelContext.documentCharBudget(contextTokens: 1_000_000, replyTokens: 8192), AIModelContext.maxDocumentChars)
+  }
+
+  func testHistoryCharBudget() {
+    XCTAssertEqual(AIModelContext.historyCharBudget(contextTokens: 64_000), 12_800)
+    XCTAssertEqual(AIModelContext.historyCharBudget(contextTokens: 200_000), AIModelContext.maxHistoryChars)
   }
 
   // MARK: - 历史裁剪

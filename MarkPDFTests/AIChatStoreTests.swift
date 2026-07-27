@@ -279,7 +279,7 @@ final class AIChatStoreTests: XCTestCase {
     )
     // moonshot-v1-8k → 文档预算 4000；构造 5000 字双节文档触发路由
     let store = makeStore(transport: transport) { settings in
-      settings.updateConfig(.deepseek) { $0.models = ["moonshot-v1-8k"] }
+      settings.updateConfig(.deepseek) { $0.modelSpecs = [AIModelSpec(name: "moonshot-v1-8k", contextTokens: 8_000)] }
     }
     let intro = "# 引言\n" + String(repeating: "引", count: 2_500)
     let conclusion = "# 结论\n" + String(repeating: "结", count: 2_500)

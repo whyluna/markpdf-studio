@@ -36,7 +36,7 @@ final class AISettingsStoreTests: XCTestCase {
     let store = AISettingsStore(defaults: defaults)
     store.updateConfig(.deepseek) {
       $0.isEnabled = true
-      $0.models = ["deepseek-reasoner", "deepseek-chat"]
+      $0.modelSpecs = [AIModelSpec(name: "deepseek-reasoner", contextTokens: 64_000), AIModelSpec(name: "deepseek-chat", contextTokens: 64_000)]
     }
     store.update {
       $0.translationEngine = .ai
@@ -78,7 +78,7 @@ final class AISettingsStoreTests: XCTestCase {
     XCTAssertEqual(store.chatSelection?.kind, .deepseek)
     XCTAssertEqual(store.chatSelection?.model, "deepseek-chat")
     // 所选模型被从列表删除 → 回落该 Provider 首模型
-    store.updateConfig(.deepseek) { $0.models = ["deepseek-reasoner"] }
+    store.updateConfig(.deepseek) { $0.modelSpecs = [AIModelSpec(name: "deepseek-reasoner", contextTokens: 64_000)] }
     XCTAssertEqual(store.chatSelection?.model, "deepseek-reasoner")
     // 翻译未单独选择 → 跟随对话模型
     XCTAssertEqual(store.translationSelection, store.chatSelection)

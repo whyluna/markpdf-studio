@@ -215,8 +215,15 @@ final class AIChatStore: ObservableObject {
     let includeSelection = settings.settings.contextIncludeSelection
     let includeDocument = settings.settings.contextIncludeDocument
     let includeWorkspace = settings.settings.contextIncludeWorkspace
-    // 上下文动态预算（v1.2）：按所选模型窗口计算，取代固定 8000 字头截
-    let documentBudget = AIModelContext.documentCharBudget(forModel: resolved.model)
+    // 上下文预算（v1.3）：窗口与回复上限均为用户设定值
+    let replyTokens = AIModelContext.effectiveReplyTokens(
+      userSetting: settings.settings.chatMaxReplyTokens,
+      contextTokens: resolved.contextTokens
+    )
+    let documentBudget = AIModelContext.documentCharBudget(
+      contextTokens: resolved.contextTokens,
+      replyTokens: replyTokens
+    )
 
     // ① 选区
     var selectionText: String?
@@ -268,7 +275,7 @@ final class AIChatStore: ObservableObject {
       documentAnnotation: annotation,
       workspaceHits: hits
     )
-    startStreaming(question: question, built: built, resolved: resolved)
+    startStreaming(question: question, built: built, resolved: resolved, maxTokens: replyTokens)
   }
 
   /// 工作区候选选节（第三层的路由第一遍）；失败返回 nil（调用方回退片段注入）
@@ -326,7 +333,7 @@ final class AIChatStore: ObservableObject {
     }
   }
 
-  private func startStreaming(question: String, built: AIContextBuilder.BuiltContext, resolved: AISettingsStore.ResolvedModel) {
+  private func startStreaming(question: String, built: AIContextBuilder.BuiltContext, resolved: AISettingsStore.ResolvedModel, maxTokens: Int) {
     var userRow = ChatMessage(role: .user, content: question)
     userRow.contextSummary = built.summary
     userRow.promptQuestion = question
@@ -352,7 +359,8 @@ final class AIChatStore: ObservableObject {
           kind: resolved.kind,
           config: resolved.config,
           model: resolved.model,
-          messages: outgoing
+          messages: outgoing,
+          maxTokens: maxTokens
         )
         for try await delta in stream {
           self.streamBuffer += delta

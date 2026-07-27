@@ -1062,6 +1062,22 @@
         }
       }
     },
+    "删除该模型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove this model"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除该模型"
+          }
+        }
+      }
+    },
     "加入收藏": {
       "localizations": {
         "en": {
@@ -1298,6 +1314,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "响应格式无法识别"
+          }
+        }
+      }
+    },
+    "回复长度上限（tokens）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Max reply length (tokens)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回复长度上限（tokens）"
           }
         }
       }
@@ -2951,18 +2983,18 @@
         }
       }
     },
-    "模型（多个用逗号分隔）": {
+    "模型名": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Models (comma-separated)"
+            "value": "Model name"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "模型（多个用逗号分隔）"
+            "value": "模型名"
           }
         }
       }
@@ -3027,6 +3059,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "没有新标注"
+          }
+        }
+      }
+    },
+    "添加模型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Model"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加模型"
           }
         }
       }
@@ -3219,6 +3267,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "稍后"
+          }
+        }
+      }
+    },
+    "窗口 tokens": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Context tokens"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "窗口 tokens"
           }
         }
       }
@@ -3719,6 +3783,22 @@
         }
       }
     },
+    "该模型的上下文窗口（输入与输出共享），文档/历史预算据此分配": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model's context window (shared by input and output); document/history budgets are allocated from it"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该模型的上下文窗口（输入与输出共享），文档/历史预算据此分配"
+          }
+        }
+      }
+    },
     "该轮提问是否附带此上下文（与 设置 → AI 同步）": {
       "localizations": {
         "en": {
@@ -3763,6 +3843,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "语言设置将在重启 App 后生效"
+          }
+        }
+      }
+    },
+    "请求的 max_tokens；超过模型窗口时自动夹取到窗口一半": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request max_tokens; clamped to half the window if it exceeds the model window"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请求的 max_tokens；超过模型窗口时自动夹取到窗口一半"
           }
         }
       }

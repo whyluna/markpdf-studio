@@ -61,12 +61,15 @@ struct AISettings: Codable, Equatable {
   var contextIncludeSelection = true
   var contextIncludeDocument = true
   var contextIncludeWorkspace = false
+  /// AI 助手回复长度上限（max_tokens，用户设定；FR-AI.2 v1.3）
+  var chatMaxReplyTokens = 8192
 
   init() {}
 
   private enum CodingKeys: String, CodingKey {
     case providers, chatModel, translationEngine, translationModel, targetLanguage
     case autoTranslateOnSelection, contextIncludeSelection, contextIncludeDocument, contextIncludeWorkspace
+    case chatMaxReplyTokens
     // 旧版仅 Provider 粒度的选择字段（迁移用）
     case chatProvider, translationProvider
   }
@@ -91,6 +94,7 @@ struct AISettings: Codable, Equatable {
     contextIncludeSelection = try container.decodeIfPresent(Bool.self, forKey: .contextIncludeSelection) ?? true
     contextIncludeDocument = try container.decodeIfPresent(Bool.self, forKey: .contextIncludeDocument) ?? true
     contextIncludeWorkspace = try container.decodeIfPresent(Bool.self, forKey: .contextIncludeWorkspace) ?? false
+    chatMaxReplyTokens = try container.decodeIfPresent(Int.self, forKey: .chatMaxReplyTokens) ?? 8192
   }
 
   func encode(to encoder: Encoder) throws {
@@ -104,6 +108,7 @@ struct AISettings: Codable, Equatable {
     try container.encode(contextIncludeSelection, forKey: .contextIncludeSelection)
     try container.encode(contextIncludeDocument, forKey: .contextIncludeDocument)
     try container.encode(contextIncludeWorkspace, forKey: .contextIncludeWorkspace)
+    try container.encode(chatMaxReplyTokens, forKey: .chatMaxReplyTokens)
   }
 }
 
@@ -157,11 +162,13 @@ final class AISettingsStore: ObservableObject {
     }
   }
 
-  /// 解析后的可用模型（kind + 配置 + 模型名），供请求链直接使用
+  /// 解析后的可用模型（kind + 配置 + 模型名 + 用户设定窗口），供请求链直接使用
   struct ResolvedModel: Equatable {
     let kind: AIProviderKind
     let config: AIProviderConfig
     let model: String
+    /// 上下文窗口（tokens，用户设定；未配置回退保守值）
+    let contextTokens: Int
   }
 
   /// AI 助手对话模型：显式选择有效则用之，否则第一个已启用 Provider 的第一个模型；全不可用为 nil
@@ -175,19 +182,27 @@ final class AISettingsStore: ObservableObject {
   }
 
   private func resolve(_ choice: AIModelChoice?) -> ResolvedModel? {
+    func resolved(_ kind: AIProviderKind, _ config: AIProviderConfig, _ model: String) -> ResolvedModel {
+      ResolvedModel(
+        kind: kind,
+        config: config,
+        model: model,
+        contextTokens: config.spec(for: model)?.contextTokens ?? AIModelContext.conservativeTokens
+      )
+    }
     if let choice, let kind = AIProviderKind(rawValue: choice.provider) {
       let config = config(for: kind)
       if config.isEnabled, !config.models.isEmpty {
         // 所选模型仍在列表内用之；被删掉则回落该 Provider 首模型（空串迁移形态同此）
         let model = config.models.contains(choice.model) ? choice.model : config.models[0]
-        return ResolvedModel(kind: kind, config: config, model: model)
+        return resolved(kind, config, model)
       }
     }
     // 回落：第一个已启用且有模型的 Provider
     for kind in AIProviderKind.allCases {
       let config = config(for: kind)
       if config.isEnabled, let first = config.models.first {
-        return ResolvedModel(kind: kind, config: config, model: first)
+        return resolved(kind, config, first)
       }
     }
     return nil

@@ -60,17 +60,40 @@ enum AIProviderKind: String, Codable, CaseIterable, Identifiable {
   }
 }
 
+/// 模型规格（FR-AI.2 v1.3）：上下文窗口由用户配置（不猜测；新增时按模型名预填建议值）
+struct AIModelSpec: Codable, Equatable, Hashable {
+  var name: String
+  /// 上下文窗口（tokens，输入与输出共享）；用户可改，以用户值为准
+  var contextTokens: Int
+}
+
 /// 单个 Provider 的用户配置；API Key 不入此结构（存 Keychain，见 AIKeyStore）。
 /// 一个 Provider 可配多个模型（翻译用小模型、助手用大模型各取所需）
 struct AIProviderConfig: Codable, Equatable {
   var isEnabled: Bool
   var baseURL: String
-  var models: [String]
+  var modelSpecs: [AIModelSpec]
 
-  init(isEnabled: Bool, baseURL: String, models: [String]) {
+  /// 模型名列表（选择器/解析用）
+  var models: [String] { modelSpecs.map(\.name) }
+
+  func spec(for model: String) -> AIModelSpec? {
+    modelSpecs.first { $0.name == model }
+  }
+
+  init(isEnabled: Bool, baseURL: String, modelSpecs: [AIModelSpec]) {
     self.isEnabled = isEnabled
     self.baseURL = baseURL
-    self.models = models
+    self.modelSpecs = modelSpecs
+  }
+
+  /// 名称列表便捷构造（窗口按模型名预填建议值）
+  init(isEnabled: Bool, baseURL: String, models: [String]) {
+    self.init(
+      isEnabled: isEnabled,
+      baseURL: baseURL,
+      modelSpecs: models.map { AIModelSpec(name: $0, contextTokens: AIModelContext.suggestedTokens(forModel: $0)) }
+    )
   }
 
   /// 单模型便捷构造（预设默认与测试用）
@@ -79,20 +102,23 @@ struct AIProviderConfig: Codable, Equatable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case isEnabled, baseURL, models, model
+    case isEnabled, baseURL, modelSpecs, models, model
   }
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
     baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
-    if let list = try container.decodeIfPresent([String].self, forKey: .models) {
-      models = list
-    } else if let legacy = try container.decodeIfPresent(String.self, forKey: .model) {
-      // 旧版单模型字段迁移
-      models = legacy.isEmpty ? [] : [legacy]
+    if let specs = try container.decodeIfPresent([AIModelSpec].self, forKey: .modelSpecs) {
+      modelSpecs = specs
+    } else if let names = try container.decodeIfPresent([String].self, forKey: .models) {
+      // 旧版模型名数组迁移：窗口按模型名预填建议值
+      modelSpecs = names.map { AIModelSpec(name: $0, contextTokens: AIModelContext.suggestedTokens(forModel: $0)) }
+    } else if let legacy = try container.decodeIfPresent(String.self, forKey: .model), !legacy.isEmpty {
+      // 更旧的单模型字段迁移
+      modelSpecs = [AIModelSpec(name: legacy, contextTokens: AIModelContext.suggestedTokens(forModel: legacy))]
     } else {
-      models = []
+      modelSpecs = []
     }
   }
 
@@ -100,7 +126,7 @@ struct AIProviderConfig: Codable, Equatable {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encode(isEnabled, forKey: .isEnabled)
     try container.encode(baseURL, forKey: .baseURL)
-    try container.encode(models, forKey: .models)
+    try container.encode(modelSpecs, forKey: .modelSpecs)
   }
 }
 
