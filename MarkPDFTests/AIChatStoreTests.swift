@@ -185,6 +185,77 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertNotNil(store.messages[2].contextSummary)
   }
 
+  // MARK: - 会话按文档隔离 + 落盘（FR-AI.3）
+
+  func testThreadsIsolatedPerDocument() async {
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)
+    let docA = URL(fileURLWithPath: "/tmp/ws/a.md")
+    let docB = URL(fileURLWithPath: "/tmp/ws/b.pdf")
+
+    store.bindDocument(docA)
+    store.send("A 的问题")
+    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+
+    store.bindDocument(docB)
+    XCTAssertTrue(store.messages.isEmpty, "B 文档是全新线程")
+    XCTAssertEqual(store.activeDocName, "b.pdf")
+
+    store.bindDocument(docA)
+    XCTAssertEqual(store.messages.count, 2, "切回 A 恢复原线程")
+    XCTAssertEqual(store.messages.first?.content, "A 的问题")
+  }
+
+  func testSessionsPersistAcrossWorkspaceReload() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)
+    store.workspaceDidChange(root: root)
+    store.bindDocument(root.appendingPathComponent("note.md"))
+    store.send("持久化我")
+    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    store.flush()
+
+    // 新实例模拟重启：载盘 + 绑同文档恢复
+    let reopened = makeStore(transport: transport)
+    reopened.workspaceDidChange(root: root)
+    reopened.bindDocument(root.appendingPathComponent("note.md"))
+    XCTAssertEqual(reopened.messages.count, 2)
+    XCTAssertEqual(reopened.messages.first?.content, "持久化我")
+    XCTAssertEqual(reopened.messages.last?.content, "答")
+  }
+
+  func testCorruptedSessionFileSurfacesErrorAndBlocksWrite() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-corrupt-\(UUID().uuidString)")
+    let dir = root.appendingPathComponent(".markpdf")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("broken".utf8).write(to: dir.appendingPathComponent("ai-sessions.json"))
+
+    let store = makeStore(transport: AIServiceTests.MockAITransport())
+    store.workspaceDidChange(root: root)
+    XCTAssertNotNil(store.storageError, "损坏必须可感知（NFR-5）")
+    XCTAssertFalse(store.isPersistent, "损坏期间禁写回防覆盖")
+    store.flush()
+    let data = try Data(contentsOf: dir.appendingPathComponent("ai-sessions.json"))
+    XCTAssertEqual(String(decoding: data, as: UTF8.self), "broken", "原文件未被覆盖")
+  }
+
   func testNewSessionClears() async {
     let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
       AsyncThrowingStream { continuation in

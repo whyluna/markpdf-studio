@@ -160,6 +160,38 @@
     "%lld%%": {},
     "+": {},
     "AI": {},
+    "AI 会话文件损坏": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI Session File Corrupted"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 会话文件损坏"
+          }
+        }
+      }
+    },
+    "AI 会话文件损坏，本次不会向其写回：%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI session file is corrupted; it will not be written back this time: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 会话文件损坏，本次不会向其写回：%@"
+          }
+        }
+      }
+    },
     "AI 功能仅在你显式发起请求时，将所选内容发送至你配置的第三方服务；API Key 保存在系统钥匙串。": {
       "localizations": {
         "en": {
@@ -594,6 +626,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "从「%@」移除"
+          }
+        }
+      }
+    },
+    "会话：%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会话：%@"
+          }
+        }
+      }
+    },
+    "会话：工作区通用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session: workspace general"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会话：工作区通用"
           }
         }
       }
@@ -4019,6 +4083,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "默认用 MarkPDF 打开 PDF 文件"
+          }
+        }
+      }
+    },
+    "（无工作区，重启不保留）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " (no workspace; not kept after restart)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "（无工作区，重启不保留）"
           }
         }
       }

@@ -37,6 +37,12 @@ final class AIChatStore: ObservableObject {
 
   @Published private(set) var messages: [ChatMessage] = []
   @Published private(set) var phase: Phase = .idle
+  /// 当前线程归属（面板头显示：文档名 / nil = 工作区通用）
+  @Published private(set) var activeDocName: String?
+  /// 会话文件损坏提示（FR-AI.3 不静默吞；损坏期间禁写回防覆盖）
+  @Published var storageError: String?
+  /// 有工作区才持久（草稿/无工作区内存态，面板提示不持久）
+  var isPersistent: Bool { workspaceRoot != nil && !storageBroken }
 
   /// 面板头部徽标（Provider · 模型）；无可用 Provider 为空串
   var providerBadge: String {
@@ -53,9 +59,97 @@ final class AIChatStore: ObservableObject {
   private var streamBuffer = ""
   private var flushScheduled = false
 
+  // 会话按文档隔离（FR-AI.3 v1.2）：key = 文档相对工作区路径（"" = 工作区通用线程）
+  private var threads: [String: [ChatMessage]] = [:]
+  private var activeDocKey = ""
+  private var workspaceRoot: URL?
+  private var storageBroken = false
+  private let persistDebouncer = Debouncer(interval: 0.5)
+
   init(settings: AISettingsStore, service: AIService) {
     self.settings = settings
     self.service = service
+  }
+
+  // MARK: - 工作区 / 文档线程（FR-AI.3）
+
+  /// 工作区变化：flush 旧工作区 → 载入新工作区会话（损坏弹错并禁写回）
+  func workspaceDidChange(root: URL?) {
+    let newRoot = root?.standardizedFileURL
+    guard newRoot?.path != workspaceRoot?.path else { return }
+    flush()
+    streamTask?.cancel()
+    streamTask = nil
+    workspaceRoot = newRoot
+    storageBroken = false
+    threads = [:]
+    messages = []
+    phase = .idle
+    guard let newRoot else { return }
+    do {
+      for session in try AISessionStore.load(workspaceRoot: newRoot) {
+        threads[session.docPath ?? ""] = session.messages.map(ChatMessage.init(stored:))
+      }
+    } catch {
+      storageBroken = true
+      storageError = error.localizedDescription
+      Logger.ai.error("AI 会话载入失败: \(String(describing: error), privacy: .public)")
+    }
+    messages = threads[activeDocKey] ?? []
+  }
+
+  /// 激活文档变化：切换会话线程（同 key 幂等；流式途中切换取消在途——语境已变）
+  func bindDocument(_ url: URL?) {
+    let key = docKey(for: url)
+    guard key != activeDocKey else { return }
+    if phase == .streaming { cancel() }
+    threads[activeDocKey] = messages
+    activeDocKey = key
+    activeDocName = url?.lastPathComponent
+    messages = threads[key] ?? []
+    phase = .idle
+  }
+
+  /// 退出/切工作区前立即落盘
+  func flush() {
+    persistDebouncer.cancel()
+    persistNow()
+  }
+
+  private func docKey(for url: URL?) -> String {
+    guard let url else { return "" }
+    let path = url.standardizedFileURL.path
+    if let rootPath = workspaceRoot?.path, path.hasPrefix(rootPath + "/") {
+      return String(path.dropFirst(rootPath.count + 1))
+    }
+    return path
+  }
+
+  /// 消息变化统一收口：回写线程表 + 防抖落盘
+  private func syncActiveThread() {
+    threads[activeDocKey] = messages
+    guard isPersistent else { return }
+    persistDebouncer.schedule { [weak self] in
+      self?.persistNow()
+    }
+  }
+
+  private func persistNow() {
+    guard let workspaceRoot, isPersistent else { return }
+    threads[activeDocKey] = messages
+    let sessions = threads.compactMap { key, thread -> AISessionStore.StoredSession? in
+      guard !thread.isEmpty else { return nil }
+      return AISessionStore.StoredSession(
+        docPath: key.isEmpty ? nil : key,
+        messages: thread.map(\.stored),
+        updatedAt: Date()
+      )
+    }
+    do {
+      try AISessionStore.save(sessions, workspaceRoot: workspaceRoot)
+    } catch {
+      Logger.ai.error("AI 会话落盘失败: \(String(describing: error), privacy: .public)")
+    }
   }
 
   // MARK: - 意图
@@ -88,6 +182,7 @@ final class AIChatStore: ObservableObject {
     // 移除失败尾巴：最后一条 user 及其后的所有消息（send 会重新 append）
     if let index = messages.lastIndex(where: { $0.role == .user }) {
       messages.removeSubrange(index...)
+      syncActiveThread()
     }
     phase = .idle
     send(lastQuestion)
@@ -99,6 +194,7 @@ final class AIChatStore: ObservableObject {
     messages = []
     streamBuffer = ""
     phase = .idle
+    syncActiveThread()
   }
 
   // MARK: - 私有
@@ -139,6 +235,7 @@ final class AIChatStore: ObservableObject {
     var assistantRow = ChatMessage(role: .assistant, content: "")
     assistantRow.isStreaming = true
     messages.append(assistantRow)
+    syncActiveThread()
 
     // 历史轮：user 送原始问题（不重复带全文），仅当轮带上下文；空 assistant 已由 trimHistory 丢弃
     var outgoing: [AIChatMessage] = [.system(AIContextBuilder.systemPrompt())]
@@ -200,11 +297,33 @@ final class AIChatStore: ObservableObject {
   ///（空 assistant 进历史会让 Anthropic 非空校验 400）
   private func finalizeStreaming(cancelled: Bool) {
     flushNow()
+    defer { syncActiveThread() }
     guard let last = messages.indices.last, messages[last].role == .assistant, messages[last].isStreaming else { return }
     messages[last].isStreaming = false
     messages[last].wasCancelled = cancelled
     if cancelled, messages[last].content.isEmpty {
       messages.remove(at: last)
     }
+  }
+}
+
+// MARK: - 落盘转换（FR-AI.3）
+
+extension AIChatStore.ChatMessage {
+  init(stored: AISessionStore.StoredMessage) {
+    self.init(role: AIChatMessage.Role(rawValue: stored.role) ?? .assistant, content: stored.content)
+    contextSummary = stored.contextSummary
+    promptQuestion = stored.promptQuestion
+    wasCancelled = stored.wasCancelled ?? false
+  }
+
+  var stored: AISessionStore.StoredMessage {
+    AISessionStore.StoredMessage(
+      role: role.rawValue,
+      content: content,
+      contextSummary: contextSummary,
+      promptQuestion: promptQuestion,
+      wasCancelled: wasCancelled ? true : nil
+    )
   }
 }

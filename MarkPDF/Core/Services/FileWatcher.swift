@@ -11,6 +11,8 @@ enum WorkspaceExcludedDirectories {
   static let names: Set<String> = [
     "node_modules", ".git", ".svn", ".hg", ".build", ".xcodeproj", "DerivedData",
     "Pods", "Carthage", ".venv", "__pycache__", "target", "dist", "build", ".next", "vendor",
+    // App 自有数据目录（FR-AI.3 会话持久化）：文件树/FSEvents/全文搜索/反链全链路不触碰
+    ".markpdf",
   ]
 
   /// 小写副本：事件过滤判定大小写不敏感（Node_Modules 这类写法也挡）

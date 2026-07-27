@@ -56,12 +56,14 @@ struct ContentView: View {
         guard let root = workspaceStore.root?.id else { return }
         recentsStore.record(url, forRoot: root)
       }
-      tabStore.onStructureChange = { [weak tabStore, weak workspaceStore] in
+      tabStore.onStructureChange = { [weak tabStore, weak workspaceStore, weak aiChatStore] in
         guard let tabStore else { return }
         stateStore.tabsDidChange(groups: tabStore.groups, activeGroupID: tabStore.activeGroupID)
         // 文件树高亮始终跟随当前激活标签（打开新文件 / 切换标签 / 切换分栏组统一入口）
         let activeURL = tabStore.activeGroup.activeTab?.url
         workspaceStore?.selection = activeURL.flatMap { workspaceStore?.node(for: $0) }
+        // AI 会话按文档隔离（FR-AI.3 v1.2）：激活标签变化即切线程（同 key 幂等）
+        aiChatStore?.bindDocument(activeURL)
       }
       tabStore.onEditorCursorLine = { url, line in
         stateStore.recordCursor(url: url, line: line)
@@ -75,6 +77,8 @@ struct ContentView: View {
         // 反链解析所需根目录（纯赋值，折叠态变化时同值覆盖无副作用）；
         // 重扫已分流到 onMarkdownFilesChange，自动保存/折叠不再全量重读 md
         backlinksStore.setWorkspaceRoot(workspaceStore?.root?.id)
+        // AI 会话随工作区载入/落盘（同根幂等；root 为扫描完成后异步赋值，届时再触发）
+        aiChatStore.workspaceDidChange(root: workspaceStore?.root?.id)
       }
       // 反向链接（FR-5.4）：仅 md 文件集合实际变化（新增/删除/重命名/外部变更）后重扫，新引用 5s 内出现
       workspaceStore.onMarkdownFilesChange = {

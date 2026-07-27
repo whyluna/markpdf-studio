@@ -40,36 +40,59 @@ struct AIAssistantPanelView: View {
   // MARK: - 头部
 
   private var header: some View {
-    HStack(spacing: 6) {
-      Image(systemName: "sparkles")
-        .foregroundStyle(.secondary)
-      Text("AI 助手")
-        .font(.headline)
-      if !chat.providerBadge.isEmpty {
-        Text(chat.providerBadge)
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-          .lineLimit(1)
+    VStack(alignment: .leading, spacing: 2) {
+      HStack(spacing: 6) {
+        Image(systemName: "sparkles")
+          .foregroundStyle(.secondary)
+        Text("AI 助手")
+          .font(.headline)
+        if !chat.providerBadge.isEmpty {
+          Text(chat.providerBadge)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+        }
+        Spacer()
+        Button {
+          chat.newSession()
+        } label: {
+          Image(systemName: "square.and.pencil")
+        }
+        .buttonStyle(.plain)
+        .help("新会话")
+        .disabled(chat.messages.isEmpty)
+        Button {
+          workspaceStore.isAIAssistantPresented = false
+        } label: {
+          Image(systemName: "xmark")
+        }
+        .buttonStyle(.plain)
+        .help("关闭 AI 助手")
       }
-      Spacer()
-      Button {
-        chat.newSession()
-      } label: {
-        Image(systemName: "square.and.pencil")
-      }
-      .buttonStyle(.plain)
-      .help("新会话")
-      .disabled(chat.messages.isEmpty)
-      Button {
-        workspaceStore.isAIAssistantPresented = false
-      } label: {
-        Image(systemName: "xmark")
-      }
-      .buttonStyle(.plain)
-      .help("关闭 AI 助手")
+      // 会话线程归属（FR-AI.3：每文档一条线程，切文档自动切换）
+      Text(threadCaption)
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+        .lineLimit(1)
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 8)
+    .alert(
+      "AI 会话文件损坏",
+      isPresented: Binding(
+        get: { chat.storageError != nil },
+        set: { if !$0 { chat.storageError = nil } }
+      )
+    ) {
+      Button("好") { chat.storageError = nil }
+    } message: {
+      Text(chat.storageError ?? "")
+    }
+  }
+
+  private var threadCaption: String {
+    let owner = chat.activeDocName.map { String(localized: "会话：\($0)") } ?? String(localized: "会话：工作区通用")
+    return chat.isPersistent ? owner : owner + String(localized: "（无工作区，重启不保留）")
   }
 
   // MARK: - 消息列表
