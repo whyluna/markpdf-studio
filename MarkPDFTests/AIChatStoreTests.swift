@@ -241,6 +241,121 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertEqual(reopened.messages.last?.content, "答")
   }
 
+  // MARK: - 会话线程 key 统一绝对路径（v1.4.1：工作区内外打开同一文件共享线程）
+
+  /// 旧版相对工作区根的 key 载入时迁移为绝对路径
+  func testRelativePathKeyMigratesToAbsoluteOnLoad() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try AISessionStore.save(
+      [
+        AISessionStore.StoredSession(
+          docPath: "note.md",
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "旧记录", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+            AISessionStore.StoredMessage(role: "assistant", content: "旧答", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: Date()
+        ),
+      ],
+      workspaceRoot: root
+    )
+
+    let store = makeStore(transport: AIServiceTests.MockAITransport())
+    store.workspaceDidChange(root: root)
+    store.bindDocument(root.appendingPathComponent("note.md"))
+    XCTAssertEqual(store.messages.map(\.content), ["旧记录", "旧答"], "相对 key 迁移后同文档线程可见")
+  }
+
+  /// 同一文件曾按相对/绝对双键各存一条（旧版工作区/外部两种打开方式）→ 按时间合并
+  func testConflictingRelativeAndAbsoluteThreadsMerge() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = root.appendingPathComponent("note.md")
+    try AISessionStore.save(
+      [
+        AISessionStore.StoredSession(
+          docPath: "note.md",
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "工作区里聊的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: Date(timeIntervalSince1970: 1_000)
+        ),
+        AISessionStore.StoredSession(
+          docPath: file.standardizedFileURL.path,
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "外部打开聊的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: Date(timeIntervalSince1970: 2_000)
+        ),
+      ],
+      workspaceRoot: root
+    )
+
+    let store = makeStore(transport: AIServiceTests.MockAITransport())
+    store.workspaceDidChange(root: root)
+    store.bindDocument(file)
+    XCTAssertEqual(store.messages.map(\.content), ["工作区里聊的", "外部打开聊的"], "双线程按时间先后合并")
+  }
+
+  /// 启动时序竞态：标签恢复先绑文档（messages 为空）、工作区后载入——
+  /// 迁移落盘不得把激活线程抹成空（2026-07-27 实锤丢数据：persistNow 先
+  /// storeActiveThreadMessages，载入前的空 messages 覆盖刚合并的线程）
+  func testMigrationPersistDoesNotStompActiveThread() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = root.appendingPathComponent("note.md")
+    try AISessionStore.save(
+      [
+        AISessionStore.StoredSession(
+          docPath: "note.md",
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "相对线程", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: Date(timeIntervalSince1970: 1_000)
+        ),
+        AISessionStore.StoredSession(
+          docPath: file.standardizedFileURL.path,
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "绝对线程", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: Date(timeIntervalSince1970: 2_000)
+        ),
+      ],
+      workspaceRoot: root
+    )
+
+    let store = makeStore(transport: AIServiceTests.MockAITransport())
+    store.bindDocument(file)  // 先绑文档（模拟标签恢复先于工作区载入的启动时序）
+    store.workspaceDidChange(root: root)
+
+    XCTAssertEqual(store.messages.map(\.content), ["相对线程", "绝对线程"], "激活线程消息不得被抹空")
+    let sessions = try AISessionStore.load(workspaceRoot: root)
+    let docSessions = sessions.filter { $0.docPath != nil }
+    XCTAssertEqual(docSessions.count, 1, "迁移后收敛为单线程")
+    XCTAssertEqual(docSessions.first?.messages.map(\.content), ["相对线程", "绝对线程"], "磁盘线程内容完整")
+  }
+
+  func testMigratedKeyHelper() {
+    let root = URL(fileURLWithPath: "/tmp/ws")
+    XCTAssertEqual(
+      AIChatStore.migratedKey(for: "papers/a.pdf", root: root),
+      "/tmp/ws/papers/a.pdf"
+    )
+    XCTAssertEqual(
+      AIChatStore.migratedKey(for: "/abs/a.pdf", root: root),
+      "/abs/a.pdf",
+      "绝对路径原样保留"
+    )
+    XCTAssertEqual(AIChatStore.migratedKey(for: nil, root: root), "", "通用线程")
+  }
+
   func testCorruptedSessionFileSurfacesErrorAndBlocksWrite() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("AIChatStoreTests-corrupt-\(UUID().uuidString)")

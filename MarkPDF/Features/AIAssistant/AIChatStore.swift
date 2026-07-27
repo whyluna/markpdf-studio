@@ -94,7 +94,8 @@ final class AIChatStore: ObservableObject {
   /// 压缩失败后间隔一轮再试
   private var skipCompactionOnce = false
 
-  // 会话按文档隔离（FR-AI.3 v1.2）：key = 文档相对工作区路径（"" = 工作区通用线程）
+  // 会话按文档隔离（FR-AI.3 v1.2）：key = 文档绝对路径（"" = 工作区通用线程）。
+  // v1.4.1 起统一绝对路径——同一文件从工作区/外部打开共享线程；旧版相对 key 载入时迁移
   private var threads: [String: Thread] = [:]
   private var activeDocKey = ""
   private var workspaceRoot: URL?
@@ -122,13 +123,40 @@ final class AIChatStore: ObservableObject {
     messages = []
     phase = .idle
     guard let newRoot else { return }
+    // 旧版相对 key 迁移为绝对路径；同一文件若曾按相对/绝对双键各存一条，按时间合并
+    var didMigrate = false
     do {
+      var keyDates: [String: Date] = [:]
       for session in try AISessionStore.load(workspaceRoot: newRoot) {
-        threads[session.docPath ?? ""] = Thread(
+        if let docPath = session.docPath, !docPath.isEmpty, !docPath.hasPrefix("/") {
+          didMigrate = true
+        }
+        let key = Self.migratedKey(for: session.docPath, root: newRoot)
+        let incoming = Thread(
           messages: session.messages.map(ChatMessage.init(stored:)),
           rollingSummary: session.rollingSummary,
           summarizedCount: session.summarizedCount ?? 0
         )
+        if var existing = threads[key], !existing.messages.isEmpty, !incoming.messages.isEmpty {
+          // 合并：较旧者消息在前；摘要沿用较新一方（其覆盖下标按旧者消息数平移），
+          // 较新一方无摘要则保留旧摘要（旧者位于合并数组头部，下标无需平移）
+          let existingIsOlder = (keyDates[key] ?? .distantPast) <= session.updatedAt
+          let (older, newer) = existingIsOlder ? (existing, incoming) : (incoming, existing)
+          existing.messages = older.messages + newer.messages
+          if let newSummary = newer.rollingSummary {
+            existing.rollingSummary = newSummary
+            existing.summarizedCount = min(newer.summarizedCount + older.messages.count, existing.messages.count)
+          } else {
+            existing.rollingSummary = older.rollingSummary
+            existing.summarizedCount = older.summarizedCount
+          }
+          threads[key] = existing
+          keyDates[key] = max(keyDates[key] ?? .distantPast, session.updatedAt)
+          didMigrate = true
+        } else if threads[key]?.messages.isEmpty != false {
+          threads[key] = incoming
+          keyDates[key] = session.updatedAt
+        }
       }
     } catch {
       storageBroken = true
@@ -136,6 +164,12 @@ final class AIChatStore: ObservableObject {
       Logger.ai.error("AI 会话载入失败: \(String(describing: error), privacy: .public)")
     }
     messages = threads[activeDocKey]?.messages ?? []
+    // 迁移/合并立即落盘（格式收敛为绝对路径键，不等下一次消息变化或退出）——
+    // 必须在 messages 恢复之后：persistNow 会先 storeActiveThreadMessages，
+    // 若在此前落盘，载入前的空 messages 会把刚合并的激活线程抹成空（实锤丢数据）
+    if didMigrate {
+      persistNow()
+    }
   }
 
   /// 激活文档变化：切换会话线程（同 key 幂等；流式途中切换取消在途——语境已变）
@@ -158,11 +192,15 @@ final class AIChatStore: ObservableObject {
 
   private func docKey(for url: URL?) -> String {
     guard let url else { return "" }
-    let path = url.standardizedFileURL.path
-    if let rootPath = workspaceRoot?.path, path.hasPrefix(rootPath + "/") {
-      return String(path.dropFirst(rootPath.count + 1))
-    }
-    return path
+    // 统一绝对路径：同一文件从工作区（旧版为相对路径）或外部打开都是同一条线程
+    return url.standardizedFileURL.path
+  }
+
+  /// 旧版 key（相对工作区根）迁移为绝对路径；nil/空 = 工作区通用线程（""）
+  static func migratedKey(for docPath: String?, root: URL) -> String {
+    guard let docPath, !docPath.isEmpty else { return "" }
+    if docPath.hasPrefix("/") { return docPath }
+    return root.appendingPathComponent(docPath).standardizedFileURL.path
   }
 
   private func storeActiveThreadMessages() {

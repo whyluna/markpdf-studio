@@ -33,7 +33,7 @@ enum AISessionStore {
   }
 
   struct StoredSession: Codable, Equatable {
-    /// 归属文档路径（相对工作区根；nil = 工作区通用线程）
+    /// 归属文档路径（绝对路径；nil = 工作区通用线程。v1.4.1 前为相对工作区根，载入时迁移）
     var docPath: String?
     var messages: [StoredMessage]
     var updatedAt: Date
