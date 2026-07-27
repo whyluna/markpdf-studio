@@ -34,6 +34,39 @@ final class WorkspaceStateStoreTests: XCTestCase {
     XCTAssertEqual(reopened.cursorLine(for: file1), 42)
   }
 
+  // MARK: - AI 助手显隐随工作区（FR-AI.2）
+
+  @MainActor
+  func testAIAssistantVisibilityPersistsPerWorkspace() {
+    let root = URL(fileURLWithPath: "/tmp/ws")
+    let store = WorkspaceStateStore(defaults: defaults)
+    store.workspaceDidChange(root: root, collapsedFolders: [], aiAssistantVisible: true)
+    store.flush()
+
+    // 重启后切换到该工作区 → 显隐恢复
+    let reopened = WorkspaceStateStore(defaults: defaults)
+    let workspaceStore = WorkspaceStore()
+    let tabStore = TabStore()
+    reopened.switchWorkspace(to: root, workspaceStore: workspaceStore, tabStore: tabStore)
+    XCTAssertTrue(workspaceStore.isAIAssistantPresented)
+
+    // 无记录的工作区 → 默认关闭
+    reopened.switchWorkspace(to: URL(fileURLWithPath: "/tmp/other"), workspaceStore: workspaceStore, tabStore: tabStore)
+    XCTAssertFalse(workspaceStore.isAIAssistantPresented)
+  }
+
+  /// 旧快照（无 aiAssistantVisible 键）可解码且默认关
+  @MainActor
+  func testLegacySnapshotWithoutAIVisibilityDecodes() throws {
+    let legacy = #"{"lastRootPath":"/tmp/ws","workspaces":{"/tmp/ws":{"collapsedFolders":[],"groups":[],"activeTabs":[],"activeGroup":0}}}"#
+    defaults.set(Data(legacy.utf8), forKey: "workspaceSnapshot.v1")
+    let store = WorkspaceStateStore(defaults: defaults)
+    let workspaceStore = WorkspaceStore()
+    let tabStore = TabStore()
+    store.switchWorkspace(to: URL(fileURLWithPath: "/tmp/ws2"), workspaceStore: workspaceStore, tabStore: tabStore)
+    XCTAssertFalse(workspaceStore.isAIAssistantPresented)
+  }
+
   // MARK: - 标签快照 → TabStore 恢复
 
   @MainActor

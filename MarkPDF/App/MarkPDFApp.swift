@@ -16,21 +16,31 @@ struct MarkPDFApp: App {
   @StateObject private var settingsStore = SettingsStore()
   @StateObject private var searchStore = SearchStore()
   @StateObject private var backlinksStore = BacklinksStore()
-  // AI（FR-AI.4）：偏好与密钥均为 App 级单例（设置页 / 划词翻译 / AI 助手共用）
-  @StateObject private var aiSettingsStore = AISettingsStore()
-  @StateObject private var aiKeyStore = AIKeyStore()
+  // AI（FR-AI.4）：偏好与密钥均为 App 级单例（设置页 / 划词翻译 / AI 助手共用；init 内构建）
+  @StateObject private var aiSettingsStore: AISettingsStore
+  @StateObject private var aiKeyStore: AIKeyStore
   // Finder 直接打开文件的路由（文档类型见 Info.plist CFBundleDocumentTypes）
   @StateObject private var externalOpen = ExternalOpenCoordinator()
   // 默认打开方式开关（设置 → 通用）
   @StateObject private var defaultHandlerService = DefaultHandlerService()
+  // AI 助手对话（FR-AI.2）：App 级单例（面板隐藏再显示会话仍在；本批内存态）
+  @StateObject private var aiChatStore: AIChatStore
 
   init() {
     let tabStore = TabStore()
     let annotationStore = PDFAnnotationStore()
     let stateStore = WorkspaceStateStore()
+    let aiSettingsStore = AISettingsStore()
+    let aiKeyStore = AIKeyStore()
     _tabStore = StateObject(wrappedValue: tabStore)
     _annotationStore = StateObject(wrappedValue: annotationStore)
     _stateStore = StateObject(wrappedValue: stateStore)
+    _aiSettingsStore = StateObject(wrappedValue: aiSettingsStore)
+    _aiKeyStore = StateObject(wrappedValue: aiKeyStore)
+    _aiChatStore = StateObject(wrappedValue: AIChatStore(
+      settings: aiSettingsStore,
+      service: AIService(keys: aiKeyStore)
+    ))
     // 退出前兜底落盘（FR-2.7 全部标签 + FR-4.6 标注写回 + FR-1.6 快照）挂在 App 级：
     // 红钮关窗后再 ⌘Q 时 ContentView 已销毁、无人接收通知，防抖窗口内的保存/快照会丢。
     // 三个 store 均为 App 级单例，观察者随进程生命周期存续，无循环引用
@@ -87,6 +97,7 @@ struct MarkPDFApp: App {
         .environmentObject(backlinksStore)
         .environmentObject(aiSettingsStore)
         .environmentObject(aiKeyStore)
+        .environmentObject(aiChatStore)
         .environmentObject(externalOpen)
         .frame(minWidth: 1080, minHeight: 640)
         // Finder 双击 / Open With / 拖 Dock 打开文件：恢复现场就绪前入队，就绪后路由
@@ -122,6 +133,11 @@ struct MarkPDFApp: App {
           workspaceStore.isFullTextSearchPresented = true
         }
         .keyboardShortcut("f", modifiers: [.command, .shift])
+        // AI 助手（FR-AI.2 ⌘⇧A：替代式单栏切换）
+        Button(workspaceStore.isAIAssistantPresented ? "隐藏 AI 助手" : "显示 AI 助手") {
+          workspaceStore.isAIAssistantPresented.toggle()
+        }
+        .keyboardShortcut("a", modifiers: [.command, .shift])
         Divider()
         // 导出当前 md（FR-2.9）/ 导出全部标注（FR-4.8，导出后打开目标笔记）
         Button("导出为 PDF") {

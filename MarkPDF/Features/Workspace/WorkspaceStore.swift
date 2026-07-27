@@ -25,6 +25,10 @@ final class WorkspaceStore: ObservableObject {
   @Published var isFullTextSearchPresented = false
   /// 命令面板（FR-6.3 ⌘O）是否展示
   @Published var isCommandPalettePresented = false
+  /// AI 助手面板显隐（FR-AI.2 替代式单栏）；随工作区持久（经 onStateChange 入快照）
+  @Published var isAIAssistantPresented = false {
+    didSet { onStateChange?() }
+  }
   /// 折叠的文件夹（FR-1.1 树展开态；默认全部展开，点击文件夹行切换，重扫后按 URL 保留）
   @Published var collapsedFolders: Set<URL> = [] {
     didSet { onStateChange?() }
@@ -145,6 +149,22 @@ final class WorkspaceStore: ObservableObject {
     let url = ops.uniqueFileURL(in: folder, baseName: String(localized: "未命名"), ext: "md")
     do {
       try ops.createFile(at: url)
+      refresh(selecting: url)
+      registerCreateUndo(url, isFolder: false, undo: undo)
+      return url
+    } catch {
+      lastError = error.localizedDescription
+      return nil
+    }
+  }
+
+  /// 带内容新建 Markdown（FR-AI.2 动作④「存为新笔记」）；返回新文件 URL
+  @discardableResult
+  func createMarkdown(in folder: URL, content: String, baseName: String, undo: UndoManager?) -> URL? {
+    let url = ops.uniqueFileURL(in: folder, baseName: baseName, ext: "md")
+    do {
+      // 原子写入（开发规范 §10）
+      try content.write(to: url, atomically: true, encoding: .utf8)
       refresh(selecting: url)
       registerCreateUndo(url, isFolder: false, undo: undo)
       return url

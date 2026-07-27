@@ -20,6 +20,8 @@ final class WorkspaceStateStore: ObservableObject {
     /// 各组激活标签路径（草稿激活为 nil）
     var activeTabs: [String?] = []
     var activeGroup: Int = 0
+    /// AI 助手面板显隐（FR-AI.2；Optional 保旧快照可解码，nil = 关）
+    var aiAssistantVisible: Bool? = nil
   }
 
   struct Snapshot: Codable, Equatable {
@@ -108,8 +110,8 @@ final class WorkspaceStateStore: ObservableObject {
     url.standardizedFileURL.path
   }
 
-  /// 工作区变化（打开新文件夹 / 折叠态变化）：根目录存 security-scoped bookmark
-  func workspaceDidChange(root: URL?, collapsedFolders: Set<URL>) {
+  /// 工作区变化（打开新文件夹 / 折叠态变化 / AI 助手显隐）：根目录存 security-scoped bookmark
+  func workspaceDidChange(root: URL?, collapsedFolders: Set<URL>, aiAssistantVisible: Bool = false) {
     // 切换编排期间：watcher 上报的还是旧 root（异步扫描未完成）或折叠态赋值的路过事件，一律忽略
     if let pending = pendingSwitchPath {
       guard let root, slotKey(for: root) == pending else { return }
@@ -126,6 +128,7 @@ final class WorkspaceStateStore: ObservableObject {
       )
       var ws = state.workspaces[key] ?? WorkspaceSnapshot()
       ws.collapsedFolders = collapsedFolders.map(\.path).sorted()
+      ws.aiAssistantVisible = aiAssistantVisible
       state.workspaces[key] = ws
     } else {
       currentRootPath = nil
@@ -182,6 +185,7 @@ final class WorkspaceStateStore: ObservableObject {
     workspaceStore.openFolder(url)
     let ws = state.workspaces[key]
     workspaceStore.collapsedFolders = Set((ws?.collapsedFolders ?? []).map { URL(fileURLWithPath: $0) })
+    workspaceStore.isAIAssistantPresented = ws?.aiAssistantVisible ?? false
   }
 
   // MARK: - 切换工作区
@@ -202,9 +206,11 @@ final class WorkspaceStateStore: ObservableObject {
     workspaceStore.openFolder(target)
     if let ws = state.workspaces[target.path] {
       workspaceStore.collapsedFolders = Set(ws.collapsedFolders.map { URL(fileURLWithPath: $0) })
+      workspaceStore.isAIAssistantPresented = ws.aiAssistantVisible ?? false
       tabStore.replaceAll(tabStates: ws.groups, activeTabPaths: ws.activeTabs, activeGroupIndex: ws.activeGroup)
     } else {
       workspaceStore.collapsedFolders = []
+      workspaceStore.isAIAssistantPresented = false
       tabStore.replaceAll(tabStates: [], activeTabPaths: [], activeGroupIndex: 0)
     }
   }

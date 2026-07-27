@@ -224,6 +224,22 @@
         }
       }
     },
+    "AI 笔记": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI Note"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 笔记"
+          }
+        }
+      }
+    },
     "API Key": {},
     "API Key（已保存，输入以更换）": {
       "localizations": {
@@ -614,6 +630,38 @@
         }
       }
     },
+    "停止生成": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop Generating"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "停止生成"
+          }
+        }
+      }
+    },
+    "先在 设置 → AI 启用并配置一个 Provider": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable and configure a provider in Settings → AI first"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先在 设置 → AI 启用并配置一个 Provider"
+          }
+        }
+      }
+    },
     "先在上方启用并配置至少一个 Provider": {
       "localizations": {
         "en": {
@@ -706,6 +754,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "关闭"
+          }
+        }
+      }
+    },
+    "关闭 AI 助手": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close AI Assistant"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭 AI 助手"
           }
         }
       }
@@ -1014,6 +1078,22 @@
         }
       }
     },
+    "发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发送"
+          }
+        }
+      }
+    },
     "取消": {
       "localizations": {
         "en": {
@@ -1074,6 +1154,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "名称"
+          }
+        }
+      }
+    },
+    "向 AI 提问…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask AI…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "向 AI 提问…"
+          }
+        }
+      }
+    },
+    "向 AI 提问当前文档或选中内容": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask AI about the current document or selection"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "向 AI 提问当前文档或选中内容"
           }
         }
       }
@@ -1222,6 +1334,54 @@
         }
       }
     },
+    "复制为带回链的引用（当前页）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy as Quote with Backlink (current page)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制为带回链的引用（当前页）"
+          }
+        }
+      }
+    },
+    "复制代码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy code"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制代码"
+          }
+        }
+      }
+    },
+    "复制回复": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Reply"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制回复"
+          }
+        }
+      }
+    },
     "复制译文": {
       "localizations": {
         "en": {
@@ -1298,6 +1458,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "字号"
+          }
+        }
+      }
+    },
+    "存为新笔记": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save as New Note"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存为新笔记"
           }
         }
       }
@@ -1478,6 +1654,22 @@
         }
       }
     },
+    "已停止": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止"
+          }
+        }
+      }
+    },
     "已取消翻译：首次使用 AI 功能需确认隐私告知": {
       "localizations": {
         "en": {
@@ -1490,6 +1682,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "已取消翻译：首次使用 AI 功能需确认隐私告知"
+          }
+        }
+      }
+    },
+    "已复制带回链的引用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied quote with backlink"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已复制带回链的引用"
+          }
+        }
+      }
+    },
+    "已附带：%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Included: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已附带：%@"
           }
         }
       }
@@ -1554,6 +1778,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "当前 PDF 还没有任何标注。"
+          }
+        }
+      }
+    },
+    "当前文档": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前文档"
           }
         }
       }
@@ -1702,6 +1942,22 @@
         }
       }
     },
+    "打开设置": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Settings"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开设置"
+          }
+        }
+      }
+    },
     "扫描中…": {
       "localizations": {
         "en": {
@@ -1794,6 +2050,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "提问时附带选中文本"
+          }
+        }
+      }
+    },
+    "插入到光标处": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Insert at Cursor"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "插入到光标处"
           }
         }
       }
@@ -1910,6 +2182,38 @@
         }
       }
     },
+    "文档 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "document %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文档 %@"
+          }
+        }
+      }
+    },
+    "文档 %@（截断）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "document %@ (truncated)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文档 %@（截断）"
+          }
+        }
+      }
+    },
     "文档中没有标题": {
       "localizations": {
         "en": {
@@ -1938,6 +2242,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "文档大纲"
+          }
+        }
+      }
+    },
+    "新会话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Session"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新会话"
           }
         }
       }
@@ -2150,6 +2470,22 @@
         }
       }
     },
+    "显示 AI 助手": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show AI Assistant"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示 AI 助手"
+          }
+        }
+      }
+    },
     "暂无书签": {
       "localizations": {
         "en": {
@@ -2178,6 +2514,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "暂无标注"
+          }
+        }
+      }
+    },
+    "替换编辑器选区": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace Editor Selection"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "替换编辑器选区"
           }
         }
       }
@@ -2439,6 +2791,7 @@
       }
     },
     "模型": {
+      "extractionState": "stale",
       "localizations": {
         "en": {
           "stringUnit": {
@@ -2838,6 +3191,22 @@
         }
       }
     },
+    "编辑器中没有选中内容": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No selection in the editor"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "编辑器中没有选中内容"
+          }
+        }
+      }
+    },
     "编辑器字体": {
       "localizations": {
         "en": {
@@ -3190,6 +3559,22 @@
         }
       }
     },
+    "该轮提问是否附带此上下文（与 设置 → AI 同步）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whether this context is included with the question (synced with Settings → AI)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该轮提问是否附带此上下文（与 设置 → AI 同步）"
+          }
+        }
+      }
+    },
     "语言": {
       "localizations": {
         "en": {
@@ -3350,6 +3735,54 @@
         }
       }
     },
+    "选区": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selection"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选区"
+          }
+        }
+      }
+    },
+    "选区 %lld 字": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld-char selection"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选区 %lld 字"
+          }
+        }
+      }
+    },
+    "选区 %lld 字（截断）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld-char selection (truncated)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选区 %lld 字（截断）"
+          }
+        }
+      }
+    },
     "选择包含 Markdown / PDF 的文件夹，作为工作区打开": {
       "localizations": {
         "en": {
@@ -3490,6 +3923,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "附带当前文档全文"
+          }
+        }
+      }
+    },
+    "隐藏 AI 助手": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide AI Assistant"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隐藏 AI 助手"
           }
         }
       }

@@ -15,6 +15,7 @@ struct ContentView: View {
   @EnvironmentObject private var imageStore: ImagePreviewStore
   @EnvironmentObject private var settingsStore: SettingsStore
   @EnvironmentObject private var externalOpen: ExternalOpenCoordinator
+  @EnvironmentObject private var aiChatStore: AIChatStore
 
   var body: some View {
     VStack(spacing: 0) {
@@ -68,7 +69,8 @@ struct ContentView: View {
       workspaceStore.onStateChange = { [weak workspaceStore] in
         stateStore.workspaceDidChange(
           root: workspaceStore?.root?.id,
-          collapsedFolders: workspaceStore?.collapsedFolders ?? []
+          collapsedFolders: workspaceStore?.collapsedFolders ?? [],
+          aiAssistantVisible: workspaceStore?.isAIAssistantPresented ?? false
         )
         // 反链解析所需根目录（纯赋值，折叠态变化时同值覆盖无副作用）；
         // 重扫已分流到 onMarkdownFilesChange，自动保存/折叠不再全量重读 md
@@ -99,6 +101,42 @@ struct ContentView: View {
         stateStore.switchWorkspace(to: url, workspaceStore: workspaceStore, tabStore: tabStore)
       }
       externalOpen.markReady()
+      // AI 助手上下文源（FR-AI.2 两层：选区 / 当前文档；工作区检索层 M5-D）
+      aiChatStore.contextSources.isPDFActive = { [weak tabStore] in
+        tabStore?.activeGroup.activeTab?.kind == .pdf
+      }
+      aiChatStore.contextSources.pdfSelection = { [weak pdfStore] in
+        guard let raw = pdfStore?.pdfView?.currentSelection?.string else { return nil }
+        let text = TranslationTextNormalizer.normalize(raw)
+        return text.isEmpty ? nil : text
+      }
+      aiChatStore.contextSources.mdSelection = { [weak tabStore] completion in
+        guard let store = tabStore?.activeEditorStore else { return completion(nil) }
+        store.fetchSelection { text in
+          completion((text?.isEmpty ?? true) ? nil : text)
+        }
+      }
+      aiChatStore.contextSources.activeDocument = { [weak tabStore, weak pdfStore] in
+        guard let tab = tabStore?.activeGroup.activeTab else { return nil }
+        switch tab.kind {
+        case .markdown:
+          guard let store = tabStore?.activeEditorStore else { return nil }
+          return (name: tab.title, text: store.text)
+        case .pdf:
+          guard let document = pdfStore?.pdfView?.document else { return nil }
+          // 逐页拼接、到预算即停（大 PDF 全量 string 提取可达百 ms 级）
+          var text = ""
+          for index in 0..<document.pageCount {
+            guard text.count < AIContextBuilder.documentBudget else { break }
+            if let page = document.page(at: index)?.string {
+              text += page + "\n"
+            }
+          }
+          return text.isEmpty ? nil : (name: tab.title, text: text)
+        default:
+          return nil
+        }
+      }
     }
     // 快速打开面板（FR-6.1 ⌘P）与全文搜索面板（FR-6.2 ⌘⇧F）与命令面板（FR-6.3 ⌘O）
     .overlay {
@@ -156,6 +194,15 @@ struct ContentView: View {
             .help("导出")
           }
           ToolbarItem(placement: .primaryAction) {
+            // AI 助手（FR-AI.2；⌘⇧A / 命令面板同源开关）
+            Button {
+              workspaceStore.isAIAssistantPresented.toggle()
+            } label: {
+              Image(systemName: workspaceStore.isAIAssistantPresented ? "sparkles.rectangle.stack.fill" : "sparkles.rectangle.stack")
+            }
+            .help(workspaceStore.isAIAssistantPresented ? "隐藏 AI 助手" : "显示 AI 助手")
+          }
+          ToolbarItem(placement: .primaryAction) {
             // 分栏切换（FR-1.4；设计稿 #btnSplit）
             Button {
               tabStore.toggleSplit()
@@ -189,10 +236,14 @@ struct ContentView: View {
     splitView.setPosition(splitView.bounds.width - 266, ofDividerAt: lastDivider)
   }
 
-  /// 右侧面板：pdf 标签 = 缩略图/书签/标注/引用（FR-3.3/5.4）；其余 = 大纲（FR-2.6）+ 反向链接（FR-5.4）
+  /// 右侧面板：AI 助手可见时整栏替代（FR-AI.2 替代式单栏）；
+  /// 否则 pdf 标签 = 缩略图/书签/标注/引用（FR-3.3/5.4），其余 = 大纲（FR-2.6）+ 反向链接（FR-5.4）
   @ViewBuilder
   private var detailPanel: some View {
-    if let tab = tabStore.activeGroup.activeTab, tab.kind == .pdf, let url = tab.url {
+    if workspaceStore.isAIAssistantPresented {
+      AIAssistantPanelView()
+        .frame(minWidth: 300)
+    } else if let tab = tabStore.activeGroup.activeTab, tab.kind == .pdf, let url = tab.url {
       PDFSidebarView(url: url)
         .frame(minWidth: 266)
     } else {
@@ -365,6 +416,14 @@ struct ContentView: View {
     })
     commands.append(AppCommand(id: "focus-mode", title: String(localized: "切换专注模式"), section: String(localized: "视图"), isEnabled: { tabStore.activeEditorStore != nil }) {
       settingsStore.focusMode.toggle()
+    })
+    commands.append(AppCommand(
+      id: "ai-assistant",
+      title: workspaceStore.isAIAssistantPresented ? String(localized: "隐藏 AI 助手") : String(localized: "显示 AI 助手"),
+      section: String(localized: "视图"),
+      shortcut: "⌘⇧A"
+    ) {
+      workspaceStore.isAIAssistantPresented.toggle()
     })
     commands.append(AppCommand(id: "settings", title: String(localized: "设置…"), section: String(localized: "其他"), shortcut: "⌘,") {
       NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
