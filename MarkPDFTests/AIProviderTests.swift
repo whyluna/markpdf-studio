@@ -303,4 +303,33 @@ final class AIProviderTests: XCTestCase {
       XCTAssertEqual(error as? AIServiceError, .provider("Invalid API Key"))
     }
   }
+
+  // MARK: - 联通性信封校验（连接测试专用）
+
+  /// always-thinking 模型小配额下正文为空属正常：信封完整即通过
+  func testOpenAIEnvelopeAcceptsEmptyContent() throws {
+    let data = Data(#"{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"length"}]}"#.utf8)
+    XCTAssertNoThrow(try AIResponseDecoder.openAICompletionIsWellFormed(data))
+  }
+
+  /// 缺 choices（如 Anthropic 形状误配 OpenAI 协议）→ invalidResponse
+  func testOpenAIEnvelopeRejectsMissingChoices() {
+    let data = Data(#"{"content":[{"type":"text","text":"pong"}]}"#.utf8)
+    XCTAssertThrowsError(try AIResponseDecoder.openAICompletionIsWellFormed(data)) { error in
+      XCTAssertEqual(error as? AIServiceError, .invalidResponse)
+    }
+  }
+
+  func testOpenAIEnvelopeErrorPayloadThrows() {
+    let data = Data(#"{"error":{"message":"model not found"}}"#.utf8)
+    XCTAssertThrowsError(try AIResponseDecoder.openAICompletionIsWellFormed(data)) { error in
+      XCTAssertEqual(error as? AIServiceError, .provider("model not found"))
+    }
+  }
+
+  /// Anthropic 信封：content 允许为空数组（思考耗尽配额）
+  func testAnthropicEnvelopeAcceptsEmptyContent() throws {
+    let data = Data(#"{"content":[]}"#.utf8)
+    XCTAssertNoThrow(try AIResponseDecoder.anthropicCompletionIsWellFormed(data))
+  }
 }

@@ -104,11 +104,22 @@ final class AIService {
     self.keys = keys
   }
 
-  /// 联通性测试（设置页「连接测试」）：发最小消息，返回往返耗时（秒）
+  /// 联通性测试（设置页「连接测试」）：发最小消息，信封结构完整即通过
+  /// （不验正文非空——always-thinking 模型小配额下正文为空属正常），返回往返耗时（秒）
   @discardableResult
   func testConnection(kind: AIProviderKind, config: AIProviderConfig, model: String) async throws -> TimeInterval {
     let start = Date()
-    _ = try await complete(kind: kind, config: config, model: model, messages: [.user("ping")], maxTokens: 16)
+    let request = try makeRequest(kind: kind, config: config, model: model, messages: [.user("ping")], stream: false, maxTokens: 128)
+    let (data, http) = try await transport.send(request)
+    guard (200..<300).contains(http.statusCode) else {
+      throw AIServiceError.httpStatus(http.statusCode, String(decoding: data, as: UTF8.self).truncated(to: 200))
+    }
+    switch kind.family {
+    case .openAICompatible:
+      try AIResponseDecoder.openAICompletionIsWellFormed(data)
+    case .anthropic:
+      try AIResponseDecoder.anthropicCompletionIsWellFormed(data)
+    }
     return Date().timeIntervalSince(start)
   }
 

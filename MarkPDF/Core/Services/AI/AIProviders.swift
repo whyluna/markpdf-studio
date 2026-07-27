@@ -364,4 +364,32 @@ enum AIResponseDecoder {
     }
     return text
   }
+
+  // MARK: - 联通性校验（连接测试专用）
+
+  /// 只验「端点+鉴权+模型能给出结构完整的补全信封」，不验正文非空：
+  /// always-thinking 模型（如 Kimi K3）在极小 max_tokens 下思考耗尽配额、
+  /// 正文为空属正常响应，误判 invalidResponse 会让连接测试永远失败
+  static func openAICompletionIsWellFormed(_ data: Data) throws {
+    if let error = try? JSONDecoder().decode(AIChunkDecoder.OpenAIErrorPayload.self, from: data) {
+      throw AIServiceError.provider(error.error.message)
+    }
+    do {
+      _ = try JSONDecoder().decode(OpenAICompletion.self, from: data)
+    } catch {
+      throw AIServiceError.invalidResponse
+    }
+  }
+
+  /// Anthropic 版信封校验（content 数组存在即可，允许为空）
+  static func anthropicCompletionIsWellFormed(_ data: Data) throws {
+    if let error = try? JSONDecoder().decode(AIChunkDecoder.AnthropicErrorPayload.self, from: data) {
+      throw AIServiceError.provider(error.error.message)
+    }
+    do {
+      _ = try JSONDecoder().decode(AnthropicCompletion.self, from: data)
+    } catch {
+      throw AIServiceError.invalidResponse
+    }
+  }
 }
