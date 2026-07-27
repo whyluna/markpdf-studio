@@ -7,12 +7,29 @@ import os
 enum AISessionStore {
   static let messageCap = 100
 
+  struct StoredToolActivity: Codable, Equatable {
+    var name: String
+    var argsSummary: String
+    var resultSummary: String?
+  }
+
   struct StoredMessage: Codable, Equatable {
     var role: String
     var content: String
     var contextSummary: String?
     var promptQuestion: String?
     var wasCancelled: Bool?
+    /// 工具活动摘要（v1.3 agent 循环；旧文件缺省 decodeIfPresent 兼容）
+    var toolActivities: [StoredToolActivity]?
+
+    init(role: String, content: String, contextSummary: String?, promptQuestion: String?, wasCancelled: Bool?, toolActivities: [StoredToolActivity]? = nil) {
+      self.role = role
+      self.content = content
+      self.contextSummary = contextSummary
+      self.promptQuestion = promptQuestion
+      self.wasCancelled = wasCancelled
+      self.toolActivities = toolActivities
+    }
   }
 
   struct StoredSession: Codable, Equatable {
@@ -20,6 +37,18 @@ enum AISessionStore {
     var docPath: String?
     var messages: [StoredMessage]
     var updatedAt: Date
+    /// L2 滚动摘要（v1.3 上下文分层；旧文件缺省兼容）
+    var rollingSummary: String?
+    /// 已并入摘要的消息前缀条数
+    var summarizedCount: Int?
+
+    init(docPath: String?, messages: [StoredMessage], updatedAt: Date, rollingSummary: String? = nil, summarizedCount: Int? = nil) {
+      self.docPath = docPath
+      self.messages = messages
+      self.updatedAt = updatedAt
+      self.rollingSummary = rollingSummary
+      self.summarizedCount = summarizedCount
+    }
   }
 
   struct SessionsFile: Codable, Equatable {

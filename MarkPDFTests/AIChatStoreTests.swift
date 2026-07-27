@@ -296,69 +296,200 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertTrue(store.messages.first?.contextSummary?.contains("已选 1 节") == true)
   }
 
-  /// 工作区检索层：候选 ≤ 阈值直接全注入（免路由），[Workspace] 块与摘要
-  func testWorkspaceCandidatesDirectInjected() async {
-    var streamBodies: [Data] = []
+  // MARK: - agent 工具调用循环（v1.3）
+
+  /// SSE：一次 OpenAI 工具调用流（list_documents）
+  private var sseToolCallTurn: [Data] {
+    [
+      Data("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"workspace_list_documents\",\"arguments\":\"\"}}]}}]}\n\n".utf8),
+      Data("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]}}]}\n\n".utf8),
+      Data("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n".utf8),
+      Data("data: [DONE]\n\n".utf8),
+    ]
+  }
+
+  private func makeWorkspace() throws -> (root: URL, files: [URL]) {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AgentLoopTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let note = root.appendingPathComponent("paper-notes.md")
+    try "# 结论\n注意力机制是关键".write(to: note, atomically: true, encoding: .utf8)
+    return (root, [note])
+  }
+
+  /// 完整循环：首轮模型请求工具 → 执行 → 结果回传 → 次轮流式作答
+  func testAgentLoopExecutesToolThenAnswers() async throws {
+    let workspace = try makeWorkspace()
+    defer { try? FileManager.default.removeItem(at: workspace.root) }
+
+    var requestBodies: [Data] = []
     let transport = AIServiceTests.MockAITransport(streamHandler: { request in
-      streamBodies.append(request.httpBody ?? Data())
+      requestBodies.append(request.httpBody ?? Data())
+      let isToolTurn = requestBodies.count == 1
       return AsyncThrowingStream { continuation in
-        continuation.yield(self.sse("答"))
+        if isToolTurn {
+          for chunk in self.sseToolCallTurn { continuation.yield(chunk) }
+        } else {
+          continuation.yield(self.sse("笔记里提到注意力机制"))
+          continuation.yield(self.sseDone)
+        }
         continuation.finish()
       }
     })
     let store = makeStore(transport: transport) { settings in
       settings.update { $0.contextIncludeWorkspace = true }
     }
-    store.contextSources.workspaceCandidates = { _, completion in
-      completion([AIWorkspaceRetriever.Candidate(
-        file: "other.md",
-        section: DocumentSection(title: "原理", anchor: "§原理", text: "节的完整内容")
-      )])
+    store.contextSources.workspaceFiles = { (root: workspace.root, files: workspace.files) }
+
+    store.send("工作区里有哪些笔记")
+    let done = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    XCTAssertTrue(done)
+    XCTAssertEqual(requestBodies.count, 2, "工具轮 + 作答轮共两次请求")
+    // 首轮带 tools 定义
+    let first = String(decoding: requestBodies[0], as: UTF8.self)
+    XCTAssertTrue(first.contains("workspace_search"), "tools 定义送出")
+    // 次轮带 assistant(tool_calls) 与工具结果
+    let second = String(decoding: requestBodies[1], as: UTF8.self)
+    XCTAssertTrue(second.contains("call_1"))
+    XCTAssertTrue(second.contains("paper-notes.md"), "工具结果（文件清单）回传")
+    // UI：活动 chip 完成态 + 最终回答
+    let assistant = store.messages.last
+    XCTAssertEqual(assistant?.content, "笔记里提到注意力机制")
+    XCTAssertEqual(assistant?.toolActivities.count, 1)
+    XCTAssertEqual(assistant?.toolActivities.first?.isRunning, false)
+  }
+
+  /// 「工作区」开关关闭：请求不带 tools
+  func testWorkspaceOffSendsNoTools() async {
+    var requestBodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      requestBodies.append(request.httpBody ?? Data())
+      return AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)  // contextIncludeWorkspace 默认 false
+    store.send("问题")
+    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    let body = String(decoding: requestBodies.first ?? Data(), as: UTF8.self)
+    XCTAssertFalse(body.contains("\"tools\""))
+  }
+
+  /// 同参数重复调用去重：第二次直接回「Duplicate call」不重复执行
+  func testDuplicateToolCallDeduped() async throws {
+    let workspace = try makeWorkspace()
+    defer { try? FileManager.default.removeItem(at: workspace.root) }
+
+    var requestBodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      requestBodies.append(request.httpBody ?? Data())
+      return AsyncThrowingStream { continuation in
+        if requestBodies.count <= 2 {
+          // 前两轮都请求同一工具同一参数
+          for chunk in self.sseToolCallTurn { continuation.yield(chunk) }
+        } else {
+          continuation.yield(self.sse("答"))
+          continuation.yield(self.sseDone)
+        }
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport) { settings in
+      settings.update { $0.contextIncludeWorkspace = true }
     }
+    store.contextSources.workspaceFiles = { (root: workspace.root, files: workspace.files) }
 
     store.send("问题")
     _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
-    let body = String(decoding: streamBodies.first ?? Data(), as: UTF8.self)
-    XCTAssertTrue(body.contains("[Workspace]"))
-    XCTAssertTrue(body.contains("other.md §原理"))
-    XCTAssertTrue(body.contains("节的完整内容"), "注入节全文而非片段")
-    XCTAssertTrue(store.messages.first?.contextSummary?.contains("工作区 1 处") == true)
+    XCTAssertEqual(requestBodies.count, 3)
+    let third = String(decoding: requestBodies[2], as: UTF8.self)
+    XCTAssertTrue(third.contains("Duplicate call"), "重复调用返回去重提示")
   }
 
-  /// 工作区候选超阈值：先路由选节，仅选中节注入
-  func testWorkspaceCandidatesRoutedWhenMany() async {
-    var streamBodies: [Data] = []
+  // MARK: - 上下文压缩（L2 滚动摘要）
+
+  /// 载入含 rollingSummary 的会话 → 下轮请求历史区注入摘要
+  func testRollingSummaryInjectedIntoRequest() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("SummaryTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try AISessionStore.save([
+      AISessionStore.StoredSession(
+        docPath: nil,
+        messages: [
+          AISessionStore.StoredMessage(role: "user", content: "旧问", contextSummary: nil, promptQuestion: "旧问", wasCancelled: nil),
+          AISessionStore.StoredMessage(role: "assistant", content: "旧答", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+        ],
+        updatedAt: Date(),
+        rollingSummary: "早期结论：注意力有效",
+        summarizedCount: 2
+      )
+    ], workspaceRoot: root)
+
+    var requestBodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      requestBodies.append(request.httpBody ?? Data())
+      return AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)
+    store.workspaceDidChange(root: root)
+    store.send("新问题")
+    _ = await waitUntil { store.phase == .idle && requestBodies.count == 1 }
+    let body = String(decoding: requestBodies[0], as: UTF8.self)
+    XCTAssertTrue(body.contains("[Earlier conversation summary]"))
+    XCTAssertTrue(body.contains("注意力有效"))
+    // summarizedCount=2：旧问/旧答不再以原文出现
+    XCTAssertFalse(body.contains(#""content":"旧问""#))
+  }
+
+  /// 历史超限触发后台压缩：完成后 rollingSummary 落盘
+  func testCompactionRunsAndPersists() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("CompactTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    // 18 条历史（>16 触发压缩）
+    var stored: [AISessionStore.StoredMessage] = []
+    for index in 0..<9 {
+      stored.append(AISessionStore.StoredMessage(role: "user", content: "问\(index)", contextSummary: nil, promptQuestion: "问\(index)", wasCancelled: nil))
+      stored.append(AISessionStore.StoredMessage(role: "assistant", content: "答\(index)", contextSummary: nil, promptQuestion: nil, wasCancelled: nil))
+    }
+    try AISessionStore.save(
+      [AISessionStore.StoredSession(docPath: nil, messages: stored, updatedAt: Date())],
+      workspaceRoot: root
+    )
+
     let transport = AIServiceTests.MockAITransport(
       sendHandler: { _ in
-        // 路由：选第 4 节
-        (Data(#"{"choices":[{"message":{"content":"[4]"}}]}"#.utf8),
+        // 压缩请求（complete）返回摘要
+        (Data(#"{"choices":[{"message":{"content":"压缩摘要：前九轮结论"}}]}"#.utf8),
          HTTPURLResponse(url: URL(string: "https://x.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
       },
-      streamHandler: { request in
-        streamBodies.append(request.httpBody ?? Data())
-        return AsyncThrowingStream { continuation in
+      streamHandler: { _ in
+        AsyncThrowingStream { continuation in
           continuation.yield(self.sse("答"))
           continuation.finish()
         }
       }
     )
-    let store = makeStore(transport: transport) { settings in
-      settings.update { $0.contextIncludeWorkspace = true }
+    let store = makeStore(transport: transport)
+    store.workspaceDidChange(root: root)
+    store.send("触发压缩的问题")
+    _ = await waitUntil { store.phase == .idle }
+    // 压缩后台完成 → 落盘含 rollingSummary
+    let persisted = await waitUntil {
+      store.flush()
+      let sessions = (try? AISessionStore.load(workspaceRoot: root)) ?? []
+      return sessions.first?.rollingSummary?.contains("压缩摘要") == true
     }
-    store.contextSources.workspaceCandidates = { _, completion in
-      completion((0..<6).map {
-        AIWorkspaceRetriever.Candidate(
-          file: "f.md",
-          section: DocumentSection(title: "节\($0)", anchor: "§节\($0)", text: "内容\($0)")
-        )
-      })
-    }
-
-    store.send("问题")
-    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
-    let body = String(decoding: streamBodies.first ?? Data(), as: UTF8.self)
-    XCTAssertTrue(body.contains("内容4"), "路由选中的节注入")
-    XCTAssertFalse(body.contains("内容0"), "未选中节不注入")
+    XCTAssertTrue(persisted)
+    let sessions = try AISessionStore.load(workspaceRoot: root)
+    XCTAssertGreaterThan(sessions.first?.summarizedCount ?? 0, 0)
   }
 
   func testNewSessionClears() async {

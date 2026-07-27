@@ -9,8 +9,10 @@ enum AIContextBuilder {
   /// 当前文档预算保守回退值（v1.2 起按模型动态计算，见 AIModelContext.documentCharBudget；
   /// 此常量仅作未传参时的回退与测试基准）
   static let documentBudget = 8_000
-  /// 送出的历史消息条数上限（12 轮 user+assistant）
-  static let historyMessageCap = 24
+  /// L1 工作记忆：送出的历史消息条数上限（8 轮 user+assistant；更早并入滚动摘要）
+  static let historyMessageCap = 16
+  /// 滚动摘要压缩请求的回复上限
+  static let compactionMaxTokens = 600
 
   struct BuiltContext: Equatable {
     /// 组装后的当轮 user 消息（标签块 + 问题）
@@ -19,23 +21,15 @@ enum AIContextBuilder {
     let summary: String?
   }
 
-  /// 工作区检索命中（第三层上下文；FullTextSearch 召回）
-  struct WorkspaceHit: Equatable {
-    let file: String
-    let anchor: String
-    let snippet: String
-  }
-
   /// 固定人设（模型输入，英文写死不进 catalog；说明标签块/锚点/截断约定）
   static func systemPrompt() -> String {
     """
     You are a helpful assistant embedded in MarkPDF Studio, a Markdown + PDF reading and writing tool. \
-    The user's question may include context blocks labeled [Selection] (text the user selected), \
-    [Document: name] (the current document, possibly truncated or reduced to selected sections), and \
-    [Workspace] (snippets retrieved from other files in the workspace). \
+    The user's question may include context blocks labeled [Selection] (text the user selected) and \
+    [Document: name] (the current document, possibly truncated or reduced to selected sections). \
     Sections may be prefixed with anchors like [§Title] or [p.5]; when your answer relies on a section, \
-    cite its anchor inline. Base document-related answers only on the provided context; \
-    say so plainly when it is insufficient. \
+    cite its anchor inline. Base document-related answers only on the provided context and tool results; \
+    say so plainly when they are insufficient. \
     Answer in the language the user writes in. Prefer concise Markdown.
     """
   }
@@ -47,8 +41,7 @@ enum AIContextBuilder {
     selection: String?,
     document: (name: String, text: String)?,
     documentBudget: Int = AIContextBuilder.documentBudget,
-    documentAnnotation: String? = nil,
-    workspaceHits: [WorkspaceHit] = []
+    documentAnnotation: String? = nil
   ) -> BuiltContext {
     var blocks: [String] = []
     var summaryParts: [String] = []
@@ -75,11 +68,6 @@ enum AIContextBuilder {
         summaryParts.append(String(localized: "文档 \(document.name)"))
       }
     }
-    if !workspaceHits.isEmpty {
-      let lines = workspaceHits.map { "[\($0.file) \($0.anchor)] \($0.snippet)" }
-      blocks.append("[Workspace]\n\(lines.joined(separator: "\n"))")
-      summaryParts.append(String(localized: "工作区 \(workspaceHits.count) 处"))
-    }
     blocks.append(blocks.isEmpty ? question : "[Question]\n\(question)")
     return BuiltContext(
       userMessage: blocks.joined(separator: "\n\n"),
@@ -92,5 +80,41 @@ enum AIContextBuilder {
   static func trimHistory(_ messages: [AIChatMessage]) -> [AIChatMessage] {
     let nonEmpty = messages.filter { !($0.role == .assistant && $0.content.isEmpty) }
     return Array(nonEmpty.suffix(historyMessageCap))
+  }
+
+  /// 历史区组装（v1.3 三层）：L2 滚动摘要首条注入（配 assistant 占位保交替）
+  /// + L1 最近原文（条数 cap + 字符预算从新到旧掐头）
+  static func historyMessages(
+    _ messages: [AIChatMessage],
+    rollingSummary: String?,
+    charBudget: Int
+  ) -> [AIChatMessage] {
+    let recent = trimHistory(messages)
+    var kept: [AIChatMessage] = []
+    var total = 0
+    for message in recent.reversed() {
+      total += message.content.count
+      if total > charBudget, !kept.isEmpty { break }
+      kept.insert(message, at: 0)
+    }
+    guard let rollingSummary, !rollingSummary.isEmpty else { return kept }
+    return [
+      .user("[Earlier conversation summary]\n\(rollingSummary)"),
+      .assistant("OK."),
+    ] + kept
+  }
+
+  /// 压缩请求（后台异步；输入 = 旧摘要 + 待压缩轮次原文，输出新摘要整体替换）
+  static func compactionMessages(existingSummary: String?, turns: [AIChatMessage]) -> [AIChatMessage] {
+    let transcript = turns.map { "\($0.role.rawValue): \($0.content)" }.joined(separator: "\n")
+    let previous = existingSummary.map { "Previous summary:\n\($0)\n\n" } ?? ""
+    return [
+      .system("""
+        Compress the following conversation into a concise summary (≤400 words). \
+        Keep conclusions, cited anchors like [§Title]/[p.N], unresolved questions, and user preferences. \
+        Merge with the previous summary if given. Reply with the summary only.
+        """),
+      .user(previous + "Conversation:\n" + transcript),
+    ]
   }
 }

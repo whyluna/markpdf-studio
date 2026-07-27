@@ -107,6 +107,41 @@ final class AIContextBuilderTests: XCTestCase {
     XCTAssertEqual(trimmed.last?.content, "答 19", "掐头留尾保最近")
   }
 
+  // MARK: - 历史分层（v1.3）
+
+  func testHistoryMessagesInjectsRollingSummaryWithPairedPlaceholder() {
+    let history: [AIChatMessage] = [.user("旧问"), .assistant("旧答")]
+    let out = AIContextBuilder.historyMessages(history, rollingSummary: "早期结论：X 有效", charBudget: 10_000)
+    XCTAssertEqual(out.count, 4)
+    XCTAssertTrue(out[0].content.hasPrefix("[Earlier conversation summary]"))
+    XCTAssertEqual(out[1].role, .assistant, "配对占位保交替")
+    XCTAssertEqual(out[2].content, "旧问")
+  }
+
+  func testHistoryMessagesCharBudgetTrimsOldestFirst() {
+    let history: [AIChatMessage] = [
+      .user(String(repeating: "旧", count: 500)),
+      .assistant(String(repeating: "答", count: 500)),
+      .user("新问"),
+      .assistant("新答"),
+    ]
+    let out = AIContextBuilder.historyMessages(history, rollingSummary: nil, charBudget: 100)
+    XCTAssertEqual(out.map(\.content).last, "新答")
+    XCTAssertTrue(out.count < 4, "超字符预算从旧端掐头")
+    XCTAssertEqual(out.first?.content, "新问", "保最新")
+  }
+
+  func testCompactionMessagesShape() {
+    let out = AIContextBuilder.compactionMessages(
+      existingSummary: "旧摘要",
+      turns: [.user("问"), .assistant("答 [§3.2]")]
+    )
+    XCTAssertEqual(out.count, 2)
+    XCTAssertEqual(out[0].role, .system)
+    XCTAssertTrue(out[1].content.contains("Previous summary:\n旧摘要"))
+    XCTAssertTrue(out[1].content.contains("assistant: 答 [§3.2]"))
+  }
+
   // MARK: - markdown 分块
 
   func testPlainParagraphs() {

@@ -170,17 +170,12 @@ struct ContentView: View {
           return nil
         }
       }
-      // 工作区检索（第三层，v1.2 完整形态）：后台召回命中文件并结构切节，排除当前文档
-      aiChatStore.contextSources.workspaceCandidates = { [weak workspaceStore, weak tabStore] question, completion in
+      // 工作区工具（v1.3 agent 循环）：根 + 文件清单供工具执行与 system 提示
+      aiChatStore.contextSources.workspaceFiles = { [weak workspaceStore] in
         let files = workspaceStore?.allFiles
           .filter { $0.kind == .markdown || $0.kind == .pdf }
           .map(\.id) ?? []
-        let current = tabStore?.activeGroup.activeTab?.url
-        guard !files.isEmpty else { return completion([]) }
-        Task.detached(priority: .userInitiated) {
-          let candidates = AIWorkspaceRetriever.candidateSections(question: question, files: files, excluding: current)
-          await MainActor.run { completion(candidates) }
-        }
+        return (root: workspaceStore?.root?.id, files: files)
       }
     }
     // 快速打开面板（FR-6.1 ⌘P）与全文搜索面板（FR-6.2 ⌘⇧F）与命令面板（FR-6.3 ⌘O）

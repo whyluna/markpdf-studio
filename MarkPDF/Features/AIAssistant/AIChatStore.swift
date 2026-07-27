@@ -13,13 +13,24 @@ struct AIContextSources {
   var activeDocument: (Int) -> (name: String, text: String)? = { _ in nil }
   /// 当前文档的结构切节（超预算时两遍路由用）；无结构/无文档 nil
   var documentSections: () -> [DocumentSection]? = { nil }
-  /// 工作区检索候选（第三层：召回命中文件并切节，后台执行回调主线程）
-  var workspaceCandidates: (String, @escaping ([AIWorkspaceRetriever.Candidate]) -> Void) -> Void = { $1([]) }
+  /// 工作区根与文件清单（v1.3 工具执行与 system 提示用）
+  var workspaceFiles: () -> (root: URL?, files: [URL]) = { (nil, []) }
 }
 
-/// AI 助手对话状态机（FR-AI.2）：多轮流式、可取消/重试；本批会话仅内存态（M5-D 落盘）。
+/// AI 助手对话状态机（FR-AI.2 v1.3）：agent 工具调用循环——模型自主决定
+/// 是否检索工作区、用什么关键词；三重终止（自然停止/轮数上限/用户取消）。
+/// 上下文三层管理：L1 最近原文 + L2 滚动摘要 + L3 全量归档（仅 UI/落盘）。
 @MainActor
 final class AIChatStore: ObservableObject {
+  /// 一次工具调用的 UI 活动（折叠 chip：运行中 → 结果摘要）
+  struct ToolActivity: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    let argsSummary: String
+    var resultSummary: String?
+    var isRunning = true
+  }
+
   struct ChatMessage: Identifiable, Equatable {
     let id = UUID()
     let role: AIChatMessage.Role
@@ -29,14 +40,25 @@ final class AIChatStore: ObservableObject {
     var wasCancelled = false
     /// 该轮实际附带的上下文摘要（user 消息行小字）
     var contextSummary: String?
-    /// 送模型的完整 user 消息（含上下文标签块）；重试时复用当轮问题重新采集，历史轮送此原始问题
+    /// 原始问题（历史轮送此而非带上下文块的完整消息；重试复用）
     var promptQuestion: String?
+    /// 本条回复过程中的工具调用活动（agent 循环；跨提问只留摘要不进模型历史）
+    var toolActivities: [ToolActivity] = []
   }
 
   enum Phase: Equatable {
     case idle
     case streaming
     case failed(String)
+  }
+
+  /// 单会话线程（FR-AI.3 + v1.3 上下文分层）
+  private struct Thread {
+    var messages: [ChatMessage] = []
+    /// L2 滚动摘要（更早轮次的压缩；随会话文件持久化）
+    var rollingSummary: String?
+    /// messages 中已并入摘要的前缀条数（历史组装从此下标起送原文）
+    var summarizedCount = 0
   }
 
   @Published private(set) var messages: [ChatMessage] = []
@@ -56,15 +78,24 @@ final class AIChatStore: ObservableObject {
 
   var contextSources = AIContextSources()
 
+  /// agent 循环轮数上限（超限后最后一轮不带 tools，模型只能作答）
+  static let maxToolTurns = 6
+  /// 单轮工具结果总量上限（字符）
+  static let toolResultsBudgetPerTurn = 12_000
+
   private let settings: AISettingsStore
   private let service: AIService
   private var streamTask: Task<Void, Never>?
   /// 流式增量缓冲（节流落 @Published，防每秒几十次全面板重渲）
   private var streamBuffer = ""
   private var flushScheduled = false
+  /// 后台压缩任务（历史超预算时旧轮次并入滚动摘要；不阻塞当轮）
+  private var compactionTask: Task<Void, Never>?
+  /// 压缩失败后间隔一轮再试
+  private var skipCompactionOnce = false
 
   // 会话按文档隔离（FR-AI.3 v1.2）：key = 文档相对工作区路径（"" = 工作区通用线程）
-  private var threads: [String: [ChatMessage]] = [:]
+  private var threads: [String: Thread] = [:]
   private var activeDocKey = ""
   private var workspaceRoot: URL?
   private var storageBroken = false
@@ -84,6 +115,7 @@ final class AIChatStore: ObservableObject {
     flush()
     streamTask?.cancel()
     streamTask = nil
+    compactionTask?.cancel()
     workspaceRoot = newRoot
     storageBroken = false
     threads = [:]
@@ -92,14 +124,18 @@ final class AIChatStore: ObservableObject {
     guard let newRoot else { return }
     do {
       for session in try AISessionStore.load(workspaceRoot: newRoot) {
-        threads[session.docPath ?? ""] = session.messages.map(ChatMessage.init(stored:))
+        threads[session.docPath ?? ""] = Thread(
+          messages: session.messages.map(ChatMessage.init(stored:)),
+          rollingSummary: session.rollingSummary,
+          summarizedCount: session.summarizedCount ?? 0
+        )
       }
     } catch {
       storageBroken = true
       storageError = error.localizedDescription
       Logger.ai.error("AI 会话载入失败: \(String(describing: error), privacy: .public)")
     }
-    messages = threads[activeDocKey] ?? []
+    messages = threads[activeDocKey]?.messages ?? []
   }
 
   /// 激活文档变化：切换会话线程（同 key 幂等；流式途中切换取消在途——语境已变）
@@ -107,10 +143,10 @@ final class AIChatStore: ObservableObject {
     let key = docKey(for: url)
     guard key != activeDocKey else { return }
     if phase == .streaming { cancel() }
-    threads[activeDocKey] = messages
+    storeActiveThreadMessages()
     activeDocKey = key
     activeDocName = url?.lastPathComponent
-    messages = threads[key] ?? []
+    messages = threads[key]?.messages ?? []
     phase = .idle
   }
 
@@ -129,9 +165,15 @@ final class AIChatStore: ObservableObject {
     return path
   }
 
+  private func storeActiveThreadMessages() {
+    var thread = threads[activeDocKey] ?? Thread()
+    thread.messages = messages
+    threads[activeDocKey] = thread
+  }
+
   /// 消息变化统一收口：回写线程表 + 防抖落盘
   private func syncActiveThread() {
-    threads[activeDocKey] = messages
+    storeActiveThreadMessages()
     guard isPersistent else { return }
     persistDebouncer.schedule { [weak self] in
       self?.persistNow()
@@ -140,13 +182,15 @@ final class AIChatStore: ObservableObject {
 
   private func persistNow() {
     guard let workspaceRoot, isPersistent else { return }
-    threads[activeDocKey] = messages
+    storeActiveThreadMessages()
     let sessions = threads.compactMap { key, thread -> AISessionStore.StoredSession? in
-      guard !thread.isEmpty else { return nil }
+      guard !thread.messages.isEmpty else { return nil }
       return AISessionStore.StoredSession(
         docPath: key.isEmpty ? nil : key,
-        messages: thread.map(\.stored),
-        updatedAt: Date()
+        messages: thread.messages.map(\.stored),
+        updatedAt: Date(),
+        rollingSummary: thread.rollingSummary,
+        summarizedCount: thread.summarizedCount
       )
     }
     do {
@@ -168,7 +212,10 @@ final class AIChatStore: ObservableObject {
       return
     }
     phase = .streaming
-    dispatch(question: trimmed, selection: selection)
+    compactIfNeeded(resolved: selection)
+    streamTask = Task { [weak self] in
+      await self?.prepareAndRun(question: trimmed, resolved: selection)
+    }
   }
 
   func cancel() {
@@ -198,23 +245,62 @@ final class AIChatStore: ObservableObject {
     messages = []
     streamBuffer = ""
     phase = .idle
+    threads[activeDocKey] = Thread()
     syncActiveThread()
   }
 
-  // MARK: - 私有
+  // MARK: - 上下文压缩（L2 滚动摘要，后台不阻塞当轮）
 
-  /// 采集三层上下文（选区/当前文档/工作区检索，按设置开关）并发起流式请求。
-  /// md 选区经桥异步（超时回 nil 不阻塞）；文档超预算走结构选节两遍路由（v1.2）
-  private func dispatch(question: String, selection: AISettingsStore.ResolvedModel) {
-    streamTask = Task { [weak self] in
-      await self?.prepareAndStream(question: question, resolved: selection)
+  private func compactIfNeeded(resolved: AISettingsStore.ResolvedModel) {
+    guard compactionTask == nil, !skipCompactionOnce else {
+      skipCompactionOnce = false
+      return
+    }
+    let thread = threads[activeDocKey] ?? Thread()
+    let summarized = min(thread.summarizedCount, messages.count)
+    let live = Array(messages[summarized...])
+    let liveChars = live.reduce(0) { $0 + $1.content.count }
+    let budget = AIModelContext.historyCharBudget(contextTokens: resolved.contextTokens)
+    guard live.count > AIContextBuilder.historyMessageCap || liveChars > budget else { return }
+
+    // 压最旧一半（至少一整轮）
+    let compactCount = max(live.count / 2, 2)
+    let toCompact = live.prefix(compactCount).map { message in
+      AIChatMessage(role: message.role, content: message.role == .user ? (message.promptQuestion ?? message.content) : message.content)
+    }
+    let existing = thread.rollingSummary
+    let docKey = activeDocKey
+    compactionTask = Task { [weak self] in
+      guard let self else { return }
+      defer { self.compactionTask = nil }
+      do {
+        let summary = try await self.service.complete(
+          kind: resolved.kind,
+          config: resolved.config,
+          model: resolved.model,
+          messages: AIContextBuilder.compactionMessages(existingSummary: existing, turns: Array(toCompact)),
+          maxTokens: AIContextBuilder.compactionMaxTokens
+        )
+        guard !Task.isCancelled, var thread = self.threads[docKey] else { return }
+        thread.rollingSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        thread.summarizedCount = min(summarized + compactCount, thread.messages.count)
+        self.threads[docKey] = thread
+        self.persistDebouncer.schedule { [weak self] in self?.persistNow() }
+        Logger.ai.debug("历史压缩完成: 并入 \(compactCount) 条，摘要 \(summary.count) 字")
+      } catch {
+        // 失败降级：维持硬截断（historyMessages 自带），间隔一轮再试
+        self.skipCompactionOnce = true
+        Logger.ai.error("历史压缩失败: \((error as? AIServiceError)?.logSafeDescription ?? "未知错误", privacy: .public)")
+      }
     }
   }
 
-  private func prepareAndStream(question: String, resolved: AISettingsStore.ResolvedModel) async {
+  // MARK: - 组装与 agent 循环
+
+  private func prepareAndRun(question: String, resolved: AISettingsStore.ResolvedModel) async {
     let includeSelection = settings.settings.contextIncludeSelection
     let includeDocument = settings.settings.contextIncludeDocument
-    let includeWorkspace = settings.settings.contextIncludeWorkspace
+    let toolsEnabled = settings.settings.contextIncludeWorkspace
     // 上下文预算（v1.3）：窗口与回复上限均为用户设定值
     let replyTokens = AIModelContext.effectiveReplyTokens(
       userSetting: settings.settings.chatMaxReplyTokens,
@@ -238,25 +324,7 @@ final class AIChatStore: ObservableObject {
     }
     guard !Task.isCancelled else { return }
 
-    // ② 工作区检索（第三层，v1.2 完整形态）：召回文件切节 → 候选少直接全注入
-    //（省一遍调用），多则 LLM 目录选节，路由失败回退片段
-    var hits: [AIContextBuilder.WorkspaceHit] = []
-    if includeWorkspace {
-      let candidates = await withCheckedContinuation { continuation in
-        contextSources.workspaceCandidates(question) { continuation.resume(returning: $0) }
-      }
-      guard !Task.isCancelled else { return }
-      if candidates.count <= AIWorkspaceRetriever.directInjectThreshold {
-        hits = AIWorkspaceRetriever.assembleHits(candidates: candidates, picked: Array(candidates.indices))
-      } else if let picked = await routeWorkspace(question: question, candidates: candidates, resolved: resolved) {
-        hits = AIWorkspaceRetriever.assembleHits(candidates: candidates, picked: picked)
-      } else {
-        hits = AIWorkspaceRetriever.fallbackHits(candidates: candidates)
-      }
-    }
-    guard !Task.isCancelled else { return }
-
-    // ③ 当前文档：预算内整文；超预算且可切节 → 两遍路由（失败回退头部截断）
+    // ② 当前文档：预算内整文；超预算且可切节 → 两遍路由（失败回退头部截断）
     var document = includeDocument ? contextSources.activeDocument(documentBudget + 1) : nil
     var annotation: String?
     if let doc = document, doc.text.count > documentBudget,
@@ -272,36 +340,157 @@ final class AIChatStore: ObservableObject {
       selection: selectionText,
       document: document,
       documentBudget: documentBudget,
-      documentAnnotation: annotation,
-      workspaceHits: hits
+      documentAnnotation: annotation
     )
-    startStreaming(question: question, built: built, resolved: resolved, maxTokens: replyTokens)
+
+    // UI 行
+    var userRow = ChatMessage(role: .user, content: question)
+    userRow.contextSummary = built.summary
+    userRow.promptQuestion = question
+    messages.append(userRow)
+    var assistantRow = ChatMessage(role: .assistant, content: "")
+    assistantRow.isStreaming = true
+    messages.append(assistantRow)
+    syncActiveThread()
+
+    // 组装 outgoing：system(+工具指引) + L2 摘要 + L1 历史原文 + 当轮 user
+    let thread = threads[activeDocKey] ?? Thread()
+    var systemPrompt = AIContextBuilder.systemPrompt()
+    let workspace = contextSources.workspaceFiles()
+    if toolsEnabled {
+      systemPrompt += "\n\n" + AIWorkspaceTools.systemHint(fileNames: workspace.files.map(\.lastPathComponent))
+    }
+    let historySource = Array(messages.dropLast(2)[min(thread.summarizedCount, max(messages.count - 2, 0))...])
+      .map { message in
+        AIChatMessage(role: message.role, content: message.role == .user ? (message.promptQuestion ?? message.content) : message.content)
+      }
+    var outgoing: [AIChatMessage] = [.system(systemPrompt)]
+    outgoing += AIContextBuilder.historyMessages(
+      historySource,
+      rollingSummary: thread.rollingSummary,
+      charBudget: AIModelContext.historyCharBudget(contextTokens: resolved.contextTokens)
+    )
+    outgoing.append(.user(built.userMessage))
+
+    await runAgentLoop(
+      outgoing: outgoing,
+      resolved: resolved,
+      replyTokens: replyTokens,
+      toolsEnabled: toolsEnabled,
+      workspaceRoot: workspace.root,
+      workspaceFiles: workspace.files
+    )
   }
 
-  /// 工作区候选选节（第三层的路由第一遍）；失败返回 nil（调用方回退片段注入）
-  private func routeWorkspace(
-    question: String,
-    candidates: [AIWorkspaceRetriever.Candidate],
-    resolved: AISettingsStore.ResolvedModel
-  ) async -> [Int]? {
+  /// agent 循环：流式作答；模型请求工具 → 执行 → 结果回传 → 下一轮；
+  /// 三重终止：模型停止调用 / maxToolTurns 上限（末轮不带 tools）/ 用户取消
+  private func runAgentLoop(
+    outgoing initial: [AIChatMessage],
+    resolved: AISettingsStore.ResolvedModel,
+    replyTokens: Int,
+    toolsEnabled: Bool,
+    workspaceRoot: URL?,
+    workspaceFiles: [URL]
+  ) async {
+    var outgoing = initial
+    var turns = 0
+    var executedResults: [String: String] = [:]  // name+args → result（重复调用去重）
+    var streamedBase = 0  // 本轮开始时 assistant 消息的文本长度（提取当轮新文本）
+
     do {
-      let reply = try await service.complete(
-        kind: resolved.kind,
-        config: resolved.config,
-        model: resolved.model,
-        messages: AISectionRouter.routingMessages(
-          question: question,
-          outline: AIWorkspaceRetriever.routingOutline(candidates)
-        ),
-        maxTokens: AISectionRouter.maxTokens
-      )
-      let picked = AISectionRouter.parsePicked(reply, sectionCount: candidates.count)
-      Logger.ai.debug("工作区路由选节: \(picked?.count ?? 0) 节 / 候选 \(candidates.count) 节")
-      return picked
+      while true {
+        let useTools = toolsEnabled && turns < Self.maxToolTurns
+        var received: [AIToolCall] = []
+        streamBuffer = ""
+        let stream = service.stream(
+          kind: resolved.kind,
+          config: resolved.config,
+          model: resolved.model,
+          messages: outgoing,
+          maxTokens: replyTokens,
+          tools: useTools ? AIWorkspaceTools.definitions : nil
+        )
+        for try await event in stream {
+          switch event {
+          case .text(let delta):
+            streamBuffer += delta
+            scheduleFlush()
+          case .toolCalls(let calls):
+            received = calls
+          }
+        }
+        guard !Task.isCancelled else { return }
+        flushNow()
+
+        if received.isEmpty {
+          finalizeStreaming(cancelled: false)
+          phase = .idle
+          streamTask = nil
+          return
+        }
+
+        // 本轮 assistant（文本 + 调用）入 outgoing；UI 挂活动 chips
+        let fullText = messages.last?.content ?? ""
+        let turnText = String(fullText.dropFirst(min(streamedBase, fullText.count)))
+        streamedBase = fullText.count
+        outgoing.append(AIChatMessage(role: .assistant, content: turnText, toolCalls: received))
+
+        var turnBudget = Self.toolResultsBudgetPerTurn
+        for call in received {
+          guard !Task.isCancelled else { return }
+          let activityIndex = appendActivity(for: call)
+          let dedupeKey = call.name + call.arguments
+          let result: String
+          if let previous = executedResults[dedupeKey] {
+            result = "Duplicate call (identical arguments). Previous result:\n" + String(previous.prefix(500))
+          } else {
+            let root = workspaceRoot
+            let files = workspaceFiles
+            result = await Task.detached(priority: .userInitiated) {
+              AIWorkspaceTools.execute(call: call, workspaceRoot: root, files: files)
+            }.value
+            executedResults[dedupeKey] = result
+          }
+          let clipped = String(result.prefix(max(turnBudget, 500)))
+          turnBudget = max(turnBudget - clipped.count, 0)
+          outgoing.append(.toolResult(id: call.id, content: clipped))
+          completeActivity(at: activityIndex, result: clipped)
+        }
+        syncActiveThread()
+        turns += 1
+        Logger.ai.debug("agent 轮次 \(turns): 执行 \(received.count) 个工具调用")
+      }
+    } catch is CancellationError {
+      // cancel() 已收尾
     } catch {
-      Logger.ai.error("工作区路由失败，回退片段: \((error as? AIServiceError)?.logSafeDescription ?? "未知错误", privacy: .public)")
-      return nil
+      guard !Task.isCancelled else { return }
+      flushNow()
+      finalizeStreaming(cancelled: false)
+      let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      let safe = (error as? AIServiceError)?.logSafeDescription ?? "未知错误"
+      Logger.ai.error("AI 对话失败: \(safe, privacy: .public)")
+      phase = .failed(description)
     }
+    streamTask = nil
+  }
+
+  /// 挂载运行中的工具活动 chip；返回其在当前 assistant 消息中的下标
+  private func appendActivity(for call: AIToolCall) -> Int? {
+    guard let last = messages.indices.last, messages[last].role == .assistant else { return nil }
+    let arguments = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any] ?? [:]
+    let argsSummary = ["query", "path", "section"]
+      .compactMap { key in (arguments[key] as? String).map { "\($0)" } }
+      .joined(separator: " · ")
+    messages[last].toolActivities.append(ToolActivity(name: call.name, argsSummary: argsSummary))
+    return messages[last].toolActivities.indices.last
+  }
+
+  private func completeActivity(at index: Int?, result: String) {
+    guard let index, let last = messages.indices.last, messages[last].role == .assistant,
+      messages[last].toolActivities.indices.contains(index) else { return }
+    messages[last].toolActivities[index].isRunning = false
+    let firstLine = result.split(separator: "\n").first.map(String.init) ?? ""
+    messages[last].toolActivities[index].resultSummary = String(firstLine.prefix(80))
   }
 
   /// 两遍路由第一遍：目录摘要给模型选节；任何失败返回 nil（调用方回退头部截断）
@@ -333,63 +522,6 @@ final class AIChatStore: ObservableObject {
     }
   }
 
-  private func startStreaming(question: String, built: AIContextBuilder.BuiltContext, resolved: AISettingsStore.ResolvedModel, maxTokens: Int) {
-    var userRow = ChatMessage(role: .user, content: question)
-    userRow.contextSummary = built.summary
-    userRow.promptQuestion = question
-    messages.append(userRow)
-    var assistantRow = ChatMessage(role: .assistant, content: "")
-    assistantRow.isStreaming = true
-    messages.append(assistantRow)
-    syncActiveThread()
-
-    // 历史轮：user 送原始问题（不重复带全文），仅当轮带上下文；空 assistant 已由 trimHistory 丢弃
-    var outgoing: [AIChatMessage] = [.system(AIContextBuilder.systemPrompt())]
-    let history = messages.dropLast(2).map { message in
-      AIChatMessage(role: message.role, content: message.role == .user ? (message.promptQuestion ?? message.content) : message.content)
-    }
-    outgoing += AIContextBuilder.trimHistory(Array(history))
-    outgoing.append(.user(built.userMessage))
-
-    streamBuffer = ""
-    streamTask = Task { [weak self] in
-      guard let self else { return }
-      do {
-        let stream = self.service.stream(
-          kind: resolved.kind,
-          config: resolved.config,
-          model: resolved.model,
-          messages: outgoing,
-          maxTokens: maxTokens
-        )
-        for try await event in stream {
-          switch event {
-          case .text(let delta):
-            self.streamBuffer += delta
-            self.scheduleFlush()
-          case .toolCalls:
-            // agent 循环于 v1.3④ 消费；此前不带 tools 参数不会出现
-            break
-          }
-        }
-        guard !Task.isCancelled else { return }
-        self.finalizeStreaming(cancelled: false)
-        self.phase = .idle
-      } catch is CancellationError {
-        // cancel() 已收尾
-      } catch {
-        guard !Task.isCancelled else { return }
-        self.flushNow()
-        self.finalizeStreaming(cancelled: false)
-        let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        let safe = (error as? AIServiceError)?.logSafeDescription ?? "未知错误"
-        Logger.ai.error("AI 对话失败: \(safe, privacy: .public)")
-        self.phase = .failed(description)
-      }
-      self.streamTask = nil
-    }
-  }
-
   /// 增量节流（~80ms）：缓冲攒批后一次性落最后一条消息
   private func scheduleFlush() {
     guard !flushScheduled else { return }
@@ -414,7 +546,11 @@ final class AIChatStore: ObservableObject {
     guard let last = messages.indices.last, messages[last].role == .assistant, messages[last].isStreaming else { return }
     messages[last].isStreaming = false
     messages[last].wasCancelled = cancelled
-    if cancelled, messages[last].content.isEmpty {
+    // 运行中的活动一并落定（取消场景）
+    for index in messages[last].toolActivities.indices {
+      messages[last].toolActivities[index].isRunning = false
+    }
+    if cancelled, messages[last].content.isEmpty, messages[last].toolActivities.isEmpty {
       messages.remove(at: last)
     }
   }
@@ -428,6 +564,12 @@ extension AIChatStore.ChatMessage {
     contextSummary = stored.contextSummary
     promptQuestion = stored.promptQuestion
     wasCancelled = stored.wasCancelled ?? false
+    toolActivities = (stored.toolActivities ?? []).map {
+      var activity = AIChatStore.ToolActivity(name: $0.name, argsSummary: $0.argsSummary)
+      activity.resultSummary = $0.resultSummary
+      activity.isRunning = false
+      return activity
+    }
   }
 
   var stored: AISessionStore.StoredMessage {
@@ -436,7 +578,10 @@ extension AIChatStore.ChatMessage {
       content: content,
       contextSummary: contextSummary,
       promptQuestion: promptQuestion,
-      wasCancelled: wasCancelled ? true : nil
+      wasCancelled: wasCancelled ? true : nil,
+      toolActivities: toolActivities.isEmpty ? nil : toolActivities.map {
+        AISessionStore.StoredToolActivity(name: $0.name, argsSummary: $0.argsSummary, resultSummary: $0.resultSummary)
+      }
     )
   }
 }

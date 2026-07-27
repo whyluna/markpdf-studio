@@ -1014,6 +1014,22 @@
         }
       }
     },
+    "列出文档": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listing documents"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "列出文档"
+          }
+        }
+      }
+    },
     "删除": {
       "localizations": {
         "en": {
@@ -1750,22 +1766,6 @@
         }
       }
     },
-    "工作区 %lld 处": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld workspace hits"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "工作区 %lld 处"
-          }
-        }
-      }
-    },
     "左右分栏": {
       "localizations": {
         "en": {
@@ -2226,6 +2226,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "插入到光标处"
+          }
+        }
+      }
+    },
+    "搜索工作区": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searching workspace"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索工作区"
           }
         }
       }
@@ -2850,6 +2866,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "查找下一个"
+          }
+        }
+      }
+    },
+    "查看大纲": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading outline"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看大纲"
           }
         }
       }
@@ -3859,6 +3891,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "请求的 max_tokens；超过模型窗口时自动夹取到窗口一半"
+          }
+        }
+      }
+    },
+    "读取章节": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading section"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取章节"
           }
         }
       }

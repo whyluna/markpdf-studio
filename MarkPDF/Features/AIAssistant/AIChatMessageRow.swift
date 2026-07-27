@@ -46,6 +46,9 @@ struct AIChatMessageRow: View {
 
   private var assistantRow: some View {
     VStack(alignment: .leading, spacing: 4) {
+      if !message.toolActivities.isEmpty {
+        toolActivityChips
+      }
       AIMessageTextView(markdown: message.content)
       HStack(spacing: 10) {
         if message.isStreaming {
@@ -65,6 +68,44 @@ struct AIChatMessageRow: View {
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .onHover { isHovering = $0 }
+  }
+
+  /// 工具活动 chips（v1.3 agent 循环）：运行中 spinner，完成后折叠为一行摘要
+  private var toolActivityChips: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      ForEach(message.toolActivities) { activity in
+        HStack(spacing: 5) {
+          if activity.isRunning {
+            ProgressView()
+              .controlSize(.mini)
+          } else {
+            Image(systemName: "checkmark.circle")
+              .font(.system(size: 10))
+              .foregroundStyle(.secondary)
+          }
+          Text(activityLabel(activity))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.primary.opacity(0.05), in: Capsule())
+        .help(activity.resultSummary ?? "")
+      }
+    }
+  }
+
+  private func activityLabel(_ activity: AIChatStore.ToolActivity) -> String {
+    let action: String
+    switch activity.name {
+    case "workspace_search": action = String(localized: "搜索工作区")
+    case "workspace_list_documents": action = String(localized: "列出文档")
+    case "workspace_get_outline": action = String(localized: "查看大纲")
+    case "workspace_read_section": action = String(localized: "读取章节")
+    default: action = activity.name
+    }
+    return activity.argsSummary.isEmpty ? action : "\(action)：\(activity.argsSummary)"
   }
 
   /// 五动作（FR-AI.2）：插入光标 / 替换选区 / 复制 / 存为新笔记 / 转回链引用块
