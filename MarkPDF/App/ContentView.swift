@@ -41,6 +41,11 @@ struct ContentView: View {
       // restoreTabs 现在会在恢复时预建 store 并立即读文件，先于授权执行必 EPERM（启动竞态实锤）
       stateStore.restoreWorkspace(into: workspaceStore)
       stateStore.restoreTabs(into: tabStore)
+      // 每次启动把右侧面板压到最窄：AppKit 会恢复上次列宽（经常是很宽的面板），
+      // SwiftUI 无 detail 列宽 API，只能窗口就绪后直接拨 NSSplitView 分隔条
+      DispatchQueue.main.async {
+        collapseDetailColumnToMinimum()
+      }
       // 切换工作区（⌘O/菜单/空状态按钮统一走此钩子）：保存当前标签现场 → 恢复目标工作区自己的标签
       workspaceStore.onOpenFolder = { [weak workspaceStore, weak tabStore] url in
         guard let workspaceStore, let tabStore else { return }
@@ -163,6 +168,25 @@ struct ContentView: View {
     } detail: {
       detailPanel
     }
+  }
+
+  /// 启动时把右侧 detail 列压到最窄：递归找 NavigationSplitView 的 NSSplitView，
+  /// 把最后一个分隔条拨到「总宽 − 最窄面板宽」。仅启动调用一次，之后用户拖动不受影响
+  private func collapseDetailColumnToMinimum() {
+    func findSplitView(in view: NSView) -> NSSplitView? {
+      if let split = view as? NSSplitView { return split }
+      for subview in view.subviews {
+        if let found = findSplitView(in: subview) { return found }
+      }
+      return nil
+    }
+    guard let contentView = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })?.contentView,
+      let splitView = findSplitView(in: contentView),
+      splitView.arrangedSubviews.count >= 2
+    else { return }
+    let lastDivider = splitView.arrangedSubviews.count - 2
+    // 266 = detail 面板 minWidth；分隔条位置按目标列左缘计
+    splitView.setPosition(splitView.bounds.width - 266, ofDividerAt: lastDivider)
   }
 
   /// 右侧面板：pdf 标签 = 缩略图/书签/标注/引用（FR-3.3/5.4）；其余 = 大纲（FR-2.6）+ 反向链接（FR-5.4）
