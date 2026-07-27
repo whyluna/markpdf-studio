@@ -59,14 +59,30 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(401, json.dumps(
                     {"error": {"message": "invalid api key", "type": "auth_error"}}).encode())
                 return
+            has_tool_result = any(m.get("role") == "tool" for m in body.get("messages", []))
             if body.get("stream"):
-                events = [
-                    (None, openai_chunk({"role": "assistant", "content": ""})),
-                    (None, openai_chunk({"content": "你"})),
-                    (None, openai_chunk({"content": "好"})),
-                    (None, openai_chunk({}, finish="stop")),
-                    (None, "[DONE]"),
-                ]
+                if body.get("tools") and not has_tool_result:
+                    # 工具轮：请求 workspace_search（arguments 分片验证重组器）
+                    events = [
+                        (None, openai_chunk({"role": "assistant", "content": ""})),
+                        (None, openai_chunk({"tool_calls": [{
+                            "index": 0, "id": "call_mock_1", "type": "function",
+                            "function": {"name": "workspace_search", "arguments": ""}}]})),
+                        (None, openai_chunk({"tool_calls": [{
+                            "index": 0, "function": {"arguments": "{\"query\":"}}]})),
+                        (None, openai_chunk({"tool_calls": [{
+                            "index": 0, "function": {"arguments": "\"attention\"}"}}]})),
+                        (None, openai_chunk({}, finish="tool_calls")),
+                        (None, "[DONE]"),
+                    ]
+                else:
+                    events = [
+                        (None, openai_chunk({"role": "assistant", "content": ""})),
+                        (None, openai_chunk({"content": "你"})),
+                        (None, openai_chunk({"content": "好"})),
+                        (None, openai_chunk({}, finish="stop")),
+                        (None, "[DONE]"),
+                    ]
                 self._reply(200, sse(events), "text/event-stream")
             else:
                 self._reply(200, json.dumps({
@@ -88,6 +104,41 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(400, json.dumps(
                     {"type": "error", "error": {"type": "invalid_request_error",
                                                 "message": "anthropic-version required"}}).encode())
+                return
+            def has_anthropic_tool_result():
+                for m in body.get("messages", []):
+                    content = m.get("content")
+                    if isinstance(content, list) and any(
+                            b.get("type") == "tool_result" for b in content):
+                        return True
+                return False
+
+            if body.get("stream") and body.get("tools") and not has_anthropic_tool_result():
+                # 工具轮：tool_use 块 + input_json_delta 分片
+                events = [
+                    ("message_start", anthropic_event(
+                        "message_start",
+                        message={"id": "msg_mock", "type": "message", "role": "assistant",
+                                 "model": body.get("model", "mock"), "content": [],
+                                 "stop_reason": None,
+                                 "usage": {"input_tokens": 1, "output_tokens": 0}})),
+                    ("content_block_start", anthropic_event(
+                        "content_block_start", index=0,
+                        content_block={"type": "tool_use", "id": "tu_mock_1",
+                                       "name": "workspace_search", "input": {}})),
+                    ("content_block_delta", anthropic_event(
+                        "content_block_delta", index=0,
+                        delta={"type": "input_json_delta", "partial_json": "{\"query\":"})),
+                    ("content_block_delta", anthropic_event(
+                        "content_block_delta", index=0,
+                        delta={"type": "input_json_delta", "partial_json": "\"attention\"}"})),
+                    ("content_block_stop", anthropic_event("content_block_stop", index=0)),
+                    ("message_delta", anthropic_event(
+                        "message_delta", delta={"stop_reason": "tool_use"},
+                        usage={"output_tokens": 2})),
+                    ("message_stop", anthropic_event("message_stop")),
+                ]
+                self._reply(200, sse(events), "text/event-stream")
                 return
             if body.get("stream"):
                 events = [

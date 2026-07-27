@@ -113,4 +113,65 @@ final class AIIntegrationTests: XCTestCase {
       XCTAssertEqual(status, 401)
     }
   }
+
+  // MARK: - 工具调用流（v1.3：mock 首轮回 tool_calls/tool_use，带结果的次轮回文本）
+
+  @MainActor
+  func testOpenAIToolCallStreamOverHTTP() async throws {
+    let (service, config) = makeService(kind: .deepseek)
+    let tools = AIWorkspaceTools.definitions
+    var calls: [AIToolCall] = []
+    for try await event in service.stream(
+      kind: .deepseek, config: config, model: config.models[0],
+      messages: [.user("找找 attention")], tools: tools
+    ) {
+      if case .toolCalls(let received) = event { calls = received }
+    }
+    XCTAssertEqual(calls.count, 1)
+    XCTAssertEqual(calls.first?.name, "workspace_search")
+    XCTAssertEqual(calls.first?.arguments, #"{"query":"attention"}"#, "分片 arguments 重组完整")
+
+    // 回传工具结果 → 次轮返回文本
+    var collected = ""
+    let followUp: [AIChatMessage] = [
+      .user("找找 attention"),
+      AIChatMessage(role: .assistant, content: "", toolCalls: calls),
+      .toolResult(id: calls[0].id, content: "notes.md [L3] attention 相关"),
+    ]
+    for try await event in service.stream(
+      kind: .deepseek, config: config, model: config.models[0], messages: followUp, tools: tools
+    ) {
+      if case .text(let delta) = event { collected += delta }
+    }
+    XCTAssertEqual(collected, "你好")
+  }
+
+  @MainActor
+  func testAnthropicToolUseStreamOverHTTP() async throws {
+    let (service, config) = makeService(kind: .anthropic)
+    let tools = AIWorkspaceTools.definitions
+    var calls: [AIToolCall] = []
+    for try await event in service.stream(
+      kind: .anthropic, config: config, model: config.models[0],
+      messages: [.user("找找 attention")], tools: tools
+    ) {
+      if case .toolCalls(let received) = event { calls = received }
+    }
+    XCTAssertEqual(calls.count, 1)
+    XCTAssertEqual(calls.first?.id, "tu_mock_1")
+    XCTAssertEqual(calls.first?.arguments, #"{"query":"attention"}"#, "partial_json 重组完整")
+
+    var collected = ""
+    let followUp: [AIChatMessage] = [
+      .user("找找 attention"),
+      AIChatMessage(role: .assistant, content: "", toolCalls: calls),
+      .toolResult(id: calls[0].id, content: "notes.md [L3] attention 相关"),
+    ]
+    for try await event in service.stream(
+      kind: .anthropic, config: config, model: config.models[0], messages: followUp, tools: tools
+    ) {
+      if case .text(let delta) = event { collected += delta }
+    }
+    XCTAssertEqual(collected, "你好")
+  }
 }
