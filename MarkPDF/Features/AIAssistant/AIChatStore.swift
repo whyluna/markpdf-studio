@@ -59,6 +59,9 @@ final class AIChatStore: ObservableObject {
     var rollingSummary: String?
     /// messages 中已并入摘要的前缀条数（历史组装从此下标起送原文）
     var summarizedCount = 0
+    /// 最后真实修改时间（仅消息变化时刷新；合并排序与落盘 updatedAt 用——
+    /// 此前 persistNow 每次全量刷 Date()，双键同批写出让「按时间合并」退化为随机序）
+    var updatedAt = Date.distantPast
   }
 
   @Published private(set) var messages: [ChatMessage] = []
@@ -126,7 +129,6 @@ final class AIChatStore: ObservableObject {
     // 旧版相对 key 迁移为绝对路径；同一文件若曾按相对/绝对双键各存一条，按时间合并
     var didMigrate = false
     do {
-      var keyDates: [String: Date] = [:]
       for session in try AISessionStore.load(workspaceRoot: newRoot) {
         if let docPath = session.docPath, !docPath.isEmpty, !docPath.hasPrefix("/") {
           didMigrate = true
@@ -135,13 +137,16 @@ final class AIChatStore: ObservableObject {
         let incoming = Thread(
           messages: session.messages.map(ChatMessage.init(stored:)),
           rollingSummary: session.rollingSummary,
-          summarizedCount: session.summarizedCount ?? 0
+          summarizedCount: session.summarizedCount ?? 0,
+          updatedAt: session.updatedAt
         )
         if var existing = threads[key], !existing.messages.isEmpty, !incoming.messages.isEmpty {
-          // 合并：较旧者消息在前；摘要沿用较新一方（其覆盖下标按旧者消息数平移），
+          // 合并：较旧者消息在前（线程真实修改时间，见 Thread.updatedAt）；
+          // 摘要沿用较新一方（其覆盖下标按旧者消息数平移），
           // 较新一方无摘要则保留旧摘要（旧者位于合并数组头部，下标无需平移）
-          let existingIsOlder = (keyDates[key] ?? .distantPast) <= session.updatedAt
-          let (older, newer) = existingIsOlder ? (existing, incoming) : (incoming, existing)
+          let (older, newer) = existing.updatedAt <= incoming.updatedAt
+            ? (existing, incoming)
+            : (incoming, existing)
           existing.messages = older.messages + newer.messages
           if let newSummary = newer.rollingSummary {
             existing.rollingSummary = newSummary
@@ -150,12 +155,11 @@ final class AIChatStore: ObservableObject {
             existing.rollingSummary = older.rollingSummary
             existing.summarizedCount = older.summarizedCount
           }
+          existing.updatedAt = max(existing.updatedAt, incoming.updatedAt)
           threads[key] = existing
-          keyDates[key] = max(keyDates[key] ?? .distantPast, session.updatedAt)
           didMigrate = true
         } else if threads[key]?.messages.isEmpty != false {
           threads[key] = incoming
-          keyDates[key] = session.updatedAt
         }
       }
     } catch {
@@ -192,20 +196,25 @@ final class AIChatStore: ObservableObject {
 
   private func docKey(for url: URL?) -> String {
     guard let url else { return "" }
-    // 统一绝对路径：同一文件从工作区（旧版为相对路径）或外部打开都是同一条线程
-    return url.standardizedFileURL.path
+    // 统一绝对路径（解析符号链接）：同一文件从工作区或外部打开都是同一条线程
+    return url.standardizedFileURL.resolvingSymlinksInPath().path
   }
 
   /// 旧版 key（相对工作区根）迁移为绝对路径；nil/空 = 工作区通用线程（""）
   static func migratedKey(for docPath: String?, root: URL) -> String {
     guard let docPath, !docPath.isEmpty else { return "" }
     if docPath.hasPrefix("/") { return docPath }
-    return root.appendingPathComponent(docPath).standardizedFileURL.path
+    return root.appendingPathComponent(docPath).standardizedFileURL.resolvingSymlinksInPath().path
   }
 
   private func storeActiveThreadMessages() {
     var thread = threads[activeDocKey] ?? Thread()
-    thread.messages = messages
+    // 仅在消息实际变化时刷新修改时间（merge 排序与落盘 updatedAt 依赖真实时间；
+    // 切文档/落盘触发的无变化写回不刷——否则同批 Date() 让按时间合并退化为随机序）
+    if thread.messages != messages {
+      thread.messages = messages
+      thread.updatedAt = Date()
+    }
     threads[activeDocKey] = thread
   }
 
@@ -226,7 +235,7 @@ final class AIChatStore: ObservableObject {
       return AISessionStore.StoredSession(
         docPath: key.isEmpty ? nil : key,
         messages: thread.messages.map(\.stored),
-        updatedAt: Date(),
+        updatedAt: thread.updatedAt == .distantPast ? Date() : thread.updatedAt,
         rollingSummary: thread.rollingSummary,
         summarizedCount: thread.summarizedCount
       )

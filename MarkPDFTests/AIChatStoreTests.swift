@@ -267,6 +267,61 @@ final class AIChatStoreTests: XCTestCase {
     store.workspaceDidChange(root: root)
     store.bindDocument(root.appendingPathComponent("note.md"))
     XCTAssertEqual(store.messages.map(\.content), ["旧记录", "旧答"], "相对 key 迁移后同文档线程可见")
+    // 迁移立即落盘：磁盘 key 收敛为绝对路径（防有人把 persistNow 挪成异步/防抖）
+    let persisted = try AISessionStore.load(workspaceRoot: root)
+    XCTAssertEqual(
+      persisted.compactMap(\.docPath),
+      [root.appendingPathComponent("note.md").standardizedFileURL.resolvingSymlinksInPath().path],
+      "迁移后磁盘 key 必须是绝对路径"
+    )
+  }
+
+  /// 合并带摘要平移 + 相近时间戳（评审 major：persistNow 全量刷 Date() 曾让按时间合并退化）
+  func testMergeShiftsSummaryAndKeepsChronology() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = root.appendingPathComponent("note.md")
+    let olderDate = Date(timeIntervalSince1970: 1_000)
+    let newerDate = Date(timeIntervalSince1970: 1_000.001)  // 微秒级相近（真实双键同批写盘形态）
+    try AISessionStore.save(
+      [
+        AISessionStore.StoredSession(
+          docPath: "note.md",
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "旧1", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+            AISessionStore.StoredMessage(role: "assistant", content: "旧2", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: olderDate,
+          rollingSummary: "旧摘要",
+          summarizedCount: 1
+        ),
+        AISessionStore.StoredSession(
+          docPath: file.standardizedFileURL.resolvingSymlinksInPath().path,
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "新1", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: newerDate,
+          rollingSummary: "新摘要",
+          summarizedCount: 1
+        ),
+      ],
+      workspaceRoot: root
+    )
+
+    let store = makeStore(transport: AIServiceTests.MockAITransport())
+    store.workspaceDidChange(root: root)
+    store.bindDocument(file)
+    XCTAssertEqual(store.messages.map(\.content), ["旧1", "旧2", "新1"], "较旧线程消息在前")
+
+    store.flush()
+    let persisted = try AISessionStore.load(workspaceRoot: root)
+    let docSessions = persisted.filter { $0.docPath != nil }
+    XCTAssertEqual(docSessions.count, 1)
+    XCTAssertEqual(docSessions.first?.rollingSummary, "新摘要", "摘要沿用较新一方")
+    XCTAssertEqual(docSessions.first?.summarizedCount, 3, "覆盖下标按旧者消息数平移（1 + 2）")
+    XCTAssertEqual(docSessions.first?.updatedAt.timeIntervalSince1970 ?? -1, 1_000.001, accuracy: 0.01, "updatedAt 取较新一方（不被落盘刷新）")
   }
 
   /// 同一文件曾按相对/绝对双键各存一条（旧版工作区/外部两种打开方式）→ 按时间合并
