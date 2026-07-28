@@ -2,7 +2,7 @@
 
 **macOS 原生 Markdown + PDF 的 AI 科研阅读工作台**：在一个窗口内完成「管理文献 → 阅读并标注 PDF → 划词翻译 → 编写 Markdown 笔记 → 双向关联 → AI 带引用问答」的完整闭环。
 
-![MarkPDF Studio](docs/images/screenshot.png)
+<img width="3202" height="1800" alt="image" src="https://github.com/user-attachments/assets/ffbdb913-4530-47c7-a427-1a9284545a78" />
 
 [![macOS CI](https://github.com/whyluna/markpdf-studio/actions/workflows/macos.yml/badge.svg)](https://github.com/whyluna/markpdf-studio/actions/workflows/macos.yml)
 [![Release](https://img.shields.io/github/v/release/whyluna/markpdf-studio)](https://github.com/whyluna/markpdf-studio/releases)
