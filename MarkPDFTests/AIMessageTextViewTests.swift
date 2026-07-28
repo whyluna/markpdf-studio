@@ -53,4 +53,24 @@ final class AIMessageTextViewTests: XCTestCase {
     XCTAssertEqual(AIMessageTextView.classifyLine("减号-在中间"), .plain("减号-在中间"))
     XCTAssertEqual(AIMessageTextView.classifyLine("3.14 不是列表"), .plain("3.14 不是列表"))
   }
+
+  // MARK: - 评审补边（Tab 缩进 / 前导空格标题 / 空标题守卫）
+
+  func testTabIndentCountsOneLevel() {
+    XCTAssertEqual(
+      AIMessageTextView.classifyLine("\t- 嵌套项"),
+      .bullet(indent: 1, marker: "•", text: "嵌套项")
+    )
+  }
+
+  func testLeadingSpaceHeaderAllowed() {
+    XCTAssertEqual(
+      AIMessageTextView.classifyLine("  ## 前导空格标题"),
+      .header(level: 2, text: "前导空格标题")
+    )
+  }
+
+  func testEmptyHeaderFallsBackToPlain() {
+    XCTAssertEqual(AIMessageTextView.classifyLine("# "), .plain("# "))
+  }
 }

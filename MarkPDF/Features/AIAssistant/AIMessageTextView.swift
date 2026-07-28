@@ -28,26 +28,32 @@ struct AIMessageTextView: View {
     case plain(String)
   }
 
-  /// 行分类：# 标题 / 无序列表（- * +）/ 有序列表（1.）/ 普通行；缩进每 2 空格一级
+  /// 行分类：# 标题（允许前导空格，空 # 行守卫）/ 无序列表（- * +）/
+  /// 有序列表（1.）/ 普通行；缩进每 2 空格一级，Tab 计一级
   static func classifyLine(_ line: String) -> LineKind {
+    let leadingSpaces = line.prefix(while: { $0 == " " }).count
+    var content = String(line.dropFirst(leadingSpaces))
     var hashes = 0
-    var rest = Substring(line)
+    var rest = Substring(content)
     while rest.first == "#" {
       hashes += 1
       rest = rest.dropFirst()
     }
-    if (1...6).contains(hashes), rest.first == " " {
+    if (1...6).contains(hashes), rest.first == " ", !rest.dropFirst().isEmpty {
       return .header(level: hashes, text: String(rest.dropFirst()))
     }
-    let leadingSpaces = line.prefix(while: { $0 == " " }).count
-    let content = String(line.dropFirst(leadingSpaces))
+    var indent = leadingSpaces / 2
+    if content.hasPrefix("\t") {
+      indent += 1
+      content = String(content.dropFirst())
+    }
     if let marker = content.first, ["-", "*", "+"].contains(marker), content.dropFirst().first == " " {
-      return .bullet(indent: leadingSpaces / 2, marker: "•", text: String(content.dropFirst(2)))
+      return .bullet(indent: indent, marker: "•", text: String(content.dropFirst(2)))
     }
     let digits = content.prefix(while: { $0.isNumber })
     if !digits.isEmpty, content.dropFirst(digits.count).hasPrefix(". ") {
       return .bullet(
-        indent: leadingSpaces / 2,
+        indent: indent,
         marker: "\(digits).",
         text: String(content.dropFirst(digits.count + 2))
       )
