@@ -62,9 +62,29 @@ enum AIProviderKind: String, Codable, CaseIterable, Identifiable {
 
 /// 模型规格（FR-AI.2 v1.3）：上下文窗口由用户配置（不猜测；新增时按模型名预填建议值）
 struct AIModelSpec: Codable, Equatable, Hashable {
+  /// 稳定身份（行删除后列表下标复用也不会串行：编辑器绑定与焦点键用）；
+  /// 旧配置无此字段，解码时补发
+  var id = UUID()
   var name: String
   /// 上下文窗口（tokens，输入与输出共享）；用户可改，以用户值为准
   var contextTokens: Int
+
+  init(id: UUID = UUID(), name: String, contextTokens: Int) {
+    self.id = id
+    self.name = name
+    self.contextTokens = contextTokens
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id, name, contextTokens
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+    name = try container.decode(String.self, forKey: .name)
+    contextTokens = try container.decode(Int.self, forKey: .contextTokens)
+  }
 }
 
 /// 单个 Provider 的用户配置；API Key 不入此结构（存 Keychain，见 AIKeyStore）。

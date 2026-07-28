@@ -184,30 +184,30 @@ struct AISettingsView: View {
   /// 模型逐行编辑（v1.3）：名称 + 上下文窗口 tokens（用户设定，不猜测）+ 删除/添加。
   /// LabeledContent 真标签锚定左缘：macOS Form 对无标签自定义行一律按固有宽度
   /// 顶到右缘（frame/Spacer/containerRelativeFrame 均无效，探针实锤），
-  /// 走 Form 原生「标签+内容」两栏才对齐
+  /// 走 Form 原生「标签+内容」两栏才对齐；行身份用 spec.id（下标复用不串行）
   @ViewBuilder
   private func modelSpecsEditor(_ kind: AIProviderKind) -> some View {
     let specs = aiSettings.config(for: kind).modelSpecs
-    ForEach(Array(specs.enumerated()), id: \.offset) { index, _ in
+    ForEach(specs, id: \.id) { spec in
       LabeledContent {
         HStack(spacing: 6) {
           // 名称框定宽：LabeledContent 首行会抢宽（实测首行明显更长），定宽各行一致
-          TextField("", text: specBinding(kind, index, \.name), prompt: Text("模型名"))
+          TextField("", text: specBinding(kind, spec.id, \.name), prompt: Text("如 kimi-k3"))
             .textFieldStyle(.roundedBorder)
             .controlSize(.small)
             .frame(width: 140)
-            .focused($focusedModelField, equals: "\(kind.rawValue)#\(index)")
+            .focused($focusedModelField, equals: "\(kind.rawValue)#\(spec.id.uuidString)")
             .onSubmit { focusedModelField = nil }
           Text("窗口")
             .font(.callout)
             .foregroundStyle(.secondary)
             .fixedSize()
-          TextField("", value: specTokensBinding(kind, index), format: .number.grouping(.never))
+          TextField("", value: specTokensBinding(kind, spec.id), format: .number.grouping(.never))
             .textFieldStyle(.roundedBorder)
             .controlSize(.small)
             .frame(width: 64)
             .multilineTextAlignment(.trailing)
-            .focused($focusedModelField, equals: "\(kind.rawValue)#\(index)-tokens")
+            .focused($focusedModelField, equals: "\(kind.rawValue)#\(spec.id.uuidString)-tokens")
             .onSubmit { focusedModelField = nil }
             .help("该模型的上下文窗口（输入与输出共享），文档/历史预算据此分配")
           Text("tokens")
@@ -216,8 +216,10 @@ struct AISettingsView: View {
             .fixedSize()
           Button {
             aiSettings.updateConfig(kind) { config in
-              guard config.modelSpecs.indices.contains(index) else { return }
-              config.modelSpecs.remove(at: index)
+              config.modelSpecs.removeAll { $0.id == spec.id }
+            }
+            if focusedModelField?.hasPrefix("\(kind.rawValue)#\(spec.id.uuidString)") == true {
+              focusedModelField = nil
             }
           } label: {
             Image(systemName: "minus.circle")
@@ -241,15 +243,16 @@ struct AISettingsView: View {
     .buttonStyle(.plain)
   }
 
-  private func specBinding(_ kind: AIProviderKind, _ index: Int, _ keyPath: WritableKeyPath<AIModelSpec, String>) -> Binding<String> {
+  private func specBinding(_ kind: AIProviderKind, _ specID: UUID, _ keyPath: WritableKeyPath<AIModelSpec, String>) -> Binding<String> {
     Binding(
       get: {
         let specs = aiSettings.config(for: kind).modelSpecs
-        return specs.indices.contains(index) ? specs[index][keyPath: keyPath] : ""
+        guard let index = specs.firstIndex(where: { $0.id == specID }) else { return "" }
+        return specs[index][keyPath: keyPath]
       },
       set: { newValue in
         aiSettings.updateConfig(kind) { config in
-          guard config.modelSpecs.indices.contains(index) else { return }
+          guard let index = config.modelSpecs.firstIndex(where: { $0.id == specID }) else { return }
           config.modelSpecs[index][keyPath: keyPath] = newValue
           // 名称首次填写时按模型名预填建议窗口（用户可再改）
           if keyPath == \.name, config.modelSpecs[index].contextTokens == AIModelContext.conservativeTokens {
@@ -260,15 +263,18 @@ struct AISettingsView: View {
     )
   }
 
-  private func specTokensBinding(_ kind: AIProviderKind, _ index: Int) -> Binding<Int> {
+  private func specTokensBinding(_ kind: AIProviderKind, _ specID: UUID) -> Binding<Int> {
     Binding(
       get: {
         let specs = aiSettings.config(for: kind).modelSpecs
-        return specs.indices.contains(index) ? specs[index].contextTokens : AIModelContext.conservativeTokens
+        guard let index = specs.firstIndex(where: { $0.id == specID }) else {
+          return AIModelContext.conservativeTokens
+        }
+        return specs[index].contextTokens
       },
       set: { newValue in
         aiSettings.updateConfig(kind) { config in
-          guard config.modelSpecs.indices.contains(index) else { return }
+          guard let index = config.modelSpecs.firstIndex(where: { $0.id == specID }) else { return }
           config.modelSpecs[index].contextTokens = max(newValue, 1_000)
         }
       }
