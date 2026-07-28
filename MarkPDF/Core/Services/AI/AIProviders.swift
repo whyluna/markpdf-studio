@@ -346,7 +346,13 @@ enum AIResponseDecoder {
     if let error = try? JSONDecoder().decode(AIChunkDecoder.OpenAIErrorPayload.self, from: data) {
       throw AIServiceError.provider(error.error.message)
     }
-    let response = try JSONDecoder().decode(OpenAICompletion.self, from: data)
+    // 结构解码失败统一映射为 invalidResponse（UI 文案一致，不抛英文 DecodingError 详情）
+    let response: OpenAICompletion
+    do {
+      response = try JSONDecoder().decode(OpenAICompletion.self, from: data)
+    } catch {
+      throw AIServiceError.invalidResponse
+    }
     guard let text = response.choices.first?.message.content, !text.isEmpty else {
       throw AIServiceError.invalidResponse
     }
@@ -357,7 +363,12 @@ enum AIResponseDecoder {
     if let error = try? JSONDecoder().decode(AIChunkDecoder.AnthropicErrorPayload.self, from: data) {
       throw AIServiceError.provider(error.error.message)
     }
-    let response = try JSONDecoder().decode(AnthropicCompletion.self, from: data)
+    let response: AnthropicCompletion
+    do {
+      response = try JSONDecoder().decode(AnthropicCompletion.self, from: data)
+    } catch {
+      throw AIServiceError.invalidResponse
+    }
     let text = response.content.filter { $0.type == "text" }.compactMap(\.text).joined()
     guard !text.isEmpty else {
       throw AIServiceError.invalidResponse

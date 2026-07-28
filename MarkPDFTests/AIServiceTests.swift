@@ -38,6 +38,45 @@ final class AIServiceTests: XCTestCase {
     XCTAssertEqual(text, "pong")
   }
 
+  /// 连接测试改信封校验（评审补强：集成层回归，防改回正文校验）：
+  /// 200 + 空正文信封（thinking 模型小配额）应通过并返回耗时
+  @MainActor
+  func testConnectionAcceptsEmptyContentEnvelope() async throws {
+    let keyStore = AIKeyStore(storage: InMemoryAIKeyStorage())
+    keyStore.save("sk-test", for: AIProviderKind.kimi.rawValue)
+    let transport = MockAITransport { _ in
+      (Data(#"{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"length"}]}"#.utf8), self.httpResponse(200))
+    }
+    let service = AIService(transport: transport, keys: keyStore)
+    let elapsed = try await service.testConnection(
+      kind: .kimi,
+      config: AIProviderConfig(isEnabled: true, baseURL: "https://api.kimi.com/coding/v1", model: "k3"),
+      model: "k3"
+    )
+    XCTAssertGreaterThanOrEqual(elapsed, 0)
+  }
+
+  /// 连接测试对结构破损响应仍报 invalidResponse（不误过）
+  @MainActor
+  func testConnectionRejectsMalformedEnvelope() async {
+    let keyStore = AIKeyStore(storage: InMemoryAIKeyStorage())
+    keyStore.save("sk-test", for: AIProviderKind.kimi.rawValue)
+    let transport = MockAITransport { _ in
+      (Data(#"{"content":[{"type":"text","text":"pong"}]}"#.utf8), self.httpResponse(200))
+    }
+    let service = AIService(transport: transport, keys: keyStore)
+    do {
+      _ = try await service.testConnection(
+        kind: .kimi,
+        config: AIProviderConfig(isEnabled: true, baseURL: "https://api.kimi.com/coding/v1", model: "k3"),
+        model: "k3"
+      )
+      XCTFail("结构破损的响应应抛 invalidResponse")
+    } catch {
+      XCTAssertEqual(error as? AIServiceError, .invalidResponse)
+    }
+  }
+
   @MainActor
   func testStreamAnthropicAggregatesDeltas() async throws {
     let keyStore = AIKeyStore(storage: InMemoryAIKeyStorage())

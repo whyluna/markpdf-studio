@@ -332,4 +332,20 @@ final class AIProviderTests: XCTestCase {
     let data = Data(#"{"content":[]}"#.utf8)
     XCTAssertNoThrow(try AIResponseDecoder.anthropicCompletionIsWellFormed(data))
   }
+
+  /// Anthropic 信封负例：缺 content（OpenAI 形状误配 Anthropic 协议）→ invalidResponse
+  func testAnthropicEnvelopeRejectsMissingContent() {
+    let data = Data(#"{"choices":[{"message":{"content":"pong"}}]}"#.utf8)
+    XCTAssertThrowsError(try AIResponseDecoder.anthropicCompletionIsWellFormed(data)) { error in
+      XCTAssertEqual(error as? AIServiceError, .invalidResponse)
+    }
+  }
+
+  /// Anthropic 信封：error 载荷透传 Provider 文案
+  func testAnthropicEnvelopeErrorPayloadThrows() {
+    let data = Data(#"{"error":{"type":"authentication_error","message":"bad key"},"type":"error"}"#.utf8)
+    XCTAssertThrowsError(try AIResponseDecoder.anthropicCompletionIsWellFormed(data)) { error in
+      XCTAssertEqual(error as? AIServiceError, .provider("bad key"))
+    }
+  }
 }
