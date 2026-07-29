@@ -36,6 +36,7 @@ struct AIAssistantPanelView: View {
           .padding(.vertical, 2)
       }
       Divider()
+      composerDragDivider
       composer
     }
     .background(.background)
@@ -125,21 +126,18 @@ struct AIAssistantPanelView: View {
   private var messageList: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 14) {
-          ForEach(chat.messages) { message in
-            AIChatMessageRow(
-              message: message,
-              isBusy: chat.phase == .streaming,
-              actions: messageActions
-            )
-            .id(message.id)
+        Group {
+          // 中小规模对话全量布局：内容高度首帧即精确（滚动条永远成比例——
+          // LazyVStack 靠近底部才物化高公式行，总长突然撑大致滚动条跳变，实测反馈）
+          if chat.messages.count <= Self.eagerMessageLimit {
+            VStack(alignment: .leading, spacing: 14) {
+              messageRows
+            }
+          } else {
+            LazyVStack(alignment: .leading, spacing: 14) {
+              messageRows
+            }
           }
-          // 贴底锚点：可见才算贴底——用户上翻即松手
-          Color.clear
-            .frame(height: 1)
-            .id(bottomAnchorID)
-            .onAppear { isPinnedToBottom = true }
-            .onDisappear { isPinnedToBottom = false }
         }
         .padding(10)
       }
@@ -150,6 +148,27 @@ struct AIAssistantPanelView: View {
         proxy.scrollTo(bottomAnchorID)
       }
     }
+  }
+
+  /// 全量布局的消息数上限（内滚行总数 ≈ 条数 × 平均块数，控制在数百视图内）
+  private static let eagerMessageLimit = 30
+
+  @ViewBuilder
+  private var messageRows: some View {
+    ForEach(chat.messages) { message in
+      AIChatMessageRow(
+        message: message,
+        isBusy: chat.phase == .streaming,
+        actions: messageActions
+      )
+      .id(message.id)
+    }
+    // 贴底锚点：可见才算贴底——用户上翻即松手
+    Color.clear
+      .frame(height: 1)
+      .id(bottomAnchorID)
+      .onAppear { isPinnedToBottom = true }
+      .onDisappear { isPinnedToBottom = false }
   }
 
   private var emptyState: some View {
@@ -193,7 +212,51 @@ struct AIAssistantPanelView: View {
     .padding(.vertical, 6)
   }
 
+  /// 输入区手动高度（nil = 自动 56–120pt 自适应；拖动分界线后进入手动）
+  @State private var composerHeight: CGFloat?
+  /// 拖动中的幽灵线偏移（仅预览不触发布局——逐帧重排消息列表是抖动根因）
+  @State private var composerDragOffset: CGFloat = 0
+  /// 输入区实测高度（自动模式下的拖动起点）
+  @State private var measuredComposerHeight: CGFloat = 88
+
   // MARK: - 输入区
+
+  /// 输入区高度拖拽分界线（悬停变上下箭头；拖动只显幽灵线，松手一次性应用，56–400pt）
+  private var composerDragDivider: some View {
+    Rectangle()
+      .fill(Color.secondary.opacity(0.2))
+      .frame(height: 1)
+      .padding(.vertical, 4)  // 命中带 ~9pt，视觉仍是细线
+      .contentShape(Rectangle())
+      .overlay {
+        if composerDragOffset != 0 {
+          // 幽灵线：新分界位置预览（不触发任何重排）
+          Rectangle()
+            .fill(Color.accentColor.opacity(0.5))
+            .frame(height: 2)
+            .offset(y: composerDragOffset)
+        }
+      }
+      .onHover { hovering in
+        if hovering {
+          NSCursor.resizeUpDown.push()
+        } else {
+          NSCursor.pop()
+        }
+      }
+      .gesture(
+        DragGesture(minimumDistance: 0)
+          .onChanged { value in
+            composerDragOffset = value.translation.height
+          }
+          .onEnded { value in
+            let startHeight = composerHeight ?? measuredComposerHeight
+            composerHeight = min(max(startHeight - value.translation.height, 56), 400)
+            composerDragOffset = 0
+          }
+      )
+      .help("拖拽调整输入区高度")
+  }
 
   private var composer: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -205,8 +268,18 @@ struct AIAssistantPanelView: View {
           TextEditor(text: $draft)
             .font(.system(size: 14))
             .scrollContentBackground(.hidden)
-            .frame(minHeight: 56, maxHeight: 120)
+            .frame(
+              minHeight: composerHeight ?? 56,
+              maxHeight: composerHeight ?? 120
+            )
             .focused($inputFocused)
+            .background(
+              GeometryReader { geometry in
+                Color.clear.onAppear {
+                  measuredComposerHeight = geometry.size.height
+                }
+              }
+            )
           if draft.isEmpty {
             Text("向 AI 提问…（⌘↵ 发送）")
               .font(.system(size: 14))
