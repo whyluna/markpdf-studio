@@ -16,10 +16,18 @@ settings:
     SWIFT_EMIT_LOC_STRINGS: YES
 # FR-AI 决策：AI 网络层自写薄 SSE 客户端（OpenAI 兼容 + Anthropic 各 ~150 行），
 # 不引入 SwiftOpenAI/SwiftAnthropic 第三方包，保持规范 §1 原生零依赖
+packages:
+  # AI 助手公式排版：纯 Swift 原生 LaTeX（CoreText，同步布局——替换
+  # 一个公式一个 WKWebView 的方案，滚动抖动/异步高度/选区割裂从根上消失）。
+  # 本地 vendor（GitHub 直连不稳时离线可构建；升级 = 重新 clone 覆盖此目录）
+  SwiftMath:
+    path: vendor/SwiftMath
 targets:
   MarkPDF:
     type: application
     platform: macOS
+    dependencies:
+      - package: SwiftMath
     sources:
       # Swift 源码与常规资源（排除 Resources，Web 内核单独处理）
       - path: MarkPDF

@@ -12,6 +12,10 @@ struct AIAssistantPanelView: View {
   @State private var draft = ""
   @State private var toast: String?
   @FocusState private var inputFocused: Bool
+  /// ⌘↵ 发送监听（TextEditor 内 onKeyPress 拿不到修饰键，走 AppKit 通道）
+  @State private var sendKeyMonitor: Any?
+  /// 视口是否贴着底部（流式自动滚动仅贴底时生效）
+  @State private var isPinnedToBottom = true
 
   var body: some View {
     VStack(spacing: 0) {
@@ -35,6 +39,23 @@ struct AIAssistantPanelView: View {
       composer
     }
     .background(.background)
+    .onAppear {
+      sendKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
+        if event.keyCode == 36,
+          event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+          inputFocused
+        {
+          sendDraft()
+          return nil
+        }
+        return event
+      }
+    }
+    .onDisappear {
+      if let sendKeyMonitor {
+        NSEvent.removeMonitor(sendKeyMonitor)
+      }
+    }
   }
 
   // MARK: - 头部
@@ -97,6 +118,10 @@ struct AIAssistantPanelView: View {
 
   // MARK: - 消息列表
 
+  /// 贴底锚点的滚动目标 id（锚自身成为目标，滚到底它必可见——
+  /// 目标为最后一条消息时，1pt 锚悬在可见边界反复触发贴底/松手，即「到底抽搐」根因）
+  private let bottomAnchorID = "ai-chat-bottom-anchor"
+
   private var messageList: some View {
     ScrollViewReader { proxy in
       ScrollView {
@@ -109,14 +134,20 @@ struct AIAssistantPanelView: View {
             )
             .id(message.id)
           }
+          // 贴底锚点：可见才算贴底——用户上翻即松手
+          Color.clear
+            .frame(height: 1)
+            .id(bottomAnchorID)
+            .onAppear { isPinnedToBottom = true }
+            .onDisappear { isPinnedToBottom = false }
         }
         .padding(10)
       }
-      // 流式增量与新消息都滚到底（节流批量落地，频率可控）
+      // 仅在内容变化且贴底时自动滚（用户拖条/上翻期间不做任何程序化滚动）；
+      // 目标是锚点自身（回到底部后锚点可见，贴底状态自然恢复）
       .onChange(of: chat.messages.last?.content) { _, _ in
-        if let last = chat.messages.last?.id {
-          proxy.scrollTo(last, anchor: .bottom)
-        }
+        guard isPinnedToBottom else { return }
+        proxy.scrollTo(bottomAnchorID)
       }
     }
   }
@@ -168,14 +199,26 @@ struct AIAssistantPanelView: View {
     VStack(alignment: .leading, spacing: 6) {
       contextChips
       HStack(alignment: .bottom, spacing: 8) {
-        TextField("向 AI 提问…", text: $draft, axis: .vertical)
-          .textFieldStyle(.plain)
-          .font(.system(size: 14))
-          .lineLimit(3...10)
-          .padding(8)
-          .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-          .focused($inputFocused)
-          .onSubmit(sendDraft)
+        // TextEditor：长文超出自动内滚（TextField 长文不滚动的实测反馈）；
+        // ⌘↵ 发送、回车换行（长输入场景更合理）
+        ZStack(alignment: .topLeading) {
+          TextEditor(text: $draft)
+            .font(.system(size: 14))
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 56, maxHeight: 120)
+            .focused($inputFocused)
+          if draft.isEmpty {
+            Text("向 AI 提问…（⌘↵ 发送）")
+              .font(.system(size: 14))
+              .foregroundStyle(.tertiary)
+              // TextEditor 文本起点 = 容器 6 + 内建 inset 5，占位符同构对齐
+              .padding(.horizontal, 5)
+              .padding(.vertical, 6)
+              .allowsHitTesting(false)
+          }
+        }
+        .padding(6)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
         if chat.phase == .streaming {
           Button {
             chat.cancel()
@@ -245,6 +288,8 @@ struct AIAssistantPanelView: View {
     let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !question.isEmpty, chat.phase != .streaming else { return }
     draft = ""
+    // 自己发问视为回到追更状态（滚动恢复自动跟随）
+    isPinnedToBottom = true
     chat.send(question)
   }
 
