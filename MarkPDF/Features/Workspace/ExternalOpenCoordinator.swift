@@ -20,6 +20,10 @@ final class ExternalOpenCoordinator: ObservableObject {
   /// 恢复现场完成前到达的 URL 先入队（冷启动 onOpenURL 与 onAppear 顺序不定）
   private var pendingURLs: [URL] = []
   private(set) var isReady = false
+  /// 冷启动是否由外部打开唤起（onAppear 据此跳过工作区现场恢复，功能不降级）
+  var hasPendingExternalOpen: Bool { !pendingURLs.isEmpty }
+  /// 待路由外部文件数（日志用）
+  var pendingExternalOpenCount: Int { pendingURLs.count }
   /// 会话级「仅打开文件」记忆：同一文件夹不重复弹询问
   private var declinedFolders: Set<String> = []
   /// ask 流程串行化（FR-7.4 审查修复）：runModal 是同步阻塞且会跑嵌套事件循环，

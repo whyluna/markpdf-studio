@@ -54,10 +54,14 @@ final class TabStore: ObservableObject {
     activeGroup.activeEditorStore
   }
 
-  /// 在所有组中查找已打开该文件的标签（草稿 url 为 nil，不参与匹配）
+  /// 在所有组中查找已打开该文件的标签（草稿 url 为 nil，不参与匹配；
+  /// 符号链接归一比较——同一份文件经不同路径形态打开也只认一个实例）
   private func findOpenTab(url: URL) -> (group: TabGroup, tab: EditorTab)? {
+    let key = url.standardizedFileURL.resolvingSymlinksInPath().path
     for group in groups {
-      if let tab = group.tabs.first(where: { $0.url == url }) {
+      if let tab = group.tabs.first(where: {
+        $0.url?.standardizedFileURL.resolvingSymlinksInPath().path == key
+      }) {
         return (group, tab)
       }
     }

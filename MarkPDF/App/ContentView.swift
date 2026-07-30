@@ -39,10 +39,17 @@ struct ContentView: View {
     }
     // 启动恢复现场（FR-1.6）与状态记录接线（FR-1.5/1.6）
     .onAppear {
+      // 冷启动由 Finder 外部打开唤起（队列里有待路由的外部文件）：
+      // 跳过工作区现场恢复——侧栏空态、标签栏只放外部文件（功能零降级，
+      // 编辑/标注/AI 照常）；工作区快照原样封存，手动打开时照常恢复。
       // 顺序不可换：restoreWorkspace 先建立沙盒授权（startAccessingSecurityScopedResource），
       // restoreTabs 现在会在恢复时预建 store 并立即读文件，先于授权执行必 EPERM（启动竞态实锤）
-      stateStore.restoreWorkspace(into: workspaceStore)
-      stateStore.restoreTabs(into: tabStore)
+      if externalOpen.hasPendingExternalOpen {
+        // 冷启动由外部打开唤起：跳过工作区现场恢复（侧栏空态、标签只放外部文件）
+      } else {
+        stateStore.restoreWorkspace(into: workspaceStore)
+        stateStore.restoreTabs(into: tabStore)
+      }
       // 每次启动把右侧面板压到最窄：AppKit 会恢复上次列宽（经常是很宽的面板），
       // SwiftUI 无 detail 列宽 API，只能窗口就绪后直接拨 NSSplitView 分隔条
       DispatchQueue.main.async {
