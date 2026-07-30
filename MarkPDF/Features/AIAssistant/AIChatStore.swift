@@ -112,28 +112,51 @@ final class AIChatStore: ObservableObject {
 
   // MARK: - 工作区 / 文档线程（FR-AI.3）
 
-  /// 工作区变化：flush 旧工作区 → 载入新工作区会话（损坏弹错并禁写回）
+  /// 全局会话存储是否已载入过（工作区未变时避免重复全量重载）
+  private var globalStoreLoaded = false
+
+  /// 工作区变化：flush 旧工作区 → 双源载入（工作区存储 + 全局存储）。
+  /// 线程跟文件走（TextMate 范式）：外部打开的文件会话写全局存储，
+  /// 其所在文件夹后被开成工作区时，落盘路由自然把线程迁入工作区存储
   func workspaceDidChange(root: URL?) {
     let newRoot = root?.standardizedFileURL
-    guard newRoot?.path != workspaceRoot?.path else { return }
-    flush()
-    streamTask?.cancel()
-    streamTask = nil
-    compactionTask?.cancel()
-    workspaceRoot = newRoot
-    storageBroken = false
-    threads = [:]
-    messages = []
-    phase = .idle
-    guard let newRoot else { return }
-    // 旧版相对 key 迁移为绝对路径；同一文件若曾按相对/绝对双键各存一条，按时间合并
+    let rootChanged = newRoot?.path != workspaceRoot?.path
+    if rootChanged {
+      flush()
+      streamTask?.cancel()
+      streamTask = nil
+      compactionTask?.cancel()
+      workspaceRoot = newRoot
+      storageBroken = false
+      threads = [:]
+      messages = []
+      phase = .idle
+    }
+    // 全局存储每次启动必载一次；工作区变化时随同重载（无变化不重复全量读）
+    guard rootChanged || !globalStoreLoaded else { return }
+    globalStoreLoaded = true
+
+    var sources: [(sessions: [AISessionStore.StoredSession], root: URL?)] = []
+    if let newRoot {
+      do {
+        sources.append((try AISessionStore.load(workspaceRoot: newRoot), newRoot))
+      } catch {
+        storageBroken = true
+        storageError = error.localizedDescription
+        Logger.ai.error("AI 会话载入失败: \(String(describing: error), privacy: .public)")
+      }
+    }
+    if let global = try? AISessionStore.loadGlobal() {
+      sources.append((global, nil))
+    }
+
     var didMigrate = false
-    do {
-      for session in try AISessionStore.load(workspaceRoot: newRoot) {
-        if let docPath = session.docPath, !docPath.isEmpty, !docPath.hasPrefix("/") {
+    for (sessions, sourceRoot) in sources {
+      for session in sessions {
+        if sourceRoot != nil, let docPath = session.docPath, !docPath.isEmpty, !docPath.hasPrefix("/") {
           didMigrate = true
         }
-        let key = Self.migratedKey(for: session.docPath, root: newRoot)
+        let key = sourceRoot.map { Self.migratedKey(for: session.docPath, root: $0) } ?? (session.docPath ?? "")
         let incoming = Thread(
           messages: session.messages.map(ChatMessage.init(stored:)),
           rollingSummary: session.rollingSummary,
@@ -162,15 +185,11 @@ final class AIChatStore: ObservableObject {
           threads[key] = incoming
         }
       }
-    } catch {
-      storageBroken = true
-      storageError = error.localizedDescription
-      Logger.ai.error("AI 会话载入失败: \(String(describing: error), privacy: .public)")
     }
+    guard rootChanged else { return }
     messages = threads[activeDocKey]?.messages ?? []
-    // 迁移/合并立即落盘（格式收敛为绝对路径键，不等下一次消息变化或退出）——
-    // 必须在 messages 恢复之后：persistNow 会先 storeActiveThreadMessages，
-    // 若在此前落盘，载入前的空 messages 会把刚合并的激活线程抹成空（实锤丢数据）
+    // 迁移/合并立即落盘（格式收敛；必须在 messages 恢复之后——
+    // persistNow 会先 storeActiveThreadMessages，此前落盘会把激活线程抹空）
     if didMigrate {
       persistNow()
     }
@@ -218,32 +237,53 @@ final class AIChatStore: ObservableObject {
     threads[activeDocKey] = thread
   }
 
-  /// 消息变化统一收口：回写线程表 + 防抖落盘
+  /// 消息变化统一收口：回写线程表 + 防抖落盘（工作区/全局双写，外部打开也持久）
   private func syncActiveThread() {
     storeActiveThreadMessages()
-    guard isPersistent else { return }
     persistDebouncer.schedule { [weak self] in
       self?.persistNow()
     }
   }
 
+  /// 按域落盘：key 落在工作区根下（含通用线程 ""）写工作区存储，
+  /// 其余（外部打开的文件）写全局存储——线程跟文件走，文件夹后被开成
+  /// 工作区时，该线程自然路由回工作区存储（全局存储中同步移除）
   private func persistNow() {
-    guard let workspaceRoot, isPersistent else { return }
     storeActiveThreadMessages()
-    let sessions = threads.compactMap { key, thread -> AISessionStore.StoredSession? in
-      guard !thread.messages.isEmpty else { return nil }
-      return AISessionStore.StoredSession(
+    var workspaceSessions: [AISessionStore.StoredSession] = []
+    var globalSessions: [AISessionStore.StoredSession] = []
+    let rootPath = workspaceRoot?.path
+    for (key, thread) in threads where !thread.messages.isEmpty {
+      let session = AISessionStore.StoredSession(
         docPath: key.isEmpty ? nil : key,
         messages: thread.messages.map(\.stored),
         updatedAt: thread.updatedAt == .distantPast ? Date() : thread.updatedAt,
         rollingSummary: thread.rollingSummary,
         summarizedCount: thread.summarizedCount
       )
+      if key.isEmpty {
+        workspaceSessions.append(session)
+      } else if let rootPath, key.hasPrefix(rootPath + "/") {
+        workspaceSessions.append(session)
+      } else {
+        globalSessions.append(session)
+      }
     }
-    do {
-      try AISessionStore.save(sessions, workspaceRoot: workspaceRoot)
-    } catch {
-      Logger.ai.error("AI 会话落盘失败: \(String(describing: error), privacy: .public)")
+    if let workspaceRoot, isPersistent {
+      do {
+        try AISessionStore.save(workspaceSessions, workspaceRoot: workspaceRoot)
+      } catch {
+        Logger.ai.error("AI 会话落盘失败: \(String(describing: error), privacy: .public)")
+      }
+    }
+    // 仅在全局存储已载入后写回：未载入时内存为空状态不权威，
+    // 直接写会把磁盘上的全局会话清空（启动/首切即丢，实锤）
+    if globalStoreLoaded {
+      do {
+        try AISessionStore.saveGlobal(globalSessions)
+      } catch {
+        Logger.ai.error("AI 会话全局落盘失败: \(String(describing: error), privacy: .public)")
+      }
     }
   }
 

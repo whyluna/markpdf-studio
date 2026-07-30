@@ -113,8 +113,8 @@ struct AIAssistantPanelView: View {
   }
 
   private var threadCaption: String {
-    let owner = chat.activeDocName.map { String(localized: "会话：\($0)") } ?? String(localized: "会话：工作区通用")
-    return chat.isPersistent ? owner : owner + String(localized: "（无工作区，重启不保留）")
+    // 工作区内外会话均持久（外部打开写全局存储，线程跟文件走）
+    chat.activeDocName.map { String(localized: "会话：\($0)") } ?? String(localized: "会话：工作区通用")
   }
 
   // MARK: - 消息列表

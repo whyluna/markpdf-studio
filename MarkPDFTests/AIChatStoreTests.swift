@@ -6,16 +6,22 @@ import XCTest
 final class AIChatStoreTests: XCTestCase {
   private var suiteName: String!
   private var defaults: UserDefaults!
+  private var globalDir: URL!
 
   override func setUp() {
     super.setUp()
     suiteName = "AIChatStoreTests"
     defaults = UserDefaults(suiteName: suiteName)
     defaults.removePersistentDomain(forName: suiteName)
+    // 全局会话存储隔离到临时目录（persistNow 双写，防测试污染真实 Application Support）
+    globalDir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-global-\(UUID().uuidString)")
+    AISessionStore.globalStoreDirectory = globalDir
   }
 
   override func tearDown() {
     removeTestDefaultsSuite(suiteName, using: defaults)
+    try? FileManager.default.removeItem(at: globalDir)
     super.tearDown()
   }
 
@@ -239,6 +245,108 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertEqual(reopened.messages.count, 2)
     XCTAssertEqual(reopened.messages.first?.content, "持久化我")
     XCTAssertEqual(reopened.messages.last?.content, "答")
+  }
+
+  // MARK: - 全局会话存储（TextMate 范式：线程跟文件走）
+
+  /// 外部打开（文件在工作区根之外）的线程写全局存储，工作区文件不写
+  func testExternalThreadPersistsToGlobalStore() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    AISessionStore.globalStoreDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-global-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: AISessionStore.globalStoreDirectory) }
+
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)
+    store.workspaceDidChange(root: root)
+    let externalFile = URL(fileURLWithPath: "/tmp/external-\(UUID().uuidString).pdf")
+    store.bindDocument(externalFile)
+    store.send("外部文档的问题")
+    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    store.flush()
+
+    let globalSessions = try AISessionStore.loadGlobal()
+    XCTAssertEqual(
+      globalSessions.map(\.docPath),
+      [externalFile.standardizedFileURL.resolvingSymlinksInPath().path],
+      "外部文件的线程必须写全局存储"
+    )
+    let workspaceSessions = try AISessionStore.load(workspaceRoot: root)
+    XCTAssertTrue(workspaceSessions.isEmpty, "外部文件的线程不得污染工作区存储")
+  }
+
+  /// 外部聊过的文件之后被开成工作区：选中即续（线程跟文件走，惰性迁入工作区存储）
+  func testOpeningWorkspaceContinuesExternalThread() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    AISessionStore.globalStoreDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-global-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: AISessionStore.globalStoreDirectory) }
+
+    // 预置：该文件曾在外部聊过（全局存储）
+    let file = root.appendingPathComponent("paper.pdf")
+    try AISessionStore.saveGlobal(
+      [
+        AISessionStore.StoredSession(
+          docPath: file.standardizedFileURL.resolvingSymlinksInPath().path,
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "外部聊的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+            AISessionStore.StoredMessage(role: "assistant", content: "外部答的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: Date(timeIntervalSince1970: 1_000)
+        ),
+      ]
+    )
+
+    // 打开其所在文件夹为工作区 → 选中即见同一线程
+    let store = makeStore(transport: AIServiceTests.MockAITransport())
+    store.workspaceDidChange(root: root)
+    store.bindDocument(file)
+    XCTAssertEqual(store.messages.map(\.content), ["外部聊的", "外部答的"], "全局线程在工作区内选中即可见")
+
+    // 惰性迁移：落盘后线程进工作区存储、全局存储移除
+    store.flush()
+    let workspaceSessions = try AISessionStore.load(workspaceRoot: root)
+    XCTAssertEqual(workspaceSessions.map(\.docPath), [file.standardizedFileURL.resolvingSymlinksInPath().path])
+    let globalSessions = try AISessionStore.loadGlobal()
+    XCTAssertFalse(
+      globalSessions.contains(where: { $0.docPath == file.standardizedFileURL.resolvingSymlinksInPath().path }),
+      "迁入工作区后全局存储不得再保留该线程"
+    )
+  }
+
+  /// 无工作区时全局线程照常载入（外部打开启动即续）
+  func testGlobalThreadLoadsWithoutWorkspace() throws {
+    AISessionStore.globalStoreDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIChatStoreTests-global-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: AISessionStore.globalStoreDirectory) }
+    let file = URL(fileURLWithPath: "/tmp/ext-\(UUID().uuidString).pdf")
+    try AISessionStore.saveGlobal(
+      [
+        AISessionStore.StoredSession(
+          docPath: file.standardizedFileURL.resolvingSymlinksInPath().path,
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "上次聊的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: Date()
+        ),
+      ]
+    )
+
+    let store = makeStore(transport: AIServiceTests.MockAITransport())
+    store.workspaceDidChange(root: nil)
+    store.bindDocument(file)
+    XCTAssertEqual(store.messages.map(\.content), ["上次聊的"], "无工作区也能从全局存储续上")
   }
 
   // MARK: - 会话线程 key 统一绝对路径（v1.4.1：工作区内外打开同一文件共享线程）

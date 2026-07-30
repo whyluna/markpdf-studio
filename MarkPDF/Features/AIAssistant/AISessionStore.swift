@@ -79,6 +79,18 @@ enum AISessionStore {
     workspaceRoot.appendingPathComponent(".markpdf/ai-sessions.json")
   }
 
+  // MARK: - 全局存储（TextMate 范式：线程跟文件走）
+
+  /// 全局会话存储目录（Application Support/MarkPDF；工作区外打开的文件——
+  /// 沙盒安全不依赖文件夹授权；测试可改写为临时目录）
+  static var globalStoreDirectory: URL = FileManager.default
+    .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("MarkPDF", isDirectory: true)
+
+  static func globalFileURL() -> URL {
+    globalStoreDirectory.appendingPathComponent("ai-sessions.json")
+  }
+
   /// 读盘：文件不存在返回空；存在但解不出抛 corrupted（调用方弹错并禁写回，防覆盖）
   static func load(workspaceRoot: URL) throws -> [StoredSession] {
     let url = fileURL(workspaceRoot: workspaceRoot)
@@ -91,9 +103,30 @@ enum AISessionStore {
     }
   }
 
+  /// 全局存储读盘（同 load 的损坏语义）
+  static func loadGlobal() throws -> [StoredSession] {
+    let url = globalFileURL()
+    guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+    let data = try Data(contentsOf: url)
+    do {
+      return try JSONDecoder().decode(SessionsFile.self, from: data).sessions
+    } catch {
+      throw StoreError.corrupted(error.localizedDescription)
+    }
+  }
+
   /// 写盘：建 .markpdf 目录 + 原子写（开发规范 §10）；每会话截到最近 messageCap 条
   static func save(_ sessions: [StoredSession], workspaceRoot: URL) throws {
     let url = fileURL(workspaceRoot: workspaceRoot)
+    try write(sessions, to: url)
+  }
+
+  /// 全局存储写盘（同 save 的原子写/截断语义）
+  static func saveGlobal(_ sessions: [StoredSession]) throws {
+    try write(sessions, to: globalFileURL())
+  }
+
+  private static func write(_ sessions: [StoredSession], to url: URL) throws {
     try FileManager.default.createDirectory(
       at: url.deletingLastPathComponent(),
       withIntermediateDirectories: true
