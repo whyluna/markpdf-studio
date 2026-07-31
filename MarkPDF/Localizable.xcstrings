@@ -21,6 +21,7 @@
       }
     },
     "（无工作区，重启不保留）" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
