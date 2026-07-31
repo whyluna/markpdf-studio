@@ -7,19 +7,22 @@ final class AIChatStoreTests: XCTestCase {
   private var suiteName: String!
   private var defaults: UserDefaults!
   private var globalDir: URL!
+  /// 会话仓库（AIChatStore 持弱引用，测试需强持有）
+  private var repositories: [AISessionRepository] = []
 
   override func setUp() {
     super.setUp()
     suiteName = "AIChatStoreTests"
     defaults = UserDefaults(suiteName: suiteName)
     defaults.removePersistentDomain(forName: suiteName)
-    // 全局会话存储隔离到临时目录（persistNow 双写，防测试污染真实 Application Support）
+    // 全局会话存储隔离到临时目录（v1.5 唯一落盘位置，防测试污染真实 Application Support）
     globalDir = FileManager.default.temporaryDirectory
       .appendingPathComponent("AIChatStoreTests-global-\(UUID().uuidString)")
     AISessionStore.globalStoreDirectory = globalDir
   }
 
   override func tearDown() {
+    repositories = []
     removeTestDefaultsSuite(suiteName, using: defaults)
     try? FileManager.default.removeItem(at: globalDir)
     super.tearDown()
@@ -37,6 +40,7 @@ final class AIChatStoreTests: XCTestCase {
   private func makeStore(
     transport: AIServiceTests.MockAITransport,
     hasKey: Bool = true,
+    repository: AISessionRepository? = nil,
     configure: ((AISettingsStore) -> Void)? = nil
   ) -> AIChatStore {
     let settings = AISettingsStore(defaults: defaults)
@@ -46,7 +50,39 @@ final class AIChatStoreTests: XCTestCase {
     let keys = AIKeyStore(storage: InMemoryAIKeyStorage())
     if hasKey { keys.save("sk-test", for: AIProviderKind.deepseek.rawValue) }
     let service = AIService(transport: transport, keys: keys)
-    return AIChatStore(settings: settings, service: service)
+    // 不传仓库时新建一个（新实例 = 重新读盘，模拟重启）；同进程多窗口传入同一实例
+    return AIChatStore(settings: settings, service: service, repository: repository ?? makeRepository())
+  }
+
+  /// 仓库实例（测试强持有；AIChatStore 侧为弱引用）
+  private func makeRepository() -> AISessionRepository {
+    let repository = AISessionRepository()
+    repositories.append(repository)
+    return repository
+  }
+
+  /// 预置一条工作区通用线程到全局存储（压缩用例的历史夹具；键 = 工作区根路径）
+  private func seedWorkspaceThread(
+    root: URL,
+    messages: [AISessionStore.StoredMessage],
+    rollingSummary: String? = nil,
+    summarizedCount: Int? = nil
+  ) throws {
+    try AISessionStore.saveGlobal([
+      AISessionStore.StoredSession(
+        docPath: AIChatStore.threadKey(for: root),
+        messages: messages,
+        updatedAt: Date(),
+        rollingSummary: rollingSummary,
+        summarizedCount: summarizedCount
+      )
+    ])
+  }
+
+  /// 读回工作区通用线程
+  private func loadWorkspaceThread(root: URL) -> AISessionStore.StoredSession? {
+    let key = AIChatStore.threadKey(for: root)
+    return ((try? AISessionStore.loadGlobal()) ?? []).first { $0.docPath == key }
   }
 
   private func waitUntil(
@@ -247,17 +283,14 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertEqual(reopened.messages.last?.content, "答")
   }
 
-  // MARK: - 全局会话存储（TextMate 范式：线程跟文件走）
+  // MARK: - 全局会话存储（v1.5 方案 A：线程跟文件走，集中存全局文件）
 
-  /// 外部打开（文件在工作区根之外）的线程写全局存储，工作区文件不写
-  func testExternalThreadPersistsToGlobalStore() async throws {
+  /// 工作区内文件的线程也写全局存储，不再写 `.markpdf/ai-sessions.json`
+  func testAllThreadsPersistToGlobalStoreOnly() async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    AISessionStore.globalStoreDirectory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AIChatStoreTests-global-\(UUID().uuidString)")
-    defer { try? FileManager.default.removeItem(at: AISessionStore.globalStoreDirectory) }
 
     let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
       AsyncThrowingStream { continuation in
@@ -267,74 +300,116 @@ final class AIChatStoreTests: XCTestCase {
     })
     let store = makeStore(transport: transport)
     store.workspaceDidChange(root: root)
+    let file = root.appendingPathComponent("note.md")
+    store.bindDocument(file)
+    store.send("工作区内的问题")
+    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    store.flush()
+
+    XCTAssertEqual(
+      try AISessionStore.loadGlobal().map(\.docPath),
+      [AIChatStore.threadKey(for: file)],
+      "工作区内文件的线程也集中存全局（同一文件经不同工作区层级打开不再分叉）"
+    )
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: AISessionStore.fileURL(workspaceRoot: root).path),
+      "不再写工作区 .markpdf 会话文件"
+    )
+  }
+
+  /// 外部打开（工作区外）的线程同样进全局存储
+  func testExternalThreadPersistsToGlobalStore() async throws {
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)
+    store.workspaceDidChange(root: nil)
     let externalFile = URL(fileURLWithPath: "/tmp/external-\(UUID().uuidString).pdf")
     store.bindDocument(externalFile)
     store.send("外部文档的问题")
     _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
     store.flush()
 
-    let globalSessions = try AISessionStore.loadGlobal()
     XCTAssertEqual(
-      globalSessions.map(\.docPath),
-      [externalFile.standardizedFileURL.resolvingSymlinksInPath().path],
-      "外部文件的线程必须写全局存储"
+      try AISessionStore.loadGlobal().map(\.docPath),
+      [AIChatStore.threadKey(for: externalFile)]
     )
-    let workspaceSessions = try AISessionStore.load(workspaceRoot: root)
-    XCTAssertTrue(workspaceSessions.isEmpty, "外部文件的线程不得污染工作区存储")
   }
 
-  /// 外部聊过的文件之后被开成工作区：选中即续（线程跟文件走，惰性迁入工作区存储）
-  func testOpeningWorkspaceContinuesExternalThread() async throws {
+  /// 同一文件经不同工作区层级打开：读到同一条线程（用户实测的分叉缺口）
+  func testSameFileAcrossWorkspaceLevelsSharesThread() async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let nested = root.appendingPathComponent("sub", isDirectory: true)
+    try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    AISessionStore.globalStoreDirectory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AIChatStoreTests-global-\(UUID().uuidString)")
-    defer { try? FileManager.default.removeItem(at: AISessionStore.globalStoreDirectory) }
+    let file = nested.appendingPathComponent("paper.pdf")
 
-    // 预置：该文件曾在外部聊过（全局存储）
-    let file = root.appendingPathComponent("paper.pdf")
-    try AISessionStore.saveGlobal(
-      [
-        AISessionStore.StoredSession(
-          docPath: file.standardizedFileURL.resolvingSymlinksInPath().path,
-          messages: [
-            AISessionStore.StoredMessage(role: "user", content: "外部聊的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
-            AISessionStore.StoredMessage(role: "assistant", content: "外部答的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
-          ],
-          updatedAt: Date(timeIntervalSince1970: 1_000)
-        ),
-      ]
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    // 祖先目录为工作区时聊
+    let outer = makeStore(transport: transport)
+    outer.workspaceDidChange(root: root)
+    outer.bindDocument(file)
+    outer.send("在祖先工作区聊的")
+    _ = await waitUntil { outer.phase == .idle && outer.messages.count == 2 }
+    outer.flush()
+
+    // 改以子目录为工作区（新实例 = 重启）：同一文件续上，不分叉
+    let inner = makeStore(transport: transport)
+    inner.workspaceDidChange(root: nested)
+    inner.bindDocument(file)
+    XCTAssertEqual(
+      inner.messages.map(\.content),
+      ["在祖先工作区聊的", "答"],
+      "会话是文件的属性：换工作区层级仍是同一条线程"
     )
+  }
 
-    // 打开其所在文件夹为工作区 → 选中即见同一线程
-    let store = makeStore(transport: AIServiceTests.MockAITransport())
-    store.workspaceDidChange(root: root)
-    store.bindDocument(file)
-    XCTAssertEqual(store.messages.map(\.content), ["外部聊的", "外部答的"], "全局线程在工作区内选中即可见")
+  /// 两个窗口各聊各自文件：共享仓库整体写出，互不清空
+  func testTwoWindowsPersistBothThreads() async throws {
+    let repository = makeRepository()
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let fileA = URL(fileURLWithPath: "/tmp/windowA-\(UUID().uuidString).md")
+    let fileB = URL(fileURLWithPath: "/tmp/windowB-\(UUID().uuidString).md")
+    let windowA = makeStore(transport: transport, repository: repository)
+    let windowB = makeStore(transport: transport, repository: repository)
+    windowA.bindDocument(fileA)
+    windowA.send("A 窗口")
+    _ = await waitUntil { windowA.phase == .idle && windowA.messages.count == 2 }
+    windowB.bindDocument(fileB)
+    windowB.send("B 窗口")
+    _ = await waitUntil { windowB.phase == .idle && windowB.messages.count == 2 }
+    windowA.flush()
+    windowB.flush()
 
-    // 惰性迁移：落盘后线程进工作区存储、全局存储移除
-    store.flush()
-    let workspaceSessions = try AISessionStore.load(workspaceRoot: root)
-    XCTAssertEqual(workspaceSessions.map(\.docPath), [file.standardizedFileURL.resolvingSymlinksInPath().path])
-    let globalSessions = try AISessionStore.loadGlobal()
-    XCTAssertFalse(
-      globalSessions.contains(where: { $0.docPath == file.standardizedFileURL.resolvingSymlinksInPath().path }),
-      "迁入工作区后全局存储不得再保留该线程"
+    let keys = Set(try AISessionStore.loadGlobal().compactMap(\.docPath))
+    XCTAssertEqual(
+      keys,
+      [AIChatStore.threadKey(for: fileA), AIChatStore.threadKey(for: fileB)],
+      "多窗口线程互不覆盖"
     )
   }
 
   /// 无工作区时全局线程照常载入（外部打开启动即续）
   func testGlobalThreadLoadsWithoutWorkspace() throws {
-    AISessionStore.globalStoreDirectory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AIChatStoreTests-global-\(UUID().uuidString)")
-    defer { try? FileManager.default.removeItem(at: AISessionStore.globalStoreDirectory) }
     let file = URL(fileURLWithPath: "/tmp/ext-\(UUID().uuidString).pdf")
     try AISessionStore.saveGlobal(
       [
         AISessionStore.StoredSession(
-          docPath: file.standardizedFileURL.resolvingSymlinksInPath().path,
+          docPath: AIChatStore.threadKey(for: file),
           messages: [
             AISessionStore.StoredMessage(role: "user", content: "上次聊的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
           ],
@@ -347,12 +422,30 @@ final class AIChatStoreTests: XCTestCase {
     store.workspaceDidChange(root: nil)
     store.bindDocument(file)
     XCTAssertEqual(store.messages.map(\.content), ["上次聊的"], "无工作区也能从全局存储续上")
+    XCTAssertTrue(store.isPersistent, "文件线程始终持久（会话跟文件走）")
   }
 
-  // MARK: - 会话线程 key 统一绝对路径（v1.4.1：工作区内外打开同一文件共享线程）
+  /// 无工作区窗口的「工作区通用」线程为内存态（无归属文件，不落盘）
+  func testWorkspaceGeneralThreadWithoutWorkspaceIsMemoryOnly() async {
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)
+    store.workspaceDidChange(root: nil)
+    XCTAssertFalse(store.isPersistent, "无工作区的通用线程不持久（面板提示依据）")
+    store.send("草稿问题")
+    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    store.flush()
+    XCTAssertTrue(((try? AISessionStore.loadGlobal()) ?? []).isEmpty, "内存态不落盘")
+  }
 
-  /// 旧版相对工作区根的 key 载入时迁移为绝对路径
-  func testRelativePathKeyMigratesToAbsoluteOnLoad() throws {
+  // MARK: - 旧版工作区存储迁移（v1.5）
+
+  /// 旧格式（相对 key + 通用线程）迁入全局存储，原文件归档
+  func testLegacyWorkspaceStoreMigratesToGlobal() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -367,6 +460,13 @@ final class AIChatStoreTests: XCTestCase {
           ],
           updatedAt: Date()
         ),
+        AISessionStore.StoredSession(
+          docPath: nil,  // 旧版工作区通用线程
+          messages: [
+            AISessionStore.StoredMessage(role: "user", content: "通用线程", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+          ],
+          updatedAt: Date()
+        ),
       ],
       workspaceRoot: root
     )
@@ -375,24 +475,25 @@ final class AIChatStoreTests: XCTestCase {
     store.workspaceDidChange(root: root)
     store.bindDocument(root.appendingPathComponent("note.md"))
     XCTAssertEqual(store.messages.map(\.content), ["旧记录", "旧答"], "相对 key 迁移后同文档线程可见")
-    // 迁移立即落盘：磁盘 key 收敛为绝对路径（防有人把 persistNow 挪成异步/防抖）
-    let persisted = try AISessionStore.load(workspaceRoot: root)
-    XCTAssertEqual(
-      persisted.compactMap(\.docPath),
-      [root.appendingPathComponent("note.md").standardizedFileURL.resolvingSymlinksInPath().path],
-      "迁移后磁盘 key 必须是绝对路径"
-    )
+
+    store.flush()
+    let keys = Set(try AISessionStore.loadGlobal().compactMap(\.docPath))
+    XCTAssertTrue(keys.contains(AIChatStore.threadKey(for: root.appendingPathComponent("note.md"))))
+    XCTAssertTrue(keys.contains(AIChatStore.threadKey(for: root)), "旧通用线程键迁为工作区根路径")
+    // 原文件归档：不再二次迁移且数据可回溯
+    XCTAssertFalse(FileManager.default.fileExists(atPath: AISessionStore.fileURL(workspaceRoot: root).path))
+    XCTAssertTrue(FileManager.default.fileExists(
+      atPath: root.appendingPathComponent(".markpdf/ai-sessions.migrated.json").path
+    ))
   }
 
-  /// 合并带摘要平移 + 相近时间戳（评审 major：persistNow 全量刷 Date() 曾让按时间合并退化）
-  func testMergeShiftsSummaryAndKeepsChronology() throws {
+  /// 迁移合并：同一文件双键（相对 + 绝对）按 updatedAt 先后合并，摘要下标平移
+  func testMigrationMergesConflictingKeys() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let file = root.appendingPathComponent("note.md")
-    let olderDate = Date(timeIntervalSince1970: 1_000)
-    let newerDate = Date(timeIntervalSince1970: 1_000.001)  // 微秒级相近（真实双键同批写盘形态）
     try AISessionStore.save(
       [
         AISessionStore.StoredSession(
@@ -401,16 +502,16 @@ final class AIChatStoreTests: XCTestCase {
             AISessionStore.StoredMessage(role: "user", content: "旧1", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
             AISessionStore.StoredMessage(role: "assistant", content: "旧2", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
           ],
-          updatedAt: olderDate,
+          updatedAt: Date(timeIntervalSince1970: 1_000),
           rollingSummary: "旧摘要",
           summarizedCount: 1
         ),
         AISessionStore.StoredSession(
-          docPath: file.standardizedFileURL.resolvingSymlinksInPath().path,
+          docPath: AIChatStore.threadKey(for: file),
           messages: [
             AISessionStore.StoredMessage(role: "user", content: "新1", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
           ],
-          updatedAt: newerDate,
+          updatedAt: Date(timeIntervalSince1970: 1_000.001),  // 微秒级相近（真实双键同批写盘形态）
           rollingSummary: "新摘要",
           summarizedCount: 1
         ),
@@ -424,51 +525,16 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertEqual(store.messages.map(\.content), ["旧1", "旧2", "新1"], "较旧线程消息在前")
 
     store.flush()
-    let persisted = try AISessionStore.load(workspaceRoot: root)
-    let docSessions = persisted.filter { $0.docPath != nil }
-    XCTAssertEqual(docSessions.count, 1)
-    XCTAssertEqual(docSessions.first?.rollingSummary, "新摘要", "摘要沿用较新一方")
-    XCTAssertEqual(docSessions.first?.summarizedCount, 3, "覆盖下标按旧者消息数平移（1 + 2）")
-    XCTAssertEqual(docSessions.first?.updatedAt.timeIntervalSince1970 ?? -1, 1_000.001, accuracy: 0.01, "updatedAt 取较新一方（不被落盘刷新）")
-  }
-
-  /// 同一文件曾按相对/绝对双键各存一条（旧版工作区/外部两种打开方式）→ 按时间合并
-  func testConflictingRelativeAndAbsoluteThreadsMerge() throws {
-    let root = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let file = root.appendingPathComponent("note.md")
-    try AISessionStore.save(
-      [
-        AISessionStore.StoredSession(
-          docPath: "note.md",
-          messages: [
-            AISessionStore.StoredMessage(role: "user", content: "工作区里聊的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
-          ],
-          updatedAt: Date(timeIntervalSince1970: 1_000)
-        ),
-        AISessionStore.StoredSession(
-          docPath: file.standardizedFileURL.path,
-          messages: [
-            AISessionStore.StoredMessage(role: "user", content: "外部打开聊的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
-          ],
-          updatedAt: Date(timeIntervalSince1970: 2_000)
-        ),
-      ],
-      workspaceRoot: root
+    let merged = try XCTUnwrap(
+      try AISessionStore.loadGlobal().first { $0.docPath == AIChatStore.threadKey(for: file) }
     )
-
-    let store = makeStore(transport: AIServiceTests.MockAITransport())
-    store.workspaceDidChange(root: root)
-    store.bindDocument(file)
-    XCTAssertEqual(store.messages.map(\.content), ["工作区里聊的", "外部打开聊的"], "双线程按时间先后合并")
+    XCTAssertEqual(merged.rollingSummary, "新摘要", "摘要沿用较新一方")
+    XCTAssertEqual(merged.summarizedCount, 3, "覆盖下标按旧者消息数平移（1 + 2）")
   }
 
-  /// 启动时序竞态：标签恢复先绑文档（messages 为空）、工作区后载入——
-  /// 迁移落盘不得把激活线程抹成空（2026-07-27 实锤丢数据：persistNow 先
-  /// storeActiveThreadMessages，载入前的空 messages 覆盖刚合并的线程）
-  func testMigrationPersistDoesNotStompActiveThread() throws {
+  /// 启动时序竞态：标签恢复先绑文档（线程尚空）、工作区后载入触发迁移——
+  /// 激活线程必须补上迁入的历史，且不得把仓库记录覆盖成空（2026-07-27 实锤丢数据）
+  func testMigrationDoesNotStompActiveThread() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("AIChatStoreTests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -479,16 +545,9 @@ final class AIChatStoreTests: XCTestCase {
         AISessionStore.StoredSession(
           docPath: "note.md",
           messages: [
-            AISessionStore.StoredMessage(role: "user", content: "相对线程", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
+            AISessionStore.StoredMessage(role: "user", content: "迁移进来的", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
           ],
           updatedAt: Date(timeIntervalSince1970: 1_000)
-        ),
-        AISessionStore.StoredSession(
-          docPath: file.standardizedFileURL.path,
-          messages: [
-            AISessionStore.StoredMessage(role: "user", content: "绝对线程", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
-          ],
-          updatedAt: Date(timeIntervalSince1970: 2_000)
         ),
       ],
       workspaceRoot: root
@@ -496,30 +555,52 @@ final class AIChatStoreTests: XCTestCase {
 
     let store = makeStore(transport: AIServiceTests.MockAITransport())
     store.bindDocument(file)  // 先绑文档（模拟标签恢复先于工作区载入的启动时序）
+    XCTAssertTrue(store.messages.isEmpty)
     store.workspaceDidChange(root: root)
 
-    XCTAssertEqual(store.messages.map(\.content), ["相对线程", "绝对线程"], "激活线程消息不得被抹空")
-    let sessions = try AISessionStore.load(workspaceRoot: root)
-    let docSessions = sessions.filter { $0.docPath != nil }
-    XCTAssertEqual(docSessions.count, 1, "迁移后收敛为单线程")
-    XCTAssertEqual(docSessions.first?.messages.map(\.content), ["相对线程", "绝对线程"], "磁盘线程内容完整")
+    XCTAssertEqual(store.messages.map(\.content), ["迁移进来的"], "激活线程补上迁入的历史")
+    store.flush()
+    let persisted = try XCTUnwrap(
+      try AISessionStore.loadGlobal().first { $0.docPath == AIChatStore.threadKey(for: file) }
+    )
+    XCTAssertEqual(persisted.messages.map(\.content), ["迁移进来的"], "不得被空态覆盖")
   }
 
-  func testMigratedKeyHelper() {
+  func testThreadKeyHelpers() {
     let root = URL(fileURLWithPath: "/tmp/ws")
     XCTAssertEqual(
-      AIChatStore.migratedKey(for: "papers/a.pdf", root: root),
-      "/tmp/ws/papers/a.pdf"
+      AISessionRepository.migratedKey(for: "papers/a.pdf", root: root),
+      URL(fileURLWithPath: "/tmp/ws/papers/a.pdf").resolvingSymlinksInPath().path
     )
     XCTAssertEqual(
-      AIChatStore.migratedKey(for: "/abs/a.pdf", root: root),
-      "/abs/a.pdf",
-      "绝对路径原样保留"
+      AISessionRepository.migratedKey(for: nil, root: root),
+      AIChatStore.threadKey(for: root),
+      "旧通用线程 → 工作区根路径"
     )
-    XCTAssertEqual(AIChatStore.migratedKey(for: nil, root: root), "", "通用线程")
+    XCTAssertEqual(AIChatStore.workspaceThreadKey(for: nil), "", "无工作区通用线程为空串（内存态）")
   }
 
-  func testCorruptedSessionFileSurfacesErrorAndBlocksWrite() throws {
+  func testCorruptedGlobalStoreSurfacesErrorAndBlocksWrite() throws {
+    try FileManager.default.createDirectory(at: globalDir, withIntermediateDirectories: true)
+    let globalFile = AISessionStore.globalFileURL()
+    try Data("broken".utf8).write(to: globalFile)
+
+    let repository = makeRepository()
+    XCTAssertTrue(repository.isBroken, "损坏必须可感知（NFR-5）")
+    XCTAssertNotNil(repository.storageError)
+    let store = makeStore(transport: AIServiceTests.MockAITransport(), repository: repository)
+    store.bindDocument(URL(fileURLWithPath: "/tmp/whatever.md"))
+    XCTAssertFalse(store.isPersistent, "损坏期间禁写回防覆盖")
+    store.flush()
+    XCTAssertEqual(
+      String(decoding: try Data(contentsOf: globalFile), as: UTF8.self),
+      "broken",
+      "原文件未被覆盖"
+    )
+  }
+
+  /// 旧工作区文件损坏：提示但不阻断（全局存储照常工作），且不归档以便用户自查
+  func testCorruptedLegacyStoreSurfacesErrorWithoutArchiving() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("AIChatStoreTests-corrupt-\(UUID().uuidString)")
     let dir = root.appendingPathComponent(".markpdf")
@@ -530,10 +611,8 @@ final class AIChatStoreTests: XCTestCase {
     let store = makeStore(transport: AIServiceTests.MockAITransport())
     store.workspaceDidChange(root: root)
     XCTAssertNotNil(store.storageError, "损坏必须可感知（NFR-5）")
-    XCTAssertFalse(store.isPersistent, "损坏期间禁写回防覆盖")
-    store.flush()
     let data = try Data(contentsOf: dir.appendingPathComponent("ai-sessions.json"))
-    XCTAssertEqual(String(decoding: data, as: UTF8.self), "broken", "原文件未被覆盖")
+    XCTAssertEqual(String(decoding: data, as: UTF8.self), "broken", "原文件未被覆盖或归档")
   }
 
   // MARK: - 结构选节两遍路由（v1.2）
@@ -696,9 +775,9 @@ final class AIChatStoreTests: XCTestCase {
       .appendingPathComponent("SummaryTests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    try AISessionStore.save([
+    try AISessionStore.saveGlobal([
       AISessionStore.StoredSession(
-        docPath: nil,
+        docPath: AIChatStore.threadKey(for: root),
         messages: [
           AISessionStore.StoredMessage(role: "user", content: "旧问", contextSummary: nil, promptQuestion: "旧问", wasCancelled: nil),
           AISessionStore.StoredMessage(role: "assistant", content: "旧答", contextSummary: nil, promptQuestion: nil, wasCancelled: nil),
@@ -707,7 +786,7 @@ final class AIChatStoreTests: XCTestCase {
         rollingSummary: "早期结论：注意力有效",
         summarizedCount: 2
       )
-    ], workspaceRoot: root)
+    ])
 
     var requestBodies: [Data] = []
     let transport = AIServiceTests.MockAITransport(streamHandler: { request in
@@ -740,10 +819,7 @@ final class AIChatStoreTests: XCTestCase {
       stored.append(AISessionStore.StoredMessage(role: "user", content: "问\(index)", contextSummary: nil, promptQuestion: "问\(index)", wasCancelled: nil))
       stored.append(AISessionStore.StoredMessage(role: "assistant", content: "答\(index)", contextSummary: nil, promptQuestion: nil, wasCancelled: nil))
     }
-    try AISessionStore.save(
-      [AISessionStore.StoredSession(docPath: nil, messages: stored, updatedAt: Date())],
-      workspaceRoot: root
-    )
+    try seedWorkspaceThread(root: root, messages: stored)
 
     let transport = AIServiceTests.MockAITransport(
       sendHandler: { _ in
@@ -765,12 +841,10 @@ final class AIChatStoreTests: XCTestCase {
     // 压缩后台完成 → 落盘含 rollingSummary
     let persisted = await waitUntil {
       store.flush()
-      let sessions = (try? AISessionStore.load(workspaceRoot: root)) ?? []
-      return sessions.first?.rollingSummary?.contains("压缩摘要") == true
+      return self.loadWorkspaceThread(root: root)?.rollingSummary?.contains("压缩摘要") == true
     }
     XCTAssertTrue(persisted)
-    let sessions = try AISessionStore.load(workspaceRoot: root)
-    XCTAssertGreaterThan(sessions.first?.summarizedCount ?? 0, 0)
+    XCTAssertGreaterThan(loadWorkspaceThread(root: root)?.summarizedCount ?? 0, 0)
   }
 
   /// 压缩范围 = 滚出保留区的旧增量（v1.4）：近期轮次不进压缩请求，压缩后仍以原文送出
@@ -788,10 +862,7 @@ final class AIChatStoreTests: XCTestCase {
       stored.append(AISessionStore.StoredMessage(role: "user", content: question, contextSummary: nil, promptQuestion: question, wasCancelled: nil))
       stored.append(AISessionStore.StoredMessage(role: "assistant", content: answer, contextSummary: nil, promptQuestion: nil, wasCancelled: nil))
     }
-    try AISessionStore.save(
-      [AISessionStore.StoredSession(docPath: nil, messages: stored, updatedAt: Date())],
-      workspaceRoot: root
-    )
+    try seedWorkspaceThread(root: root, messages: stored)
 
     var compactionBodies: [Data] = []
     var streamBodies: [Data] = []
@@ -815,8 +886,7 @@ final class AIChatStoreTests: XCTestCase {
     _ = await waitUntil { store.phase == .idle }
     let compacted = await waitUntil {
       store.flush()
-      let sessions = (try? AISessionStore.load(workspaceRoot: root)) ?? []
-      return sessions.first?.rollingSummary?.contains("压缩摘要") == true
+      return self.loadWorkspaceThread(root: root)?.rollingSummary?.contains("压缩摘要") == true
     }
     XCTAssertTrue(compacted)
 
@@ -848,10 +918,7 @@ final class AIChatStoreTests: XCTestCase {
       stored.append(AISessionStore.StoredMessage(role: "user", content: "问\(index)", contextSummary: nil, promptQuestion: "问\(index)", wasCancelled: nil))
       stored.append(AISessionStore.StoredMessage(role: "assistant", content: answer, contextSummary: nil, promptQuestion: nil, wasCancelled: nil))
     }
-    try AISessionStore.save(
-      [AISessionStore.StoredSession(docPath: nil, messages: stored, updatedAt: Date())],
-      workspaceRoot: root
-    )
+    try seedWorkspaceThread(root: root, messages: stored)
 
     let transport = AIServiceTests.MockAITransport(
       sendHandler: { _ in
@@ -871,8 +938,8 @@ final class AIChatStoreTests: XCTestCase {
     _ = await waitUntil { store.phase == .idle }
     let fixed = await waitUntil {
       store.flush()
-      let sessions = (try? AISessionStore.load(workspaceRoot: root)) ?? []
-      return sessions.first?.rollingSummary?.contains("Anchors mentioned: [§Methods], [p.5]") == true
+      return self.loadWorkspaceThread(root: root)?.rollingSummary?
+        .contains("Anchors mentioned: [§Methods], [p.5]") == true
     }
     XCTAssertTrue(fixed, "漏掉的锚点由代码补全")
   }

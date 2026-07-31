@@ -25,9 +25,18 @@ final class WindowSession: ObservableObject, Identifiable {
 
   private var isWired = false
 
-  init(snapshotStore: WorkspaceSnapshotStore, aiSettings: AISettingsStore, aiKeys: AIKeyStore) {
+  init(
+    snapshotStore: WorkspaceSnapshotStore,
+    aiSettings: AISettingsStore,
+    aiKeys: AIKeyStore,
+    aiSessions: AISessionRepository
+  ) {
     stateStore = WorkspaceStateStore(snapshotStore: snapshotStore)
-    aiChatStore = AIChatStore(settings: aiSettings, service: AIService(keys: aiKeys))
+    aiChatStore = AIChatStore(
+      settings: aiSettings,
+      service: AIService(keys: aiKeys),
+      repository: aiSessions
+    )
   }
 
   /// 本窗口全部现场立即落盘（关窗/退出前）

@@ -18,19 +18,23 @@ struct MarkPDFApp: App {
   @StateObject private var aiKeyStore: AIKeyStore
   // 工作区快照单一写者（v1.5 多窗口：各窗口 facade 共享槽位表，防整体互相覆盖）
   @StateObject private var snapshotStore: WorkspaceSnapshotStore
+  // AI 会话仓库（v1.5：全部线程集中存全局文件，磁盘唯一写者）
+  @StateObject private var aiSessionRepository: AISessionRepository
   @StateObject private var windowCoordinator: WindowCoordinator
 
   init() {
     let aiSettingsStore = AISettingsStore()
     let aiKeyStore = AIKeyStore()
     let snapshotStore = WorkspaceSnapshotStore()
+    let aiSessions = AISessionRepository()
     let coordinator = WindowCoordinator()
     _aiSettingsStore = StateObject(wrappedValue: aiSettingsStore)
     _aiKeyStore = StateObject(wrappedValue: aiKeyStore)
     _snapshotStore = StateObject(wrappedValue: snapshotStore)
+    _aiSessionRepository = StateObject(wrappedValue: aiSessions)
     _windowCoordinator = StateObject(wrappedValue: coordinator)
     // 退出前兜底落盘（FR-2.7 全部标签 + FR-4.6 标注写回 + FR-1.6 快照 + AI 会话）：
-    // 红钮关窗后再 ⌘Q 时视图已销毁、无人接收通知——挂 App 级，逐窗口 flush + 共享快照 flush
+    // 红钮关窗后再 ⌘Q 时视图已销毁、无人接收通知——挂 App 级，逐窗口 flush + 共享存储 flush
     NotificationCenter.default.addObserver(
       forName: NSApplication.willTerminateNotification,
       object: nil,
@@ -38,6 +42,7 @@ struct MarkPDFApp: App {
     ) { _ in
       coordinator.flushAll()
       snapshotStore.flush()
+      aiSessions.flush()
     }
   }
 
@@ -48,6 +53,7 @@ struct MarkPDFApp: App {
         snapshotStore: snapshotStore,
         aiSettings: aiSettingsStore,
         aiKeys: aiKeyStore,
+        aiSessions: aiSessionRepository,
         externalOpen: externalOpen,
         recentsStore: recentsStore
       )

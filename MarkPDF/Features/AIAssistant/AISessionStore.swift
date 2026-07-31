@@ -1,8 +1,11 @@
 import Foundation
 import os
 
-/// AI 会话落盘（FR-AI.3）：按工作区存 `{root}/.markpdf/ai-sessions.json`。
-/// 多会话（每文档一条线程 + 工作区通用线程）、单会话超 100 条截断、
+/// AI 会话落盘（FR-AI.3）：v1.5 起全部线程集中存全局文件
+/// `Application Support/MarkPDF/ai-sessions.json`（见 AISessionRepository——会话是
+/// 文件的属性，按工作区存会让同一文件经不同工作区层级打开时分叉）。
+/// `{root}/.markpdf/ai-sessions.json` 为旧格式，仅迁移读取与归档。
+/// 多会话（每文件一条线程 + 工作区通用线程）、单会话超 100 条截断、
 /// 原子写、损坏抛错不静默吞（UI 弹提示）。
 enum AISessionStore {
   static let messageCap = 100
@@ -115,7 +118,7 @@ enum AISessionStore {
     }
   }
 
-  /// 写盘：建 .markpdf 目录 + 原子写（开发规范 §10）；每会话截到最近 messageCap 条
+  /// 旧格式写盘（v1.5 起仅供迁移路径的往返与其测试夹具；生产写入走 saveGlobal）
   static func save(_ sessions: [StoredSession], workspaceRoot: URL) throws {
     let url = fileURL(workspaceRoot: workspaceRoot)
     try write(sessions, to: url)

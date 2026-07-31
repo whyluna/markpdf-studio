@@ -16,6 +16,7 @@ struct WindowRootView: View {
     snapshotStore: WorkspaceSnapshotStore,
     aiSettings: AISettingsStore,
     aiKeys: AIKeyStore,
+    aiSessions: AISessionRepository,
     externalOpen: ExternalOpenCoordinator,
     recentsStore: RecentFilesStore
   ) {
@@ -23,7 +24,12 @@ struct WindowRootView: View {
     self.externalOpen = externalOpen
     self.recentsStore = recentsStore
     _session = StateObject(
-      wrappedValue: WindowSession(snapshotStore: snapshotStore, aiSettings: aiSettings, aiKeys: aiKeys)
+      wrappedValue: WindowSession(
+        snapshotStore: snapshotStore,
+        aiSettings: aiSettings,
+        aiKeys: aiKeys,
+        aiSessions: aiSessions
+      )
     )
   }
 

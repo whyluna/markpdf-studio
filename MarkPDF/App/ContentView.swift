@@ -510,7 +510,12 @@ private struct EdgeTabDropZone: View {
 
 #Preview {
   ContentView()
-    .environmentObject(WindowSession(snapshotStore: WorkspaceSnapshotStore(), aiSettings: AISettingsStore(), aiKeys: AIKeyStore()))
+    .environmentObject(WindowSession(
+      snapshotStore: WorkspaceSnapshotStore(),
+      aiSettings: AISettingsStore(),
+      aiKeys: AIKeyStore(),
+      aiSessions: AISessionRepository()
+    ))
     .environmentObject(WorkspaceStore())
     .environmentObject(TabStore())
     .environmentObject(PDFReaderStore())
