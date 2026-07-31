@@ -5,17 +5,15 @@ import SwiftUI
 /// 应用根视图：三栏布局（文件树 / 标签内容区 / 上下文面板）+ 底部状态栏。
 /// 中间栏为标签组（FR-1.4）：单栏或左右分栏，每组含标签栏与激活标签内容。
 struct ContentView: View {
+  @EnvironmentObject private var session: WindowSession
   @EnvironmentObject private var workspaceStore: WorkspaceStore
   @EnvironmentObject private var tabStore: TabStore
   @EnvironmentObject private var pdfStore: PDFReaderStore
   @EnvironmentObject private var annotationStore: PDFAnnotationStore
-  @EnvironmentObject private var recentsStore: RecentFilesStore
-  @EnvironmentObject private var stateStore: WorkspaceStateStore
   @EnvironmentObject private var searchStore: SearchStore
   @EnvironmentObject private var backlinksStore: BacklinksStore
   @EnvironmentObject private var imageStore: ImagePreviewStore
   @EnvironmentObject private var settingsStore: SettingsStore
-  @EnvironmentObject private var externalOpen: ExternalOpenCoordinator
   @EnvironmentObject private var aiChatStore: AIChatStore
 
   var body: some View {
@@ -23,6 +21,9 @@ struct ContentView: View {
       splitView
       StatusBarView()
     }
+    // 菜单命令上下文（v1.5 多窗口）：焦点窗口发布，AppCommands 消费；
+    // body 随各 store @Published 重算，标志变化即刷新菜单禁用态
+    .focusedSceneValue(\.commandContext, commandContext)
     // 退出前兜底落盘（FR-2.7）已挪到 App 级（MarkPDFApp.init 注册 willTerminate）：
     // 挂在视图上时，红钮关窗后再 ⌘Q 无人接收，防抖窗口内的保存/快照会丢
     // 标注写回失败提示（NFR-5；全局唯一挂载点，分栏时不重复呈现）
@@ -37,152 +38,12 @@ struct ContentView: View {
     } message: {
       Text(annotationStore.lastError ?? "")
     }
-    // 启动恢复现场（FR-1.6）与状态记录接线（FR-1.5/1.6）
     .onAppear {
-      // 冷启动由 Finder 外部打开唤起（队列里有待路由的外部文件）：
-      // 跳过工作区现场恢复——侧栏空态、标签栏只放外部文件（功能零降级，
-      // 编辑/标注/AI 照常）；工作区快照原样封存，手动打开时照常恢复。
-      // 顺序不可换：restoreWorkspace 先建立沙盒授权（startAccessingSecurityScopedResource），
-      // restoreTabs 现在会在恢复时预建 store 并立即读文件，先于授权执行必 EPERM（启动竞态实锤）
-      if externalOpen.hasPendingExternalOpen {
-        // 冷启动由外部打开唤起：跳过工作区现场恢复（侧栏空态、标签只放外部文件）
-      } else {
-        stateStore.restoreWorkspace(into: workspaceStore)
-        stateStore.restoreTabs(into: tabStore)
-      }
-      // 每次启动把右侧面板压到最窄：AppKit 会恢复上次列宽（经常是很宽的面板），
+      // 跨 store 接线与启动恢复在 WindowSession/WindowRootView（v1.5 多窗口）。
+      // 每次窗口出现把右侧面板压到最窄：AppKit 会恢复上次列宽（经常是很宽的面板），
       // SwiftUI 无 detail 列宽 API，只能窗口就绪后直接拨 NSSplitView 分隔条
       DispatchQueue.main.async {
         collapseDetailColumnToMinimum()
-      }
-      // 切换工作区（⌘O/菜单/空状态按钮统一走此钩子）：保存当前标签现场 → 恢复目标工作区自己的标签
-      workspaceStore.onOpenFolder = { [weak workspaceStore, weak tabStore] url in
-        guard let workspaceStore, let tabStore else { return }
-        stateStore.switchWorkspace(to: url, workspaceStore: workspaceStore, tabStore: tabStore)
-      }
-      tabStore.onOpenFile = { url in
-        guard let root = workspaceStore.root?.id else { return }
-        recentsStore.record(url, forRoot: root)
-      }
-      tabStore.onStructureChange = { [weak tabStore, weak workspaceStore, weak aiChatStore] in
-        guard let tabStore else { return }
-        stateStore.tabsDidChange(groups: tabStore.groups, activeGroupID: tabStore.activeGroupID)
-        // 文件树高亮始终跟随当前激活标签（打开新文件 / 切换标签 / 切换分栏组统一入口）
-        let activeURL = tabStore.activeGroup.activeTab?.url
-        workspaceStore?.selection = activeURL.flatMap { workspaceStore?.node(for: $0) }
-        // AI 会话按文档隔离（FR-AI.3 v1.2）：激活标签变化即切线程（同 key 幂等）
-        aiChatStore?.bindDocument(activeURL)
-        // 切节预热（v1.2 性能）：激活 PDF 后台预切并缓存，首次 AI 提问不再现场解析。
-        // 后台自建 PDFDocument（不碰主线程的 pdfView.document，对象单线程归属）
-        if tabStore.activeGroup.activeTab?.kind == .pdf, let url = activeURL,
-          !DocumentSectionCache.shared.isCached(url) {
-          Task.detached(priority: .utility) {
-            _ = DocumentSectionCache.shared.sections(for: url) {
-              PDFDocument(url: url).map { DocumentSectioner.fromPDF($0) }
-            }
-          }
-        }
-      }
-      tabStore.onEditorCursorLine = { url, line in
-        stateStore.recordCursor(url: url, line: line)
-      }
-      workspaceStore.onStateChange = { [weak workspaceStore] in
-        stateStore.workspaceDidChange(
-          root: workspaceStore?.root?.id,
-          collapsedFolders: workspaceStore?.collapsedFolders ?? [],
-          aiAssistantVisible: workspaceStore?.isAIAssistantPresented ?? false
-        )
-        // 反链解析所需根目录（纯赋值，折叠态变化时同值覆盖无副作用）；
-        // 重扫已分流到 onMarkdownFilesChange，自动保存/折叠不再全量重读 md
-        backlinksStore.setWorkspaceRoot(workspaceStore?.root?.id)
-        // AI 会话随工作区载入/落盘（同根幂等；root 为扫描完成后异步赋值，届时再触发）
-        aiChatStore.workspaceDidChange(root: workspaceStore?.root?.id)
-      }
-      // 反向链接（FR-5.4）：仅 md 文件集合实际变化（新增/删除/重命名/外部变更）后重扫，新引用 5s 内出现
-      workspaceStore.onMarkdownFilesChange = {
-        backlinksStore.refresh()
-      }
-      // 全文搜索候选（FR-6.2）：工作区全部文件
-      searchStore.filesProvider = { [weak workspaceStore] in
-        workspaceStore?.allFiles.map(\.id) ?? []
-      }
-      // 反向链接候选（FR-5.4）：仅 md 文件
-      backlinksStore.filesProvider = { [weak workspaceStore] in
-        workspaceStore?.allFiles.filter { $0.kind == .markdown }.map(\.id) ?? []
-      }
-      backlinksStore.setWorkspaceRoot(workspaceStore.root?.id)
-      // Finder 直接打开文件（授权已建立、标签现场已恢复后才放行队列）
-      externalOpen.openFileTab = { [weak tabStore] url in
-        tabStore?.open(url: url)
-      }
-      externalOpen.currentRootPath = { [weak stateStore] in
-        stateStore?.currentRootPath
-      }
-      externalOpen.switchWorkspaceTo = { [weak workspaceStore, weak tabStore] url in
-        guard let workspaceStore, let tabStore else { return }
-        stateStore.switchWorkspace(to: url, workspaceStore: workspaceStore, tabStore: tabStore)
-      }
-      externalOpen.markReady()
-      // AI 助手上下文源（FR-AI.2 两层：选区 / 当前文档；工作区检索层 M5-D）
-      aiChatStore.contextSources.isPDFActive = { [weak tabStore] in
-        tabStore?.activeGroup.activeTab?.kind == .pdf
-      }
-      aiChatStore.contextSources.pdfSelection = { [weak pdfStore] in
-        guard let raw = pdfStore?.pdfView?.currentSelection?.string else { return nil }
-        let text = TranslationTextNormalizer.normalize(raw)
-        return text.isEmpty ? nil : text
-      }
-      aiChatStore.contextSources.mdSelection = { [weak tabStore] completion in
-        guard let store = tabStore?.activeEditorStore else { return completion(nil) }
-        store.fetchSelection { text in
-          completion((text?.isEmpty ?? true) ? nil : text)
-        }
-      }
-      aiChatStore.contextSources.activeDocument = { [weak tabStore, weak pdfStore] budget in
-        guard let tab = tabStore?.activeGroup.activeTab else { return nil }
-        switch tab.kind {
-        case .markdown:
-          guard let store = tabStore?.activeEditorStore else { return nil }
-          return (name: tab.title, text: store.text)
-        case .pdf:
-          guard let document = pdfStore?.pdfView?.document else { return nil }
-          // 逐页拼接、到预算即停（大 PDF 全量 string 提取可达百 ms 级；
-          // 预算随所选模型窗口动态传入，v1.2）
-          var text = ""
-          for index in 0..<document.pageCount {
-            guard text.count < budget else { break }
-            if let page = document.page(at: index)?.string {
-              text += page + "\n"
-            }
-          }
-          return text.isEmpty ? nil : (name: tab.title, text: text)
-        default:
-          return nil
-        }
-      }
-      // 结构切节（超预算两遍路由用，v1.2）：md 标题树 / PDF 书签（无书签每页一节）。
-      // md 用编辑器实时文本（未落盘也准，切节快不缓存）；PDF 走缓存（预热后免主线程解析）
-      aiChatStore.contextSources.documentSections = { [weak tabStore, weak pdfStore] in
-        guard let tab = tabStore?.activeGroup.activeTab else { return nil }
-        switch tab.kind {
-        case .markdown:
-          guard let store = tabStore?.activeEditorStore else { return nil }
-          return DocumentSectioner.fromMarkdown(store.text)
-        case .pdf:
-          guard let url = tab.url else { return nil }
-          return DocumentSectionCache.shared.sections(for: url) {
-            pdfStore?.pdfView?.document.map { DocumentSectioner.fromPDF($0) }
-          }
-        default:
-          return nil
-        }
-      }
-      // 工作区工具（v1.3 agent 循环）：根 + 文件清单供工具执行与 system 提示
-      aiChatStore.contextSources.workspaceFiles = { [weak workspaceStore] in
-        let files = workspaceStore?.allFiles
-          .filter { $0.kind == .markdown || $0.kind == .pdf }
-          .map(\.id) ?? []
-        return (root: workspaceStore?.root?.id, files: files)
       }
     }
     // 快速打开面板（FR-6.1 ⌘P）与全文搜索面板（FR-6.2 ⌘⇧F）与命令面板（FR-6.3 ⌘O）
@@ -194,6 +55,54 @@ struct ContentView: View {
       } else if workspaceStore.isCommandPalettePresented {
         commandPaletteOverlay
       }
+    }
+  }
+
+  /// 菜单命令上下文：状态标志 + 指向本窗口 store 的动作闭包
+  private var commandContext: AppCommandContext {
+    let kind = tabStore.activeGroup.activeTab?.kind
+    var context = AppCommandContext()
+    context.zoomable = kind == .pdf || kind == .image
+    context.isPDF = kind == .pdf
+    context.hasEditor = tabStore.activeEditorStore != nil
+    context.canExportAnnotations = annotationStore.currentFileURL != nil
+    context.sidecarAvailable = annotationStore.currentFileURL != nil
+    context.hasPDFSelection = pdfStore.hasSelection
+    context.isFindBarVisible = pdfStore.isFindBarVisible
+    context.isSidecarMode = annotationStore.isSidecarMode
+    context.isAIVisible = workspaceStore.isAIAssistantPresented
+    context.openFolderPanel = { workspaceStore.openFolderPanel() }
+    context.showCommandPalette = { workspaceStore.isCommandPalettePresented = true }
+    context.showQuickOpen = { workspaceStore.isQuickOpenPresented = true }
+    context.showFullTextSearch = { workspaceStore.isFullTextSearchPresented = true }
+    context.toggleAIAssistant = { workspaceStore.isAIAssistantPresented.toggle() }
+    context.save = { tabStore.activeEditorStore?.flushPendingSave() }
+    context.exportPDF = { exportMarkdown(.pdf) }
+    context.exportHTML = { exportMarkdown(.html) }
+    context.exportAnnotations = { exportAnnotations() }
+    context.setSidecarMode = { annotationStore.setSidecarMode($0) }
+    context.zoomIn = { zoomAction { $0.zoomIn() } }
+    context.zoomOut = { zoomAction { $0.zoomOut() } }
+    context.resetZoom = { zoomAction { $0.resetZoom() } }
+    context.copyQuote = {
+      PDFQuoteExporter.copyAsQuote(
+        pdfView: pdfStore.pdfView,
+        currentPage: pdfStore.currentPage,
+        workspaceRoot: workspaceStore.root?.id
+      )
+    }
+    context.presentFindBar = { pdfStore.presentFindBar() }
+    context.findNext = { pdfStore.findNext() }
+    context.findPrevious = { pdfStore.findPrevious() }
+    return context
+  }
+
+  /// 缩放命令路由：PDF → pdfStore，图片 → imageStore
+  private func zoomAction(_ action: (ZoomTarget) -> Void) {
+    switch tabStore.activeGroup.activeTab?.kind {
+    case .pdf: action(pdfStore)
+    case .image: action(imageStore)
+    default: break
     }
   }
 
@@ -265,7 +174,7 @@ struct ContentView: View {
   }
 
   /// 启动时把右侧 detail 列压到最窄：递归找 NavigationSplitView 的 NSSplitView，
-  /// 把最后一个分隔条拨到「总宽 − 最窄面板宽」。仅启动调用一次，之后用户拖动不受影响
+  /// 把最后一个分隔条拨到「总宽 − 最窄面板宽」。仅窗口出现时调用一次，之后用户拖动不受影响
   private func collapseDetailColumnToMinimum() {
     func findSplitView(in view: NSView) -> NSSplitView? {
       if let split = view as? NSSplitView { return split }
@@ -274,7 +183,9 @@ struct ContentView: View {
       }
       return nil
     }
-    guard let contentView = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })?.contentView,
+    // 本窗口优先（v1.5 多窗口：NSApp.windows.first 会拨错别的窗口）
+    let hostWindow = session.window ?? NSApp.windows.first { $0.isVisible && $0.contentView != nil }
+    guard let contentView = hostWindow?.contentView,
       let splitView = findSplitView(in: contentView),
       splitView.arrangedSubviews.count >= 2
     else { return }
@@ -599,6 +510,7 @@ private struct EdgeTabDropZone: View {
 
 #Preview {
   ContentView()
+    .environmentObject(WindowSession(snapshotStore: WorkspaceSnapshotStore(), aiSettings: AISettingsStore(), aiKeys: AIKeyStore()))
     .environmentObject(WorkspaceStore())
     .environmentObject(TabStore())
     .environmentObject(PDFReaderStore())

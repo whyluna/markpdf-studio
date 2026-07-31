@@ -1,64 +1,18 @@
 import Foundation
 import os
 
-/// 工作区状态持久化（FR-1.6）：快照存 UserDefaults（JSON），0.5s 防抖落盘，启动恢复现场。
-/// 快照内容：最后工作区根（security-scoped bookmark）、各工作区的标签组/折叠态（按根路径分槽）、md 光标行。
+/// 工作区状态持久化（FR-1.6）：per-window facade（v1.5 多窗口）——
+/// 快照/书签/落盘由 App 级 WorkspaceSnapshotStore 单一持有（多窗口共享槽位表不互相覆盖），
+/// 本类只保留窗口态（currentRootPath / pendingSwitchPath / 安全作用域访问权）与编排逻辑。
 /// 标签现场按工作区隔离：切换工作区时旧现场存槽、新工作区现场恢复（FR-1.6 增强）。
 /// PDF 阅读位置由 PDFReadingPositionStore 单独持久化（FR-3.5），不在此快照内。
 @MainActor
 final class WorkspaceStateStore: ObservableObject {
-  /// 单个标签的快照（path 为 nil 表示未命名草稿）
-  struct TabState: Codable, Equatable {
-    var path: String?
-    var kind: String
-  }
+  typealias TabState = WorkspaceSnapshotStore.TabState
+  typealias WorkspaceSnapshot = WorkspaceSnapshotStore.WorkspaceSnapshot
+  typealias Snapshot = WorkspaceSnapshotStore.Snapshot
 
-  /// 单个工作区的现场（标签组 + 折叠态）
-  struct WorkspaceSnapshot: Codable, Equatable {
-    var collapsedFolders: [String] = []
-    var groups: [[TabState]] = []
-    /// 各组激活标签路径（草稿激活为 nil）
-    var activeTabs: [String?] = []
-    var activeGroup: Int = 0
-    /// AI 助手面板显隐（FR-AI.2；Optional 保旧快照可解码，nil = 关）
-    var aiAssistantVisible: Bool? = nil
-  }
-
-  struct Snapshot: Codable, Equatable {
-    var rootBookmark: Data? = nil
-    /// 最后使用的工作区路径（槽位 key，v2 新增）
-    var lastRootPath: String? = nil
-    /// 各工作区现场（按根路径分槽，v2 新增）
-    var workspaces: [String: WorkspaceSnapshot] = [:]
-    /// md 文件路径 -> 上次光标行（1 起；按文件路径 key，天然跨工作区共享）
-    var cursorLines: [String: Int] = [:]
-    // —— 以下为 v1 遗留字段：仅解码迁移用（归入 lastRoot 槽位），不再写入 ——
-    var collapsedFolders: [String] = []
-    var groups: [[TabState]] = []
-    var activeTabs: [String?] = []
-    var activeGroup: Int = 0
-
-    /// 兼容解码：缺失字段回退默认（快照格式向后演进时不炸）
-    init(from decoder: Decoder) throws {
-      let container = try decoder.container(keyedBy: CodingKeys.self)
-      rootBookmark = try container.decodeIfPresent(Data.self, forKey: .rootBookmark)
-      lastRootPath = try container.decodeIfPresent(String.self, forKey: .lastRootPath)
-      workspaces = try container.decodeIfPresent([String: WorkspaceSnapshot].self, forKey: .workspaces) ?? [:]
-      cursorLines = try container.decodeIfPresent([String: Int].self, forKey: .cursorLines) ?? [:]
-      collapsedFolders = try container.decodeIfPresent([String].self, forKey: .collapsedFolders) ?? []
-      groups = try container.decodeIfPresent([[TabState]].self, forKey: .groups) ?? []
-      activeTabs = try container.decodeIfPresent([String?].self, forKey: .activeTabs) ?? []
-      activeGroup = try container.decodeIfPresent(Int.self, forKey: .activeGroup) ?? 0
-    }
-
-    init() {}
-  }
-
-  private let defaults: UserDefaults
-  private let debouncer = Debouncer(interval: 0.5)
-  private static let defaultsKey = "workspaceSnapshot.v1"
-  /// 当前状态（各 Store 变化时增量更新，防抖落盘）
-  private var state: Snapshot
+  private let store: WorkspaceSnapshotStore
   /// 当前工作区根路径（tabsDidChange 的槽位 key；nil 表示尚无工作区）
   private(set) var currentRootPath: String?
   /// 切换工作区的目标路径（切换编排期间，watcher 仍以旧 root 触发 workspaceDidChange，
@@ -67,15 +21,14 @@ final class WorkspaceStateStore: ObservableObject {
   /// 恢复时取得的安全作用域资源（保持访问至进程结束，否则工作区授权失效）
   private var accessedRootURL: URL?
 
-  init(defaults: UserDefaults = .standard) {
-    self.defaults = defaults
-    if let data = defaults.data(forKey: Self.defaultsKey),
-      let decoded = try? JSONDecoder().decode(Snapshot.self, from: data)
-    {
-      state = decoded
-    } else {
-      state = Snapshot()
-    }
+  /// 多窗口共享快照存储注入（App 级唯一实例）
+  init(snapshotStore: WorkspaceSnapshotStore) {
+    store = snapshotStore
+  }
+
+  /// 单窗口/测试便捷入口：自建私有快照存储（语义与旧版单例一致）
+  convenience init(defaults: UserDefaults = .standard) {
+    self.init(snapshotStore: WorkspaceSnapshotStore(defaults: defaults))
   }
 
   // MARK: - 状态记录（各 Store 变化时调用）
@@ -83,7 +36,7 @@ final class WorkspaceStateStore: ObservableObject {
   /// 标签结构变化（开/关/移动/分栏/激活切换）：写入当前工作区槽位
   func tabsDidChange(groups: [TabGroup], activeGroupID: TabGroup.ID) {
     guard let rootPath = currentRootPath else { return }  // 无工作区不入槽
-    var ws = state.workspaces[rootPath] ?? WorkspaceSnapshot()
+    var ws = store.state.workspaces[rootPath] ?? WorkspaceSnapshot()
     // FR-7.4 审查修复：异根文件标签（Finder 裸开）不入当前工作区槽位——否则旧槽被污染：
     // 接受「设为工作区」时异根路径留在旧槽；选「仅打开文件」时留在旧槽且重启后
     // Finder 授权失效，恢复必 EPERM。nil url 草稿不受影响照常记录。
@@ -101,8 +54,8 @@ final class WorkspaceStateStore: ObservableObject {
       return url.path
     }
     ws.activeGroup = groups.firstIndex { $0.id == activeGroupID } ?? 0
-    state.workspaces[rootPath] = ws
-    schedulePersist()
+    store.state.workspaces[rootPath] = ws
+    store.schedulePersist()
   }
 
   /// 槽位 key 统一标准化（/tmp→/private/tmp 等符号链接归一，防止同一文件夹两个 key）
@@ -120,33 +73,33 @@ final class WorkspaceStateStore: ObservableObject {
     if let root {
       let key = slotKey(for: root)
       currentRootPath = key
-      state.lastRootPath = key
-      state.rootBookmark = try? root.bookmarkData(
+      store.state.lastRootPath = key
+      store.state.rootBookmark = try? root.bookmarkData(
         options: .withSecurityScope,
         includingResourceValuesForKeys: nil,
         relativeTo: nil
       )
-      var ws = state.workspaces[key] ?? WorkspaceSnapshot()
+      var ws = store.state.workspaces[key] ?? WorkspaceSnapshot()
       ws.collapsedFolders = collapsedFolders.map(\.path).sorted()
       ws.aiAssistantVisible = aiAssistantVisible
-      state.workspaces[key] = ws
+      store.state.workspaces[key] = ws
     } else {
       currentRootPath = nil
-      state.lastRootPath = nil
-      state.rootBookmark = nil
+      store.state.lastRootPath = nil
+      store.state.rootBookmark = nil
     }
-    schedulePersist()
+    store.schedulePersist()
   }
 
   /// md 光标行记录（内核 500ms 防抖上报）
   func recordCursor(url: URL, line: Int) {
-    state.cursorLines[url.path] = line
-    schedulePersist()
+    store.state.cursorLines[url.path] = line
+    store.schedulePersist()
   }
 
   /// 某 md 文件的上次光标行（载入恢复用）
   func cursorLine(for url: URL) -> Int? {
-    state.cursorLines[url.path]
+    store.state.cursorLines[url.path]
   }
 
   // MARK: - 启动恢复
@@ -154,8 +107,8 @@ final class WorkspaceStateStore: ObservableObject {
   /// 恢复标签组与激活状态（当前工作区槽位的现场；一般在 restoreWorkspace 之后调用，
   /// 授权失败时回退 lastRootPath，保持与 v1「无工作区也恢复标签」一致的行为）
   func restoreTabs(into tabStore: TabStore) {
-    guard let rootPath = currentRootPath ?? state.lastRootPath,
-      let ws = state.workspaces[rootPath] else { return }
+    guard let rootPath = currentRootPath ?? store.state.lastRootPath,
+      let ws = store.state.workspaces[rootPath] else { return }
     tabStore.restore(
       tabStates: ws.groups,
       activeTabPaths: ws.activeTabs,
@@ -165,7 +118,7 @@ final class WorkspaceStateStore: ObservableObject {
 
   /// 恢复工作区：解析 bookmark → 取得安全作用域访问权 → 打开文件夹 → 恢复折叠态
   func restoreWorkspace(into workspaceStore: WorkspaceStore) {
-    guard let bookmark = state.rootBookmark else { return }
+    guard let bookmark = store.state.rootBookmark else { return }
     var isStale = false
     guard let url = try? URL(
       resolvingBookmarkData: bookmark,
@@ -180,10 +133,10 @@ final class WorkspaceStateStore: ObservableObject {
     accessedRootURL = url
     let key = slotKey(for: url)
     currentRootPath = key
-    state.lastRootPath = key
+    store.state.lastRootPath = key
     migrateLegacySnapshotIfNeeded(forRoot: key)
     workspaceStore.openFolder(url)
-    let ws = state.workspaces[key]
+    let ws = store.state.workspaces[key]
     workspaceStore.collapsedFolders = Set((ws?.collapsedFolders ?? []).map { URL(fileURLWithPath: $0) })
     workspaceStore.isAIAssistantPresented = ws?.aiAssistantVisible ?? false
   }
@@ -201,10 +154,10 @@ final class WorkspaceStateStore: ObservableObject {
     // 随后 replaceAll 触发的 tabsDidChange 会把新现场错写进旧槽。
     // pendingSwitchPath 挡住期间 watcher 以旧 root 触发的 workspaceDidChange 回写
     currentRootPath = target.path
-    state.lastRootPath = target.path
+    store.state.lastRootPath = target.path
     pendingSwitchPath = target.path
     workspaceStore.openFolder(target)
-    if let ws = state.workspaces[target.path] {
+    if let ws = store.state.workspaces[target.path] {
       workspaceStore.collapsedFolders = Set(ws.collapsedFolders.map { URL(fileURLWithPath: $0) })
       workspaceStore.isAIAssistantPresented = ws.aiAssistantVisible ?? false
       tabStore.replaceAll(tabStates: ws.groups, activeTabPaths: ws.activeTabs, activeGroupIndex: ws.activeGroup)
@@ -217,35 +170,24 @@ final class WorkspaceStateStore: ObservableObject {
 
   /// v1 快照迁移：旧的全局标签组归入「最后工作区」槽位（迁移后即清空遗留字段，只执行一次）
   private func migrateLegacySnapshotIfNeeded(forRoot rootPath: String) {
-    guard state.workspaces[rootPath] == nil, !state.groups.isEmpty else { return }
-    state.workspaces[rootPath] = WorkspaceSnapshot(
-      collapsedFolders: state.collapsedFolders,
-      groups: state.groups,
-      activeTabs: state.activeTabs,
-      activeGroup: state.activeGroup
+    guard store.state.workspaces[rootPath] == nil, !store.state.groups.isEmpty else { return }
+    store.state.workspaces[rootPath] = WorkspaceSnapshot(
+      collapsedFolders: store.state.collapsedFolders,
+      groups: store.state.groups,
+      activeTabs: store.state.activeTabs,
+      activeGroup: store.state.activeGroup
     )
     // 迁移完成后清空遗留字段，避免重复迁移
-    state.groups = []
-    state.activeTabs = []
-    state.collapsedFolders = []
-    state.activeGroup = 0
+    store.state.groups = []
+    store.state.activeTabs = []
+    store.state.collapsedFolders = []
+    store.state.activeGroup = 0
   }
 
   // MARK: - 落盘
 
-  private func schedulePersist() {
-    debouncer.schedule { [weak self] in
-      self?.persist()
-    }
-  }
-
-  private func persist() {
-    guard let data = try? JSONEncoder().encode(state) else { return }
-    defaults.set(data, forKey: Self.defaultsKey)
-  }
-
   /// 立即落盘挂起的快照（退出前调用）
   func flush() {
-    debouncer.fire()
+    store.flush()
   }
 }

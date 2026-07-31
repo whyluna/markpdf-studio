@@ -135,6 +135,33 @@ final class WorkspaceStateStoreTests: XCTestCase {
 
   // MARK: - 工作区快照
 
+  // MARK: - 多窗口共享快照存储（v1.5）
+
+  /// 两个窗口 facade 共享一个快照存储：各自的槽位/光标互不覆盖，一次落盘全量保留
+  @MainActor
+  func testTwoFacadesShareSnapshotStoreWithoutOverwriting() {
+    let shared = WorkspaceSnapshotStore(defaults: defaults)
+    let windowA = WorkspaceStateStore(snapshotStore: shared)
+    let windowB = WorkspaceStateStore(snapshotStore: shared)
+    let rootA = URL(fileURLWithPath: "/tmp/wsA")
+    let rootB = URL(fileURLWithPath: "/tmp/wsB")
+    windowA.workspaceDidChange(root: rootA, collapsedFolders: [URL(fileURLWithPath: "/tmp/wsA/sub")])
+    windowB.workspaceDidChange(root: rootB, collapsedFolders: [])
+    windowA.recordCursor(url: file1, line: 7)
+    shared.flush()
+
+    let reopened = WorkspaceSnapshotStore(defaults: defaults)
+    let keyA = rootA.standardizedFileURL.path
+    let keyB = rootB.standardizedFileURL.path
+    XCTAssertNotNil(reopened.state.workspaces[keyA], "窗口 A 槽位保留")
+    XCTAssertNotNil(reopened.state.workspaces[keyB], "窗口 B 槽位保留")
+    XCTAssertEqual(reopened.state.workspaces[keyA]?.collapsedFolders, ["/tmp/wsA/sub"])
+    XCTAssertEqual(reopened.state.cursorLines[file1.path], 7)
+    // 每窗口自己的 currentRootPath 独立（窗口态不共享）
+    XCTAssertEqual(windowA.currentRootPath, keyA)
+    XCTAssertEqual(windowB.currentRootPath, keyB)
+  }
+
   @MainActor
   func testWorkspaceCollapsedFoldersRoundTrip() throws {
     let store = WorkspaceStateStore(defaults: defaults)
