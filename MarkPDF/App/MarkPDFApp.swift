@@ -40,6 +40,8 @@ struct MarkPDFApp: App {
       object: nil,
       queue: .main
     ) { _ in
+      // 开着的工作区窗口清单（v1.5：重启逐个恢复；全部关闭后退出则清空，回退最后工作区）
+      snapshotStore.recordOpenWindowRoots(coordinator.windowInfos().compactMap(\.rootPath))
       coordinator.flushAll()
       snapshotStore.flush()
       aiSessions.flush()

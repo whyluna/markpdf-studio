@@ -54,17 +54,26 @@ final class WindowSession: ObservableObject, Identifiable {
     stateStore.switchWorkspace(to: folder, workspaceStore: workspaceStore, tabStore: tabStore)
   }
 
-  /// 执行新窗口的初始任务（工作区 / 单文件 / 工作区+文件）
+  /// 执行新窗口的初始任务（工作区 / 恢复 / 单文件 / 工作区+文件）
   func apply(_ request: WindowCoordinator.WindowRequest) {
     switch request {
     case .workspace(let folder):
       openWorkspaceInPlace(folder)
+    case .restoreWorkspace(let rootPath):
+      restoreWorkspace(rootPath: rootPath)
     case .file(let file):
       tabStore.open(url: file)
     case .workspaceWithFile(let root, let file):
       openWorkspaceInPlace(root)
       tabStore.open(url: file)
     }
+  }
+
+  /// 按快照恢复一个工作区窗口（书签取沙盒授权 → 打开 → 恢复标签现场）。
+  /// 顺序不可换：restoreWorkspace 先建立授权，restoreTabs 读文件先于授权必 EPERM
+  func restoreWorkspace(rootPath: String?) {
+    stateStore.restoreWorkspace(into: workspaceStore, rootPath: rootPath)
+    stateStore.restoreTabs(into: tabStore)
   }
 
   // MARK: - 跨 store 接线（原 ContentView.onAppear；每窗口一次）

@@ -162,6 +162,75 @@ final class WorkspaceStateStoreTests: XCTestCase {
     XCTAssertEqual(windowB.currentRootPath, keyB)
   }
 
+  // MARK: - 多工作区书签与窗口恢复（v1.5）
+
+  /// 逐工作区书签：切换工作区不再覆盖上一个的书签（多窗口重启恢复依赖）
+  @MainActor
+  func testBookmarksKeptPerWorkspace() throws {
+    let shared = WorkspaceSnapshotStore(defaults: defaults)
+    let store = WorkspaceStateStore(snapshotStore: shared)
+    let rootA = FileManager.default.temporaryDirectory
+      .appendingPathComponent("wsA-\(UUID().uuidString)")
+    let rootB = FileManager.default.temporaryDirectory
+      .appendingPathComponent("wsB-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: rootA, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: rootB, withIntermediateDirectories: true)
+    defer {
+      try? FileManager.default.removeItem(at: rootA)
+      try? FileManager.default.removeItem(at: rootB)
+    }
+
+    store.workspaceDidChange(root: rootA, collapsedFolders: [])
+    store.workspaceDidChange(root: rootB, collapsedFolders: [])
+    XCTAssertNotNil(shared.state.bookmarks[rootA.standardizedFileURL.path], "旧工作区书签不被覆盖")
+    XCTAssertNotNil(shared.state.bookmarks[rootB.standardizedFileURL.path])
+  }
+
+  /// 旧单书签快照解码时迁入多书签表（键 = lastRootPath）
+  @MainActor
+  func testLegacySingleBookmarkMigratesIntoBookmarksMap() throws {
+    var legacy = WorkspaceSnapshotStore.Snapshot()
+    legacy.lastRootPath = "/tmp/ws"
+    legacy.rootBookmark = Data("fake-bookmark".utf8)
+    defaults.set(try JSONEncoder().encode(legacy), forKey: "workspaceSnapshot.v1")
+
+    let store = WorkspaceSnapshotStore(defaults: defaults)
+    XCTAssertEqual(store.state.bookmarks["/tmp/ws"], Data("fake-bookmark".utf8))
+    XCTAssertNil(store.state.rootBookmark, "迁移后不再写单书签字段")
+  }
+
+  /// 启动恢复清单：上次开着的窗口优先；空列表回退最后工作区；无书签的剔除
+  func testRootsToRestoreMatrix() {
+    let bookmarks = ["/a": Data(), "/b": Data()]
+    XCTAssertEqual(
+      WorkspaceSnapshotStore.rootsToRestore(openWindowRoots: ["/a", "/b"], lastRootPath: "/b", bookmarks: bookmarks),
+      ["/a", "/b"],
+      "按上次窗口顺序恢复"
+    )
+    XCTAssertEqual(
+      WorkspaceSnapshotStore.rootsToRestore(openWindowRoots: [], lastRootPath: "/b", bookmarks: bookmarks),
+      ["/b"],
+      "空列表（全部关窗后退出/旧快照）回退最后工作区"
+    )
+    XCTAssertEqual(
+      WorkspaceSnapshotStore.rootsToRestore(openWindowRoots: ["/a", "/missing", "/a"], lastRootPath: nil, bookmarks: bookmarks),
+      ["/a"],
+      "无书签的剔除（授权失效开不了）+ 去重"
+    )
+    XCTAssertTrue(
+      WorkspaceSnapshotStore.rootsToRestore(openWindowRoots: [], lastRootPath: nil, bookmarks: bookmarks).isEmpty
+    )
+  }
+
+  @MainActor
+  func testOpenWindowRootsRoundTrip() throws {
+    let store = WorkspaceSnapshotStore(defaults: defaults)
+    store.recordOpenWindowRoots(["/a", "/b"])
+    store.flush()
+    let reopened = WorkspaceSnapshotStore(defaults: defaults)
+    XCTAssertEqual(reopened.state.openWindowRoots, ["/a", "/b"])
+  }
+
   @MainActor
   func testWorkspaceCollapsedFoldersRoundTrip() throws {
     let store = WorkspaceStateStore(defaults: defaults)

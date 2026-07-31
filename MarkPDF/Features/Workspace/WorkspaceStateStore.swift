@@ -74,19 +74,20 @@ final class WorkspaceStateStore: ObservableObject {
       let key = slotKey(for: root)
       currentRootPath = key
       store.state.lastRootPath = key
-      store.state.rootBookmark = try? root.bookmarkData(
+      if let bookmark = try? root.bookmarkData(
         options: .withSecurityScope,
         includingResourceValuesForKeys: nil,
         relativeTo: nil
-      )
+      ) {
+        // 逐工作区书签（v1.5）：重启可恢复多个工作区窗口
+        store.state.bookmarks[key] = bookmark
+      }
       var ws = store.state.workspaces[key] ?? WorkspaceSnapshot()
       ws.collapsedFolders = collapsedFolders.map(\.path).sorted()
       ws.aiAssistantVisible = aiAssistantVisible
       store.state.workspaces[key] = ws
     } else {
       currentRootPath = nil
-      store.state.lastRootPath = nil
-      store.state.rootBookmark = nil
     }
     store.schedulePersist()
   }
@@ -116,9 +117,12 @@ final class WorkspaceStateStore: ObservableObject {
     )
   }
 
-  /// 恢复工作区：解析 bookmark → 取得安全作用域访问权 → 打开文件夹 → 恢复折叠态
-  func restoreWorkspace(into workspaceStore: WorkspaceStore) {
-    guard let bookmark = store.state.rootBookmark else { return }
+  /// 恢复工作区：解析 bookmark → 取得安全作用域访问权 → 打开文件夹 → 恢复折叠态。
+  /// rootPath 为 nil 时恢复最后使用的工作区；无对应书签则回退 v1 旧单书签（解析后收敛进多书签表）
+  func restoreWorkspace(into workspaceStore: WorkspaceStore, rootPath: String? = nil) {
+    let targetPath = rootPath ?? store.state.lastRootPath
+    let bookmark = targetPath.flatMap { store.state.bookmarks[$0] } ?? store.state.rootBookmark
+    guard let bookmark else { return }
     var isStale = false
     guard let url = try? URL(
       resolvingBookmarkData: bookmark,
@@ -134,6 +138,12 @@ final class WorkspaceStateStore: ObservableObject {
     let key = slotKey(for: url)
     currentRootPath = key
     store.state.lastRootPath = key
+    // 格式收敛：v1 单书签解析出真实路径后归入多书签表
+    if store.state.bookmarks[key] == nil {
+      store.state.bookmarks[key] = bookmark
+      store.state.rootBookmark = nil
+      store.schedulePersist()
+    }
     migrateLegacySnapshotIfNeeded(forRoot: key)
     workspaceStore.openFolder(url)
     let ws = store.state.workspaces[key]

@@ -11,6 +11,8 @@ final class WindowCoordinator: ObservableObject {
   enum WindowRequest: Equatable {
     /// 打开工作区（含现场恢复）
     case workspace(URL)
+    /// 恢复上次开着的工作区窗口（走书签取沙盒授权，v1.5 重启恢复）
+    case restoreWorkspace(rootPath: String)
     /// 仅打开单个文件（无工作区，侧栏空态）
     case file(URL)
     /// 打开工作区并在其中打开该文件（外部打开后接受「设为工作区」）
