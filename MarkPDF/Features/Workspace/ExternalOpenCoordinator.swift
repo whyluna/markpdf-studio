@@ -36,21 +36,42 @@ final class ExternalOpenCoordinator: ObservableObject {
     self?.askToOpenWorkspace(folder: folder, folderKey: folderKey, file: file)
   }
 
-  // ContentView.onAppear 接线（仿 workspaceStore.onOpenFolder 闭包模式）
+  // 接线（WindowRootView）：v1.5 起路由经 WindowCoordinator——
+  // 已打开该文件或其工作区包含它 → 聚焦该窗口；否则新开单文件窗口
   var openFileTab: ((URL) -> Void)?
+  /// 单窗口时代的当前工作区根（测试与回退用；多窗口下由 workspaceRootPaths 接管）
   var currentRootPath: (() -> String?)?
+  /// 全部窗口的工作区根（v1.5：任一窗口的工作区包含该文件即算「工作区内」，不再弹询问）
+  var workspaceRootPaths: (() -> [String])?
   var switchWorkspaceTo: ((URL) -> Void)?
+  /// 「设为工作区」被接受：把承接该文件的窗口升级为工作区窗口（v1.5；未接线则回退旧行为）
+  var upgradeToWorkspace: ((URL, URL) -> Void)?
 
-  nonisolated static func decide(folderKey: String, currentRootPath: String?, declinedFolders: Set<String>) -> Decision {
+  /// 判定用的工作区根集合（多窗口优先，回退单根）
+  private func rootPaths() -> [String] {
+    if let workspaceRootPaths { return workspaceRootPaths() }
+    return [currentRootPath?()].compactMap { $0 }
+  }
+
+  /// 多窗口判定：任一窗口的工作区包含该文件夹即「工作区内」
+  nonisolated static func decide(folderKey: String, rootPaths: [String], declinedFolders: Set<String>) -> Decision {
+    let folder = URL(fileURLWithPath: folderKey)
     // 「工作区内」= 同根或根的后代（/ws/notes 属于 /ws）：仅比相等会把子目录文件
     // 误判成异根，用户确认后 switchWorkspace 反而把工作区收窄到子目录
-    if let currentRootPath,
-      URL(fileURLWithPath: folderKey).isWithinWorkspace(rootPath: currentRootPath)
-    {
+    if rootPaths.contains(where: { folder.isWithinWorkspace(rootPath: $0) }) {
       return .openInCurrentWorkspace
     }
     if declinedFolders.contains(folderKey) { return .openBareSilent }
     return .openBareAndAsk
+  }
+
+  /// 单根兼容重载
+  nonisolated static func decide(folderKey: String, currentRootPath: String?, declinedFolders: Set<String>) -> Decision {
+    decide(
+      folderKey: folderKey,
+      rootPaths: [currentRootPath].compactMap { $0 },
+      declinedFolders: declinedFolders
+    )
   }
 
   /// 是否受理外部打开的 URL（纯函数可单测）：目录与 md/pdf/图片白名单之外的类型直接忽略
@@ -88,11 +109,12 @@ final class ExternalOpenCoordinator: ObservableObject {
     let folderKey = folder.standardizedFileURL.path
     let decision = Self.decide(
       folderKey: folderKey,
-      currentRootPath: currentRootPath?(),
+      rootPaths: rootPaths(),
       declinedFolders: declinedFolders
     )
     Logger.workspace.info("外部打开: \(file.lastPathComponent, privacy: .public) 决策 \(String(describing: decision), privacy: .public)")
-    // 文件本身已获 Finder 授权，先开标签（三种决策都立即可见内容）
+    // 文件本身已获 Finder 授权，先交付（三种决策都立即可见内容）：
+    // 工作区内 → 聚焦该窗口开标签；否则新开单文件窗口
     openFileTab?(file)
     guard decision == .openBareAndAsk else { return }
     pendingAsks.append((folder, folderKey, file))
@@ -107,7 +129,7 @@ final class ExternalOpenCoordinator: ObservableObject {
       pendingAsks.removeFirst()
       guard Self.shouldPresentAsk(
         folderKey: next.folderKey,
-        currentRootPath: currentRootPath?(),
+        rootPaths: rootPaths(),
         declinedFolders: declinedFolders
       ) else { continue }
       isAsking = true
@@ -118,17 +140,24 @@ final class ExternalOpenCoordinator: ObservableObject {
 
   /// 排队的 ask 轮到放行时是否还需要弹（纯函数可单测）：
   /// 排队期间已被「仅打开文件」拒绝（同一会话不重复询问）、
-  /// 或工作区已切进该文件夹（同批上一个 ask 被接受）的，跳过
+  /// 或某窗口工作区已切进该文件夹（同批上一个 ask 被接受）的，跳过
+  nonisolated static func shouldPresentAsk(
+    folderKey: String, rootPaths: [String], declinedFolders: Set<String>
+  ) -> Bool {
+    if declinedFolders.contains(folderKey) { return false }
+    let folder = URL(fileURLWithPath: folderKey)
+    return !rootPaths.contains { folder.isWithinWorkspace(rootPath: $0) }
+  }
+
+  /// 单根兼容重载
   nonisolated static func shouldPresentAsk(
     folderKey: String, currentRootPath: String?, declinedFolders: Set<String>
   ) -> Bool {
-    if declinedFolders.contains(folderKey) { return false }
-    if let currentRootPath,
-      URL(fileURLWithPath: folderKey).isWithinWorkspace(rootPath: currentRootPath)
-    {
-      return false
-    }
-    return true
+    shouldPresentAsk(
+      folderKey: folderKey,
+      rootPaths: [currentRootPath].compactMap { $0 },
+      declinedFolders: declinedFolders
+    )
   }
 
   private func askToOpenWorkspace(folder: URL, folderKey: String, file: URL) {
@@ -153,9 +182,15 @@ final class ExternalOpenCoordinator: ObservableObject {
     panel.prompt = String(localized: "设为工作区")
     panel.message = String(localized: "确认将此文件夹设为工作区（沙盒授权，仅需一次）")
     guard panel.runModal() == .OK, let granted = panel.url else { return }
-    switchWorkspaceTo?(granted)
-    // switchWorkspace 会整体替换标签现场（恢复目标工作区自己的快照），切换后重开目标文件
-    openFileTab?(file)
+    // v1.5：把承接该文件的窗口就地升级为工作区窗口（其他窗口不受影响）；
+    // 未接线（旧路径/测试）则回退「当前窗口切工作区 + 重开文件」
+    if let upgradeToWorkspace {
+      upgradeToWorkspace(granted, file)
+    } else {
+      switchWorkspaceTo?(granted)
+      // switchWorkspace 会整体替换标签现场（恢复目标工作区自己的快照），切换后重开目标文件
+      openFileTab?(file)
+    }
   }
 }
 

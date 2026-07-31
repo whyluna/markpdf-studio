@@ -20,6 +20,8 @@ final class WindowSession: ObservableObject, Identifiable {
   let aiChatStore: AIChatStore
   /// 本窗口的 NSWindow（WindowAccessor 解析后回填；聚焦/列宽调整/关窗 flush 用）
   weak var window: NSWindow?
+  /// 窗口路由中枢（打开工作区/外部文件时决定聚焦还是开新窗）
+  weak var coordinator: WindowCoordinator?
 
   private var isWired = false
 
@@ -36,6 +38,26 @@ final class WindowSession: ObservableObject, Identifiable {
     aiChatStore.flush()
   }
 
+  // MARK: - 窗口任务
+
+  /// 就地打开工作区（空窗口或新窗口领到 .workspace 任务时）
+  func openWorkspaceInPlace(_ folder: URL) {
+    stateStore.switchWorkspace(to: folder, workspaceStore: workspaceStore, tabStore: tabStore)
+  }
+
+  /// 执行新窗口的初始任务（工作区 / 单文件 / 工作区+文件）
+  func apply(_ request: WindowCoordinator.WindowRequest) {
+    switch request {
+    case .workspace(let folder):
+      openWorkspaceInPlace(folder)
+    case .file(let file):
+      tabStore.open(url: file)
+    case .workspaceWithFile(let root, let file):
+      openWorkspaceInPlace(root)
+      tabStore.open(url: file)
+    }
+  }
+
   // MARK: - 跨 store 接线（原 ContentView.onAppear；每窗口一次）
 
   func wireUp(recentsStore: RecentFilesStore) {
@@ -47,10 +69,14 @@ final class WindowSession: ObservableObject, Identifiable {
     workspaceStore.onFileMoved = { [weak tabStore] oldURL, newURL in
       tabStore?.fileDidMove(from: oldURL, to: newURL)
     }
-    // 切换工作区（⌘⇧O/菜单/空状态按钮统一走此钩子）：保存当前标签现场 → 恢复目标工作区自己的标签
+    // 打开工作区（⌘⇧O/菜单/空状态按钮统一走此钩子）：经窗口路由——
+    // 目标已有窗口则聚焦，本窗尚无工作区则就地打开，否则开新窗口（本窗原样不动）
     workspaceStore.onOpenFolder = { [weak self] url in
       guard let self else { return }
-      self.stateStore.switchWorkspace(to: url, workspaceStore: self.workspaceStore, tabStore: self.tabStore)
+      guard let coordinator = self.coordinator else {
+        return self.openWorkspaceInPlace(url)
+      }
+      coordinator.handleOpenWorkspace(url, requesting: self)
     }
     tabStore.onOpenFile = { [weak self, weak recentsStore] url in
       guard let root = self?.workspaceStore.root?.id else { return }

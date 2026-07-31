@@ -42,7 +42,7 @@ struct MarkPDFApp: App {
   }
 
   var body: some Scene {
-    WindowGroup {
+    WindowGroup(id: WindowRootView.groupID) {
       WindowRootView(
         coordinator: windowCoordinator,
         snapshotStore: snapshotStore,

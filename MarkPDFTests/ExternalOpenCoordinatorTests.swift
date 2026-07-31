@@ -68,6 +68,40 @@ final class ExternalOpenCoordinatorTests: XCTestCase {
     XCTAssertFalse(URL(fileURLWithPath: "/Users/a/other").isWithinWorkspace(root: root))
   }
 
+  // MARK: - 多窗口判定（v1.5）
+
+  func testDecideAnyWindowWorkspaceContainingFolderOpensThere() {
+    XCTAssertEqual(
+      ExternalOpenCoordinator.decide(
+        folderKey: "/Users/a/papers/sub",
+        rootPaths: ["/Users/a/notes", "/Users/a/papers"],
+        declinedFolders: []
+      ),
+      .openInCurrentWorkspace,
+      "任一窗口的工作区包含该文件夹即在该窗口打开，不再弹询问"
+    )
+    XCTAssertEqual(
+      ExternalOpenCoordinator.decide(
+        folderKey: "/Users/a/loose",
+        rootPaths: ["/Users/a/notes", "/Users/a/papers"],
+        declinedFolders: []
+      ),
+      .openBareAndAsk,
+      "所有窗口都不含 → 新开单文件窗口并询问"
+    )
+  }
+
+  func testShouldPresentAskSkipsWhenAnyWindowSwitchedIn() {
+    XCTAssertFalse(
+      ExternalOpenCoordinator.shouldPresentAsk(
+        folderKey: "/Users/a/papers",
+        rootPaths: ["/Users/a/notes", "/Users/a/papers"],
+        declinedFolders: []
+      ),
+      "排队期间某窗口已切进该文件夹：无需再问"
+    )
+  }
+
   // MARK: - FR-7.4 审查修复：类型白名单
 
   func testShouldHandleWhitelist() {
