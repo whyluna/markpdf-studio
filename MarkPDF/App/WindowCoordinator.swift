@@ -49,6 +49,7 @@ final class WindowCoordinator: ObservableObject {
       return index == 0
     }
     sessions.append(session)
+    Logger.workspace.info("窗口登记: 共 \(self.sessions.count) 个")
     return sessions.count == 1
   }
 
@@ -121,7 +122,9 @@ final class WindowCoordinator: ObservableObject {
   /// 外部打开一个文件的路由（纯函数）：
   /// ① 该文件已在某窗口打开 → 聚焦（不重复开，避免同文件双窗口的标注/编辑器冲突）
   /// ② 某窗口工作区包含该文件 → 聚焦并在其中开标签（沿用「同工作区直接开标签」语义）
-  /// ③ 否则新开单文件窗口（与现有工作区完全隔离）
+  /// ③ 无工作区且未开任何文件的空窗口 → 就地承接（冷启动单文件打开不残留空窗口；
+  ///    欢迎草稿不算内容，承接前由 TabStore 关掉未触碰的草稿）
+  /// ④ 否则新开单文件窗口（与现有工作区完全隔离）
   nonisolated static func routeExternalFile(_ file: URL, windows: [WindowInfo]) -> RouteDecision {
     let path = normalize(file)
     if let index = windows.firstIndex(where: { $0.openFilePaths.contains(path) }) {
@@ -131,6 +134,9 @@ final class WindowCoordinator: ObservableObject {
       guard let rootPath = info.rootPath else { return false }
       return file.isWithinWorkspace(rootPath: rootPath)
     }) {
+      return .focusExisting(windowIndex: index, openTab: file)
+    }
+    if let index = windows.firstIndex(where: { $0.rootPath == nil && $0.openFilePaths.isEmpty }) {
       return .focusExisting(windowIndex: index, openTab: file)
     }
     return .newWindow(.file(file))

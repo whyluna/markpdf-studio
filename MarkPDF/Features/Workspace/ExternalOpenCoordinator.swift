@@ -35,6 +35,28 @@ final class ExternalOpenCoordinator: ObservableObject {
   lazy var presentAsk: (URL, String, URL) -> Void = { [weak self] folder, folderKey, file in
     self?.askToOpenWorkspace(folder: folder, folderKey: folderKey, file: file)
   }
+  /// 应用已激活：ask 弹窗必须等激活后再弹——启动早期（首窗 onAppear / AppleEvent 分发栈内）
+  /// runModal 会以非首按钮立即返回，把询问静默记成「仅打开文件」（用户根本没看到弹窗，实测）
+  private var appBecameActive = false
+
+  init() {
+    NotificationCenter.default.addObserver(
+      forName: NSApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        self?.appDidBecomeActive()
+      }
+    }
+  }
+
+  /// 应用激活（didBecomeActive 通知或测试调用）：此后才允许弹 ask 窗口
+  func appDidBecomeActive() {
+    guard !appBecameActive else { return }
+    appBecameActive = true
+    drainAskQueue()
+  }
 
   // 接线（WindowRootView）：v1.5 起路由经 WindowCoordinator——
   // 已打开该文件或其工作区包含它 → 聚焦该窗口；否则新开单文件窗口
@@ -90,7 +112,11 @@ final class ExternalOpenCoordinator: ObservableObject {
       return
     }
     guard isReady else {
-      pendingURLs.append(url)
+      // 冷启动双通道去重（AppDelegate.openFiles 与 SwiftUI onOpenURL 可能都送达）：
+      // 队列里已有的不重复入队；就绪后的重复投递由路由幂等吸收（已开则聚焦）
+      if !pendingURLs.contains(where: { $0.standardizedFileURL == url.standardizedFileURL }) {
+        pendingURLs.append(url)
+      }
       return
     }
     route(url)
@@ -117,14 +143,17 @@ final class ExternalOpenCoordinator: ObservableObject {
     // 工作区内 → 聚焦该窗口开标签；否则新开单文件窗口
     openFileTab?(file)
     guard decision == .openBareAndAsk else { return }
+    // 同文件夹的询问只排一次（双通道重复投递 / 多文件同批拖入）
+    guard !pendingAsks.contains(where: { $0.folderKey == folderKey }) else { return }
     pendingAsks.append((folder, folderKey, file))
     drainAskQueue()
   }
 
   /// 依次放行 ask 队列：同一时刻最多一个弹窗；runModal 期间嵌套到达的 ask
-  /// 只追加到 pendingAsks（此时 isAsking = true，嵌套 drain 直接返回），本轮结束后继续
+  /// 只追加到 pendingAsks（此时 isAsking = true，嵌套 drain 直接返回），本轮结束后继续。
+  /// 应用未激活前不弹（启动早期 runModal 会静默返回非首按钮）
   private func drainAskQueue() {
-    guard !isAsking else { return }
+    guard appBecameActive, !isAsking else { return }
     while let next = pendingAsks.first {
       pendingAsks.removeFirst()
       guard Self.shouldPresentAsk(
@@ -171,8 +200,10 @@ final class ExternalOpenCoordinator: ObservableObject {
     alert.addButton(withTitle: String(localized: "仅打开文件"))
     guard alert.runModal() == .alertFirstButtonReturn else {
       declinedFolders.insert(folderKey)
+      Logger.workspace.info("设为工作区询问: 仅打开文件 \(folderKey, privacy: .public)")
       return
     }
+    Logger.workspace.info("设为工作区询问: 接受 \(folderKey, privacy: .public)")
     // 沙盒授权面板：预定位到目标文件夹，用户点一下确认即建立文件夹访问权（随后书签持久化）
     let panel = NSOpenPanel()
     panel.canChooseFiles = false

@@ -48,6 +48,39 @@ final class WindowCoordinatorTests: XCTestCase {
     )
   }
 
+  func testExternalFileAbsorbedByEmptyBareWindow() {
+    let windows = [WindowCoordinator.WindowInfo(rootPath: nil)]
+    XCTAssertEqual(
+      WindowCoordinator.routeExternalFile(outsideFile, windows: windows),
+      .focusExisting(windowIndex: 0, openTab: outsideFile),
+      "无工作区且未开任何文件的空窗口就地承接（冷启动单文件打开不残留空窗口）"
+    )
+  }
+
+  func testExternalFileBareWindowWithFilesStillOpensNewWindow() {
+    let other = URL(fileURLWithPath: "/tmp/loose/other.pdf")
+    let windows = [
+      WindowCoordinator.WindowInfo(rootPath: nil, openFilePaths: [WindowCoordinator.normalize(other)]),
+    ]
+    XCTAssertEqual(
+      WindowCoordinator.routeExternalFile(outsideFile, windows: windows),
+      .newWindow(.file(outsideFile)),
+      "已开其他文件的单文件窗口不吸收，保持隔离"
+    )
+  }
+
+  func testWorkspaceMatchWinsOverEmptyBareWindow() {
+    let windows = [
+      WindowCoordinator.WindowInfo(rootPath: nil),
+      WindowCoordinator.WindowInfo(rootPath: "/tmp/wsA"),
+    ]
+    XCTAssertEqual(
+      WindowCoordinator.routeExternalFile(fileA, windows: windows),
+      .focusExisting(windowIndex: 1, openTab: fileA),
+      "工作区归属优先于空窗口承接"
+    )
+  }
+
   // MARK: - 打开工作区
 
   func testOpenWorkspaceAlreadyOpenFocuses() {

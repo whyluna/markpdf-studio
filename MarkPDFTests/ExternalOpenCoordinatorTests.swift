@@ -126,6 +126,7 @@ final class ExternalOpenCoordinatorTests: XCTestCase {
   @MainActor
   func testAsksAreSerializedDuringModal() {
     let coordinator = ExternalOpenCoordinator()
+    coordinator.appDidBecomeActive()  // ask 弹窗门禁：应用激活后才弹（生产由通知驱动）
     coordinator.currentRootPath = { "/ws" }
     var opened: [URL] = []
     var events: [String] = []
