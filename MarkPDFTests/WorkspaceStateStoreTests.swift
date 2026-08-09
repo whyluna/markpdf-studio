@@ -22,6 +22,79 @@ final class WorkspaceStateStoreTests: XCTestCase {
   private let file1 = URL(fileURLWithPath: "/tmp/ws/a.md")
   private let file2 = URL(fileURLWithPath: "/tmp/ws/b.pdf")
 
+  // MARK: - 根改名/移动的槽位迁移
+
+  /// 纯函数迁移：槽位键/书签键/最后根/窗口清单换键；槽位内路径与光标行按前缀平移
+  func testMigrateRootSlotShiftsKeysAndInnerPaths() {
+    let oldPath = "/ws/old-root"
+    let newPath = "/ws/new-root"
+    var state = WorkspaceSnapshotStore.Snapshot()
+    var ws = WorkspaceSnapshotStore.WorkspaceSnapshot()
+    ws.collapsedFolders = ["\(oldPath)/sub", "/elsewhere/x"]
+    ws.groups = [
+      [WorkspaceSnapshotStore.TabState(path: "\(oldPath)/a.md", kind: "markdown")],
+    ]
+    ws.activeTabs = ["\(oldPath)/a.md"]
+    state.workspaces[oldPath] = ws
+    state.bookmarks[oldPath] = Data("bm".utf8)
+    state.lastRootPath = oldPath
+    state.openWindowRoots = [oldPath, "/ws/other"]
+    state.cursorLines = ["\(oldPath)/a.md": 7, "/ws/other/b.md": 3]
+
+    WorkspaceStateStore.migrateRootSlot(&state, from: oldPath, to: newPath)
+
+    XCTAssertNil(state.workspaces[oldPath])
+    XCTAssertEqual(state.workspaces[newPath]?.collapsedFolders, ["\(newPath)/sub", "/elsewhere/x"])
+    XCTAssertEqual(state.workspaces[newPath]?.groups.first?.first?.path, "\(newPath)/a.md")
+    XCTAssertEqual(state.workspaces[newPath]?.activeTabs, ["\(newPath)/a.md"])
+    XCTAssertEqual(state.bookmarks[newPath], Data("bm".utf8))
+    XCTAssertNil(state.bookmarks[oldPath])
+    XCTAssertEqual(state.lastRootPath, newPath)
+    XCTAssertEqual(state.openWindowRoots, [newPath, "/ws/other"])
+    XCTAssertEqual(state.cursorLines, ["\(newPath)/a.md": 7, "/ws/other/b.md": 3])
+  }
+
+  /// 端到端：Finder 里给根文件夹改名 → 安全书签仍能解析（按文件 ID 追踪）→
+  /// 恢复时检测「解析路径 ≠ 存储键」并触发迁移钩子；新根下光标行可读
+  @MainActor
+  func testRestoreMigratesSlotWhenRootRenamedExternally() throws {
+    let parent = FileManager.default.temporaryDirectory
+      .appendingPathComponent("RootRename.\(UUID().uuidString)")
+    let oldDir = parent.appendingPathComponent("old-root")
+    try FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: parent) }
+    let mdFile = oldDir.appendingPathComponent("笔记.md")
+    try "x".write(to: mdFile, atomically: true, encoding: .utf8)
+    // 书签解析的规范形（/var → /private/var）：存储键与解析结果同口径，改名是唯一变量
+    let oldPath = oldDir.resolvingSymlinksInPath().path
+    let bookmark = try oldDir.bookmarkData(
+      options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+
+    var snapshot = WorkspaceSnapshotStore.Snapshot()
+    snapshot.bookmarks[oldPath] = bookmark
+    snapshot.lastRootPath = oldPath
+    snapshot.openWindowRoots = [oldPath]
+    snapshot.cursorLines = ["\(oldPath)/笔记.md": 7]
+    defaults.set(try JSONEncoder().encode(snapshot), forKey: "workspaceSnapshot.v1")
+
+    let newDir = parent.appendingPathComponent("new-root")
+    try FileManager.default.moveItem(at: oldDir, to: newDir)
+    let newPath = newDir.resolvingSymlinksInPath().path
+
+    let stateStore = WorkspaceStateStore(defaults: defaults)
+    var moved: (String, String)?
+    stateStore.onWorkspaceRootMoved = { moved = ($0, $1) }
+    stateStore.restoreWorkspace(into: WorkspaceStore(), rootPath: oldPath)
+
+    XCTAssertEqual(moved?.0, oldPath, "迁移钩子带回旧键")
+    XCTAssertEqual(moved?.1, newPath, "迁移钩子带回解析出的新路径")
+    XCTAssertEqual(stateStore.currentRootPath, newPath, "当前根已是新路径")
+    XCTAssertEqual(
+      stateStore.cursorLine(for: newDir.appendingPathComponent("笔记.md")), 7,
+      "光标行随根平移")
+  }
+
+
   // MARK: - 光标行
 
   @MainActor

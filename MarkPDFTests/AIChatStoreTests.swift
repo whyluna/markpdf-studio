@@ -99,6 +99,39 @@ final class AIChatStoreTests: XCTestCase {
 
   // MARK: - 用例
 
+  /// 应用内改名/移动：内存线程与激活键随路径平移，随后 bindDocument(新 URL) 幂等不抹内容
+  func testRekeySessionsFollowsFileRename() {
+    let repository = makeRepository()
+    let oldURL = URL(fileURLWithPath: "/ws/a.md")
+    let newURL = URL(fileURLWithPath: "/ws/b.md")
+    repository.update(
+      AISessionStore.StoredSession(
+        docPath: AIChatStore.threadKey(for: oldURL),
+        messages: [
+          AISessionStore.StoredMessage(
+            role: "user", content: "改名前的对话",
+            contextSummary: nil, promptQuestion: nil, wasCancelled: nil
+          ),
+        ],
+        updatedAt: Date()
+      ),
+      for: AIChatStore.threadKey(for: oldURL)
+    )
+    let store = makeStore(transport: AIServiceTests.MockAITransport(), repository: repository)
+    store.bindDocument(oldURL)
+    XCTAssertEqual(store.messages.map(\.content), ["改名前的对话"])
+
+    store.rekeySessions(from: oldURL, to: newURL)
+
+    XCTAssertEqual(store.activeDocName, "b.md", "激活线程键已平移到新路径")
+    XCTAssertEqual(store.messages.map(\.content), ["改名前的对话"], "改名不丢当前对话")
+    XCTAssertNil(repository.session(for: AIChatStore.threadKey(for: oldURL)))
+    XCTAssertNotNil(repository.session(for: AIChatStore.threadKey(for: newURL)))
+
+    store.bindDocument(newURL)  // 标签联动随后触发：命中同键幂等返回
+    XCTAssertEqual(store.messages.map(\.content), ["改名前的对话"], "幂等返回，不重载成空线程")
+  }
+
   func testStreamingAggregatesIntoAssistantMessage() async {
     let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
       AsyncThrowingStream { continuation in

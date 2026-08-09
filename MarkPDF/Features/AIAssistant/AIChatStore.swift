@@ -160,6 +160,29 @@ final class AIChatStore: ObservableObject {
     phase = .idle
   }
 
+  /// 文件/文件夹改名或移动（应用内文件树操作）：会话随路径换键——
+  /// 内存线程表、激活线程键、全局仓库一起平移（文件夹后代按前缀）。
+  /// 必须先于 tabStore.fileDidMove 调用：换键完成后标签联动触发的
+  /// bindDocument(新 URL) 命中同键幂等返回——不会把当前消息回写进旧键
+  ///（旧键复活）或把激活线程重载成空
+  func rekeySessions(from oldURL: URL, to newURL: URL) {
+    let oldKey = Self.threadKey(for: oldURL)
+    let newKey = Self.threadKey(for: newURL)
+    guard oldKey != newKey else { return }
+    func shifted(_ key: String) -> String {
+      newKey + key.dropFirst(oldKey.count)
+    }
+    for key in threads.keys.filter({ $0 == oldKey || $0.hasPrefix(oldKey + "/") }) {
+      let thread = threads.removeValue(forKey: key)
+      threads[shifted(key)] = thread
+    }
+    if activeDocKey == oldKey || activeDocKey.hasPrefix(oldKey + "/") {
+      activeDocKey = shifted(activeDocKey)
+      activeDocName = URL(fileURLWithPath: activeDocKey).lastPathComponent
+    }
+    repository?.rekey(from: oldKey, to: newKey)
+  }
+
   /// 退出/关窗前立即落盘
   func flush() {
     persistDebouncer.cancel()

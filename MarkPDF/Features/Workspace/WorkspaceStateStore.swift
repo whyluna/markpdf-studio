@@ -103,6 +103,11 @@ final class WorkspaceStateStore: ObservableObject {
     store.state.cursorLines[url.path]
   }
 
+  /// 工作区根被改名/移动（Finder 等外部途径）：restoreWorkspace 解析书签发现
+  /// 「解析出的真实路径 ≠ 查找用的存储键」时触发——快照内部槽位换键后，
+  /// 经此钩子通知外部存储（AI 会话/最近打开/收藏）一起平移（WindowSession 接线）
+  var onWorkspaceRootMoved: ((String, String) -> Void)?
+
   // MARK: - 启动恢复
 
   /// 恢复标签组与激活状态（当前工作区槽位的现场；一般在 restoreWorkspace 之后调用，
@@ -136,6 +141,11 @@ final class WorkspaceStateStore: ObservableObject {
     // 不调用 stopAccessing：访问权需保持到进程结束（扫描/监听/文件操作都依赖它）
     accessedRootURL = url
     let key = slotKey(for: url)
+    // 根被改名/移动：书签按文件 ID 解析到新路径，与查找用的存储键不一致 →
+    // 槽位整体迁移（现场/书签/光标行/窗口清单），外部存储经钩子一起平移
+    if let targetPath, targetPath != key {
+      migrateRootSlot(from: targetPath, to: key)
+    }
     currentRootPath = key
     store.state.lastRootPath = key
     // 格式收敛：v1 单书签解析出真实路径后归入多书签表
@@ -176,6 +186,49 @@ final class WorkspaceStateStore: ObservableObject {
       workspaceStore.isAIAssistantPresented = false
       tabStore.replaceAll(tabStates: [], activeTabPaths: [], activeGroupIndex: 0)
     }
+  }
+
+  /// 根改名/移动的槽位迁移（纯函数可单测）：槽位键、书签键、最后根、窗口清单换键；
+  /// 槽位内部（标签/激活/折叠）与光标行表里的绝对路径按前缀平移
+  nonisolated static func migrateRootSlot(
+    _ state: inout WorkspaceSnapshotStore.Snapshot, from oldPath: String, to newPath: String
+  ) {
+    func shifted(_ path: String) -> String {
+      RecentFilesStore.shift(path, from: oldPath, to: newPath)
+    }
+    if var ws = state.workspaces.removeValue(forKey: oldPath) {
+      if state.workspaces[newPath] == nil {
+        ws.collapsedFolders = ws.collapsedFolders.map(shifted)
+        ws.groups = ws.groups.map { group in
+          group.map { WorkspaceSnapshotStore.TabState(path: $0.path.map(shifted), kind: $0.kind) }
+        }
+        ws.activeTabs = ws.activeTabs.map { $0.map(shifted) }
+        state.workspaces[newPath] = ws
+      }
+    }
+    if let bookmark = state.bookmarks.removeValue(forKey: oldPath),
+      state.bookmarks[newPath] == nil
+    {
+      state.bookmarks[newPath] = bookmark
+    }
+    if state.lastRootPath == oldPath {
+      state.lastRootPath = newPath
+    }
+    state.openWindowRoots = state.openWindowRoots.map(shifted)
+    var cursorLines: [String: Int] = [:]
+    for (path, line) in state.cursorLines {
+      cursorLines[shifted(path)] = line
+    }
+    state.cursorLines = cursorLines
+  }
+
+  /// 实例侧迁移：换键后落盘 + 通知外部存储（AI 会话/最近打开/收藏）一起平移
+  private func migrateRootSlot(from oldPath: String, to newPath: String) {
+    Self.migrateRootSlot(&store.state, from: oldPath, to: newPath)
+    store.schedulePersist()
+    Logger.workspace.info(
+      "工作区根改名/移动，槽位迁移: \(oldPath, privacy: .public) → \(newPath, privacy: .public)")
+    onWorkspaceRootMoved?(oldPath, newPath)
   }
 
   /// v1 快照迁移：旧的全局标签组归入「最后工作区」槽位（迁移后即清空遗留字段，只执行一次）

@@ -78,14 +78,30 @@ final class WindowSession: ObservableObject, Identifiable {
 
   // MARK: - 跨 store 接线（原 ContentView.onAppear；每窗口一次）
 
-  func wireUp(recentsStore: RecentFilesStore) {
+  func wireUp(recentsStore: RecentFilesStore, favoritesStore: FavoritesStore) {
     guard !isWired else { return }
     isWired = true
 
     // 重命名/移动成功（含撤销/重做链）→ 标签页路径跟随；
     // 撤销在 WorkspaceStore 内闭环、不经过视图层，需在 Store 层统一通知
-    workspaceStore.onFileMoved = { [weak tabStore] oldURL, newURL in
-      tabStore?.fileDidMove(from: oldURL, to: newURL)
+    workspaceStore.onFileMoved = { [weak self, weak recentsStore, weak favoritesStore] oldURL, newURL in
+      guard let self else { return }
+      // AI 会话先换键：随后标签联动触发的 bindDocument(新 URL) 命中同键幂等返回
+      self.aiChatStore.rekeySessions(from: oldURL, to: newURL)
+      self.tabStore.fileDidMove(from: oldURL, to: newURL)
+      // 最近打开/收藏的条目随路径平移（同一条管道，改名后列表不断线）
+      let oldPath = oldURL.standardizedFileURL.path
+      let newPath = newURL.standardizedFileURL.path
+      recentsStore?.rekey(from: oldPath, to: newPath)
+      favoritesStore?.rekey(from: oldPath, to: newPath)
+    }
+    // 工作区根被外部改名/移动（restoreWorkspace 书签解析发现）：外部存储一起平移
+    stateStore.onWorkspaceRootMoved = { [weak self, weak recentsStore, weak favoritesStore] oldPath, newPath in
+      guard let self else { return }
+      self.aiChatStore.rekeySessions(
+        from: URL(fileURLWithPath: oldPath), to: URL(fileURLWithPath: newPath))
+      recentsStore?.rekey(from: oldPath, to: newPath)
+      favoritesStore?.rekey(from: oldPath, to: newPath)
     }
     // 打开工作区（⌘⇧O/菜单/空状态按钮统一走此钩子）：经窗口路由——
     // 目标已有窗口则聚焦，本窗尚无工作区则就地打开，否则开新窗口（本窗原样不动）

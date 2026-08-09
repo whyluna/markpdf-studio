@@ -44,6 +44,25 @@ final class FavoritesStore: ObservableObject {
     persist()
   }
 
+  /// 文件/文件夹改名或移动（应用内）：收藏条目随路径平移（文件夹后代按前缀）。
+  /// 幂等；平移后去重（与 RecentFilesStore.rekey 同口径）
+  func rekey(from oldPath: String, to newPath: String) {
+    guard oldPath != newPath else { return }
+    var changed = false
+    for (root, paths) in favorites {
+      let shifted = RecentFilesStore.dedupe(
+        paths.map { RecentFilesStore.shift($0, from: oldPath, to: newPath) }
+      )
+      if shifted != paths {
+        favorites[root] = shifted
+        changed = true
+      }
+    }
+    if changed {
+      persist()
+    }
+  }
+
   private func persist() {
     defaults.set(favorites, forKey: Self.defaultsKey)
   }

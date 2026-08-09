@@ -107,10 +107,9 @@ final class FavoritesRecentsTests: XCTestCase {
   func testRecentsAutoCleansDeletedFiles() throws {
     // 真实临时文件：记录后删除其一。清理挪到写入路径（record）——读取为纯读，
     // 不在视图 body 求值期发布（展示层的存在性过滤由 FileTreeView.collectionSection 负责）
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("RecentFilesTests.\(UUID().uuidString)")
+    // （目录须在工作区根内：工作区外文件自归属过滤起不再入最近打开）
+    let dir = rootA.appendingPathComponent("sub")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: dir) }
     let alive = dir.appendingPathComponent("alive.md")
     let dead = dir.appendingPathComponent("dead.md")
     try "a".write(to: alive, atomically: true, encoding: .utf8)
@@ -135,5 +134,82 @@ final class FavoritesRecentsTests: XCTestCase {
     RecentFilesStore(defaults: defaults).record(file1, forRoot: rootA)
     let reopened = RecentFilesStore(defaults: defaults)
     XCTAssertEqual(reopened.files(forRoot: rootA), [file1])
+  }
+
+  // MARK: - 工作区归属过滤
+
+  /// 工作区外的文件不记录（md 链接点开异根文件等路径会把外部文件送进来——
+  /// 侧栏「最近打开」只应出现本工作区的文件，越界文件点了也没权限打开）
+  @MainActor
+  func testRecentsSkipsFilesOutsideRoot() throws {
+    let outside = rootB.appendingPathComponent("外部.md")
+    try "x".write(to: outside, atomically: true, encoding: .utf8)
+
+    let store = RecentFilesStore(defaults: defaults)
+    store.record(outside, forRoot: rootA)
+    XCTAssertEqual(store.files(forRoot: rootA), [], "异根文件不记录")
+
+    store.record(outside, forRoot: rootB)
+    XCTAssertEqual(store.files(forRoot: rootB), [outside], "归属 B 根时照常记录")
+  }
+
+  /// 历史脏数据兼容：旧版本误录进某根的异根条目，读出时按归属滤掉（不显示即不可点）
+  @MainActor
+  func testRecentsFiltersLegacyForeignEntriesOnRead() {
+    let foreign = rootB.appendingPathComponent("别的工作区.md")
+    // 直接写底层存储模拟历史脏数据（record 的归属闸拦不住已存在的数据）
+    defaults.set([rootA.path: [foreign.path, file1.path]], forKey: "recentFiles")
+
+    let store = RecentFilesStore(defaults: defaults)
+    XCTAssertEqual(store.files(forRoot: rootA), [file1], "异根条目读出即过滤")
+  }
+
+  // MARK: - 改名/移动跟随
+
+  @MainActor
+  func testRecentsRekeyFollowsFileRename() {
+    let renamed = rootA.appendingPathComponent("笔记-新.md")
+    let store = RecentFilesStore(defaults: defaults)
+    store.record(file1, forRoot: rootA)
+
+    store.rekey(from: file1.path, to: renamed.path)
+
+    XCTAssertEqual(store.files(forRoot: rootA), [renamed], "改名后最近打开跟随新路径")
+  }
+
+  @MainActor
+  func testRecentsRekeyShiftsFolderDescendantsAndDedupes() {
+    let dir = rootA.appendingPathComponent("dir")
+    let moved = rootA.appendingPathComponent("dir2")
+    let inside = dir.appendingPathComponent("a.md")
+    let alreadyThere = moved.appendingPathComponent("a.md")
+    // 绕过归属闸直接写存储（平移冲突场景的构造与真实写入无关）；先写数据再建 store（init 时载入）
+    defaults.set([rootA.path: [inside.path, alreadyThere.path]], forKey: "recentFiles")
+    let store = RecentFilesStore(defaults: defaults)
+
+    store.rekey(from: dir.path, to: moved.path)
+    store.rekey(from: dir.path, to: moved.path)  // 幂等：第二次 no-op
+
+    XCTAssertEqual(
+      store.files(forRoot: rootA), [alreadyThere],
+      "后代按前缀平移；平移后与已有条目去重，不剩两条"
+    )
+  }
+
+  @MainActor
+  func testFavoritesRekeyFollowsFolderMove() {
+    let dir = rootA.appendingPathComponent("dir")
+    let moved = rootA.appendingPathComponent("dir2")
+    let inside = dir.appendingPathComponent("a.md")
+    defaults.set([rootA.path: [inside.path, file1.path]], forKey: "favoriteFiles")
+    let store = FavoritesStore(defaults: defaults)
+
+    store.rekey(from: dir.path, to: moved.path)
+
+    XCTAssertEqual(
+      store.files(forRoot: rootA),
+      [moved.appendingPathComponent("a.md"), file1],
+      "收藏随文件夹移动平移，根下其他文件不动"
+    )
   }
 }

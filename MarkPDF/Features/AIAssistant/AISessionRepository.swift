@@ -71,6 +71,30 @@ final class AISessionRepository: ObservableObject {
     }
   }
 
+  // MARK: - 改名/移动跟随
+
+  /// 文件或文件夹改名/移动：会话随路径换键（键即绝对路径）。
+  /// 文件夹时其后代会话按路径前缀整体平移；目标键已有会话按 updatedAt 合并（同迁移规则）。
+  /// 幂等：旧键不存在为 no-op（多窗口重复调用无副作用）。
+  /// 仅限应用内操作（文件树改名/移动/撤销重做）；Finder 里的改名移动走不到这里
+  func rekey(from oldPath: String, to newPath: String) {
+    guard oldPath != newPath else { return }
+    let oldKeys = sessions.keys.filter { $0 == oldPath || $0.hasPrefix(oldPath + "/") }
+    guard !oldKeys.isEmpty else { return }
+    for oldKey in oldKeys {
+      let newKey = newPath + oldKey.dropFirst(oldPath.count)
+      guard let session = sessions.removeValue(forKey: oldKey) else { continue }
+      if let existing = sessions[newKey] {
+        sessions[newKey] = Self.merge(existing, session, key: newKey)
+      } else {
+        var moved = session
+        moved.docPath = newKey
+        sessions[newKey] = moved
+      }
+    }
+    schedulePersist()
+  }
+
   /// 立即落盘（退出/关窗前）
   func flush() {
     debouncer.cancel()

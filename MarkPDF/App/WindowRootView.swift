@@ -11,6 +11,7 @@ struct WindowRootView: View {
   private let snapshotStore: WorkspaceSnapshotStore
   private let externalOpen: ExternalOpenCoordinator
   private let recentsStore: RecentFilesStore
+  private let favoritesStore: FavoritesStore
 
   init(
     coordinator: WindowCoordinator,
@@ -19,12 +20,14 @@ struct WindowRootView: View {
     aiKeys: AIKeyStore,
     aiSessions: AISessionRepository,
     externalOpen: ExternalOpenCoordinator,
-    recentsStore: RecentFilesStore
+    recentsStore: RecentFilesStore,
+    favoritesStore: FavoritesStore
   ) {
     self.coordinator = coordinator
     self.snapshotStore = snapshotStore
     self.externalOpen = externalOpen
     self.recentsStore = recentsStore
+    self.favoritesStore = favoritesStore
     _session = StateObject(
       wrappedValue: WindowSession(
         snapshotStore: snapshotStore,
@@ -52,6 +55,9 @@ struct WindowRootView: View {
         WindowAccessor { window in
           guard session.window !== window else { return }
           session.window = window
+          // 关闭系统窗口恢复：现场恢复由应用自身的快照体系负责（restoreWorkspaceWindows），
+          // 系统恢复会在启动时额外重建上次的窗口（冷启动双击文件会凭空多出空窗口）
+          window.isRestorable = false
           // 关窗即落盘本窗现场并注销（红钮关窗后 ⌘Q 时视图已销毁，无人接收）
           NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
@@ -71,7 +77,7 @@ struct WindowRootView: View {
   private func setUpWindow() {
     let isFirst = coordinator.register(session)
     session.coordinator = coordinator
-    session.wireUp(recentsStore: recentsStore)
+    session.wireUp(recentsStore: recentsStore, favoritesStore: favoritesStore)
     // openWindow 只能在视图层取（环境值）：注入给路由中枢开新窗口
     coordinator.openNewWindow = { openWindow(id: WindowRootView.groupID) }
     // 新窗口领取初始任务（工作区 / 单文件 / 工作区+文件）；无任务则空态

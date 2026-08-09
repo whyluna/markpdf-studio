@@ -22,13 +22,22 @@ final class RecentFilesStore: ObservableObject {
     }
   }
 
-  /// 某工作区的最近打开（新到旧；纯读——已删除文件的清理由 record 顺带完成）
+  /// 某工作区的最近打开（新到旧；纯读——已删除文件的清理由 record 顺带完成）。
+/// 越界条目（历史版本误录、md 链接点开工作区外文件）在读出时按工作区归属滤掉——
+/// 「最近打开」是「这个工作区的最近打开」，侧栏不应出现别的工作区的文件
   func files(forRoot root: URL) -> [URL] {
-    (recents[root.path] ?? []).map { URL(fileURLWithPath: $0) }
+    let rootPath = root.standardizedFileURL.path
+    return (recents[root.path] ?? [])
+      .map { URL(fileURLWithPath: $0) }
+      .filter { $0.isWithinWorkspace(rootPath: rootPath) }
   }
 
-  /// 记录一次打开：去重置顶、顺带清理已删除的文件、超出上限截断后写盘
+  /// 记录一次打开：去重置顶、顺带清理已删除的文件、超出上限截断后写盘。
+  /// 工作区外的文件不记录（点击 md 链接、外部打开路由都可能把异根路径送到这里——
+  /// 越界文件点了也因沙盒无权限打不开，还会污染侧栏）
   func record(_ url: URL, forRoot root: URL) {
+    let rootPath = root.standardizedFileURL.path
+    guard url.isWithinWorkspace(rootPath: rootPath) else { return }
     var paths = recents[root.path] ?? []
     paths.removeAll { $0 == url.path }
     paths.insert(url.path, at: 0)
@@ -39,5 +48,33 @@ final class RecentFilesStore: ObservableObject {
     }
     recents[root.path] = paths
     defaults.set(recents, forKey: Self.defaultsKey)
+  }
+
+  /// 文件/文件夹改名或移动（应用内）：条目随路径平移（文件夹后代按前缀），
+  /// 平移后去重（新路径恰好已在列表时不产生两条）。幂等：旧路径不存在为 no-op
+  func rekey(from oldPath: String, to newPath: String) {
+    guard oldPath != newPath else { return }
+    var changed = false
+    for (root, paths) in recents {
+      let shifted = Self.dedupe(paths.map { Self.shift($0, from: oldPath, to: newPath) })
+      if shifted != paths {
+        recents[root] = shifted
+        changed = true
+      }
+    }
+    if changed {
+      defaults.set(recents, forKey: Self.defaultsKey)
+    }
+  }
+
+  /// 路径前缀平移（与 AISessionRepository.rekey 同口径；三处共用，改动须同步）
+  nonisolated static func shift(_ path: String, from oldPath: String, to newPath: String) -> String {
+    guard path == oldPath || path.hasPrefix(oldPath + "/") else { return path }
+    return newPath + path.dropFirst(oldPath.count)
+  }
+
+  nonisolated static func dedupe(_ paths: [String]) -> [String] {
+    var seen = Set<String>()
+    return paths.filter { seen.insert($0).inserted }
   }
 }
