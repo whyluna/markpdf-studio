@@ -71,6 +71,7 @@ final class TabStore: ObservableObject {
   /// 打开文件：已在任一组打开则激活该组该标签（分栏时同一文件只允许一个实例，
   /// 否则两套 EditorStore 各自自动保存同一磁盘文件会互相覆盖），否则在当前组新建
   func open(_ node: FileNode) {
+    closeUntouchedWelcomeDrafts()
     if let found = findOpenTab(url: node.id) {
       activeGroupID = found.group.id
       found.group.activate(found.tab)
@@ -79,6 +80,26 @@ final class TabStore: ObservableObject {
     }
     activeGroup.open(node)
     onOpenFile?(node.id)
+  }
+
+  /// 打开真实文件前清场：未触碰的欢迎草稿（url 为 nil 且从未编辑）随开随关——
+  /// 打开已有文件/工作区不再垫「未命名」欢迎页；用户动过字的草稿保留
+  ///（草稿不落盘，关掉即丢内容，只能关确认没动过的）
+  private func closeUntouchedWelcomeDrafts() {
+    for group in groups {
+      for tab in group.tabs where tab.url == nil {
+        if group.editorStores[tab.id]?.hasUnsavedChanges == false {
+          group.close(tab)
+        }
+      }
+    }
+    // 空组收起（多分栏时欢迎草稿可能是某组唯一标签）；只剩一个空组则保留，由 open 填入
+    while groups.count > 1, let empty = groups.first(where: { $0.tabs.isEmpty }) {
+      groups.removeAll { $0.id == empty.id }
+    }
+    if !groups.contains(where: { $0.id == activeGroupID }) {
+      activeGroupID = groups[0].id
+    }
   }
 
   /// 按 URL 打开文件（导出笔记后打开、最近打开等场景）
