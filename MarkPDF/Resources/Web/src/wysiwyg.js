@@ -182,6 +182,31 @@ class HRWidget extends WidgetType {
 }
 
 // KaTeX 公式（FR-2.4）：displayMode 为块级（div 独占成行），否则行内（span）
+//
+// 大尺寸 widget 高度估计与缓存（滚动抖动修复）：CM6 视口虚拟化对未测量的
+// block widget 一律按单行高估计，滚入视口测出真实高度后文档总高阶梯式突增
+//（滚动条 thumb 漂移、内容跳变）。对策：①按内容给 estimatedHeight；
+// ②测量高度按内容 key 缓存（widget 随视口回收/重建后估计仍准确——
+// 滚动来回经过同一公式不再「单行→真实」反复跳）；
+// ③KaTeX 渲染结果缓存（重建帧不再成串同步 renderToString 掉帧）
+const widgetHeightCache = new Map(); // 内容 key → px（FIFO 上限 300）
+const katexHtmlCache = new Map(); // displayMode+latex → HTML（FIFO 上限 500）
+
+function cachePut(map, key, value, cap) {
+  if (map.has(key)) map.delete(key);
+  map.set(key, value);
+  if (map.size > cap) map.delete(map.keys().next().value);
+}
+
+// toDOM 后下一帧记录真实高度（jsdom 等无布局环境 offsetHeight=0，自然跳过）
+function rememberHeight(key, el) {
+  requestAnimationFrame(() => {
+    if (el.isConnected && el.offsetHeight > 0) {
+      cachePut(widgetHeightCache, key, el.offsetHeight, 300);
+    }
+  });
+}
+
 class MathWidget extends WidgetType {
   constructor(latex, displayMode, source) {
     super();
@@ -192,18 +217,38 @@ class MathWidget extends WidgetType {
   eq(o) {
     return o.source === this.source && o.displayMode === this.displayMode;
   }
+  // CM6 高度图的唯一估计入口（block widget；行内返回 -1 随文本行高）
+  get estimatedHeight() {
+    if (!this.displayMode) return -1;
+    const cached = widgetHeightCache.get("m:" + this.source);
+    if (cached) return cached;
+    // KaTeX display 单行约 44px 含上下 padding 16；多行环境（\\ 换行）按行累加
+    const rows = (this.latex.match(/\\\\/g) || []).length + 1;
+    return rows * 44 + 16;
+  }
   toDOM(view) {
     const el = document.createElement(this.displayMode ? "div" : "span");
     el.className = this.displayMode ? "cm-math-display" : "cm-math-inline";
-    try {
-      el.innerHTML = katex.renderToString(this.latex, {
-        displayMode: this.displayMode,
-        throwOnError: false, // 语法错误时输出错误样式，不炸编辑器
-        output: "html",
-      });
-    } catch {
-      el.textContent = this.source; // 极端异常降级为源码文本
+    const cacheKey = (this.displayMode ? "D:" : "I:") + this.latex;
+    let html = katexHtmlCache.get(cacheKey);
+    if (html === undefined) {
+      try {
+        html = katex.renderToString(this.latex, {
+          displayMode: this.displayMode,
+          throwOnError: false, // 语法错误时输出错误样式，不炸编辑器
+          output: "html",
+        });
+      } catch {
+        html = null; // 极端异常降级为源码文本
+      }
+      cachePut(katexHtmlCache, cacheKey, html, 500);
     }
+    if (html != null) {
+      el.innerHTML = html;
+    } else {
+      el.textContent = this.source;
+    }
+    if (this.displayMode) rememberHeight("m:" + this.source, el);
     // 块级单击、行内双击 → 光标落回公式源码处，显露源码进入编辑
     // （位置由 posAtDOM 实时解析，不怕上文编辑偏移；阅读模式 alwaysRender 下重渲染后仍是渲染态）
     el.addEventListener(this.displayMode ? "mousedown" : "dblclick", (e) => {
@@ -303,6 +348,9 @@ class ImageWidget extends WidgetType {
       el.className = "cm-rendered-image";
       el.src = this.src;
       el.alt = this.alt;
+      // 加载完成后让 CM 重测行高：异步加载前按单行估计、加载后图片撑高行，
+      // CM 的 ResizeObserver 不感知内容高度变化，不主动重测会留下高度差（滚动跳变）
+      el.onload = () => view.requestMeasure();
       el.onerror = () => {
         const span = document.createElement("span");
         span.className = "cm-image-broken";
@@ -334,9 +382,16 @@ class TableWidget extends WidgetType {
   eq(o) {
     return o.source === this.source;
   }
+  get estimatedHeight() {
+    const cached = widgetHeightCache.get("t:" + this.source);
+    if (cached) return cached;
+    // 行高 = 单元格 padding 16 + 文本行 ~22；表头也算一行；上下 padding 16
+    return (this.model.rows.length + 1) * 38 + 16;
+  }
   toDOM(view) {
     const wrap = document.createElement("div");
     wrap.className = "cm-table-widget";
+    rememberHeight("t:" + this.source, wrap);
     const table = document.createElement("table");
 
     const appendSegs = (cellEl, segs) => {
@@ -814,3 +869,6 @@ export function wysiwyg(alwaysRender) {
     provide: (field) => EditorView.decorations.from(field),
   });
 }
+
+// 测试导出（estimatedHeight/高度缓存断言用；产物引用同名类，无运行时差异）
+export { MathWidget, TableWidget, ImageWidget, widgetHeightCache };
