@@ -29,6 +29,9 @@ final class WorkspaceStore: ObservableObject {
   @Published var isAIAssistantPresented = false {
     didSet { onStateChange?() }
   }
+  /// 右侧上下文面板（缩略图/大纲/AI 助手整栏）显隐：false 时整栏收起归零宽，
+  /// 正文区吸收全部空间（会话态，不持久）
+  @Published var isDetailPanelPresented = true
   /// 折叠的文件夹（FR-1.1 树展开态；默认全部展开，点击文件夹行切换，重扫后按 URL 保留）
   @Published var collapsedFolders: Set<URL> = [] {
     didSet { onStateChange?() }

@@ -38,14 +38,6 @@ struct ContentView: View {
     } message: {
       Text(annotationStore.lastError ?? "")
     }
-    .onAppear {
-      // 跨 store 接线与启动恢复在 WindowSession/WindowRootView（v1.5 多窗口）。
-      // 每次窗口出现把右侧面板压到最窄：AppKit 会恢复上次列宽（经常是很宽的面板），
-      // SwiftUI 无 detail 列宽 API，只能窗口就绪后直接拨 NSSplitView 分隔条
-      DispatchQueue.main.async {
-        collapseDetailColumnToMinimum()
-      }
-    }
     // 快速打开面板（FR-6.1 ⌘P）与全文搜索面板（FR-6.2 ⌘⇧F）与命令面板（FR-6.3 ⌘O）
     .overlay {
       if workspaceStore.isQuickOpenPresented {
@@ -108,90 +100,141 @@ struct ContentView: View {
 
   // MARK: - 三栏布局
 
+  /// 右侧面板宽度（nil = 默认最小宽；拖分隔条后进入手动）
+  @State private var detailPanelWidth: CGFloat?
+  /// 拖动中的幽灵线偏移（仅预览不触发布局——逐帧重排 WKWebView 编辑器是卡顿根因）
+  @State private var detailDragOffset: CGFloat = 0
+  /// 面板实测宽度（默认模式下的拖动起点）
+  @State private var measuredDetailWidth = ContentView.detailPanelMinWidth
+
   private var splitView: some View {
-    NavigationSplitView {
-      // FR-1.1 工作区文件树
-      FileTreeView()
-        .frame(minWidth: 238)
-    } content: {
-      tabArea
-        .frame(minWidth: 480)
-        // ideal 引导首次列宽分配：内容区尽量宽，右侧面板默认压到最窄（266）；
-        // 用户拖动后由系统状态恢复接管，此值只影响首次
-        .navigationSplitViewColumnWidth(min: 480, ideal: 4000)
-        .toolbar {
-          ToolbarItem(placement: .principal) {
-            if tabStore.activeGroup.activeTab?.kind == .pdf {
-              // PDF 标注工具组（FR-4.4，对齐设计稿 #pdfTools）
-              PDFToolsView()
-            } else if let store = tabStore.activeEditorStore {
-              EditorModePicker(store: store)
-            }
-          }
-          ToolbarItem(placement: .primaryAction) {
-            // 导出菜单（设计稿 #btnExport）
-            Menu {
-              Button("导出为 PDF") {
-                exportMarkdown(.pdf)
+    // 右侧面板是 HStack 兄弟视图而非 NavigationSplitView 第三列：
+    // 左栏折叠/展开的宽度再分配只发生在 NavigationSplitView 内部（正文列吸收），
+    // 右栏宽度系统布局碰不到——三栏互不影响（实测：列内方案被 SwiftUI 动画后
+    // 的布局收尾反复覆盖，拨条守门不可行）
+    HStack(spacing: 0) {
+      NavigationSplitView {
+        // FR-1.1 工作区文件树
+        FileTreeView()
+          .frame(minWidth: 238)
+      } detail: {
+        tabArea
+          .frame(minWidth: 480)
+          .toolbar {
+            ToolbarItem(placement: .principal) {
+              if tabStore.activeGroup.activeTab?.kind == .pdf {
+                // PDF 标注工具组（FR-4.4，对齐设计稿 #pdfTools）
+                PDFToolsView()
+              } else if let store = tabStore.activeEditorStore {
+                EditorModePicker(store: store)
               }
-              .disabled(!canExportMarkdown)
-              Button("导出为 HTML") {
-                exportMarkdown(.html)
+            }
+            ToolbarItem(placement: .primaryAction) {
+              // 导出菜单（设计稿 #btnExport）
+              Menu {
+                Button("导出为 PDF") {
+                  exportMarkdown(.pdf)
+                }
+                .disabled(!canExportMarkdown)
+                Button("导出为 HTML") {
+                  exportMarkdown(.html)
+                }
+                .disabled(!canExportMarkdown)
+                Divider()
+                Button("导出全部标注为 Markdown…") {
+                  exportAnnotations()
+                }
+                .disabled(!canExportAnnotations)
+              } label: {
+                Image(systemName: "square.and.arrow.up")
               }
-              .disabled(!canExportMarkdown)
-              Divider()
-              Button("导出全部标注为 Markdown…") {
-                exportAnnotations()
+              .help("导出")
+            }
+            ToolbarItem(placement: .primaryAction) {
+              // AI 助手（FR-AI.2；⌘⇧A / 命令面板同源开关）
+              Button {
+                workspaceStore.isAIAssistantPresented.toggle()
+              } label: {
+                Image(systemName: workspaceStore.isAIAssistantPresented ? "sparkles.rectangle.stack.fill" : "sparkles.rectangle.stack")
               }
-              .disabled(!canExportAnnotations)
-            } label: {
-              Image(systemName: "square.and.arrow.up")
+              .help(workspaceStore.isAIAssistantPresented ? "隐藏 AI 助手" : "显示 AI 助手")
             }
-            .help("导出")
-          }
-          ToolbarItem(placement: .primaryAction) {
-            // AI 助手（FR-AI.2；⌘⇧A / 命令面板同源开关）
-            Button {
-              workspaceStore.isAIAssistantPresented.toggle()
-            } label: {
-              Image(systemName: workspaceStore.isAIAssistantPresented ? "sparkles.rectangle.stack.fill" : "sparkles.rectangle.stack")
+            ToolbarItem(placement: .primaryAction) {
+              // 分栏切换（FR-1.4；设计稿 #btnSplit）
+              Button {
+                tabStore.toggleSplit()
+              } label: {
+                Image(systemName: tabStore.isSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+              }
+              .help(tabStore.isSplit ? "合并为单栏" : "左右分栏")
             }
-            .help(workspaceStore.isAIAssistantPresented ? "隐藏 AI 助手" : "显示 AI 助手")
-          }
-          ToolbarItem(placement: .primaryAction) {
-            // 分栏切换（FR-1.4；设计稿 #btnSplit）
-            Button {
-              tabStore.toggleSplit()
-            } label: {
-              Image(systemName: tabStore.isSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+            ToolbarItem(placement: .primaryAction) {
+              // 右侧面板整栏收起/展开（缩略图/大纲/AI 助手同栏）
+              Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                  workspaceStore.isDetailPanelPresented.toggle()
+                }
+              } label: {
+                Image(systemName: "sidebar.right")
+                  .symbolVariant(workspaceStore.isDetailPanelPresented ? .fill : .none)
+              }
+              .help(workspaceStore.isDetailPanelPresented ? "收起右侧面板" : "展开右侧面板")
             }
-            .help(tabStore.isSplit ? "合并为单栏" : "左右分栏")
           }
-        }
-    } detail: {
-      detailPanel
+      }
+      if workspaceStore.isDetailPanelPresented {
+        detailDragDivider
+        detailPanel
+          .frame(width: detailPanelWidth ?? measuredDetailWidth)
+          .background(
+            GeometryReader { geometry in
+              Color.clear.onChange(of: geometry.size.width) { _, width in
+                if detailDragOffset == 0 { measuredDetailWidth = width }
+              }
+            }
+          )
+      }
     }
   }
 
-  /// 启动时把右侧 detail 列压到最窄：递归找 NavigationSplitView 的 NSSplitView，
-  /// 把最后一个分隔条拨到「总宽 − 最窄面板宽」。仅窗口出现时调用一次，之后用户拖动不受影响
-  private func collapseDetailColumnToMinimum() {
-    func findSplitView(in view: NSView) -> NSSplitView? {
-      if let split = view as? NSSplitView { return split }
-      for subview in view.subviews {
-        if let found = findSplitView(in: subview) { return found }
+  /// 右侧 detail 列的统一最小宽（缩略图/大纲/AI 助手同宽，切换不跳变）
+  static let detailPanelMinWidth: CGFloat = 300
+
+  /// 右侧面板宽度拖拽分界线（悬停变左右箭头；拖动只显幽灵线，松手一次性应用，240–640pt）
+  private var detailDragDivider: some View {
+    Rectangle()
+      .fill(Color.secondary.opacity(0.2))
+      .frame(width: 1)
+      .padding(.horizontal, 3)  // 命中带 ~7pt，视觉仍是细线
+      .contentShape(Rectangle())
+      .overlay {
+        if detailDragOffset != 0 {
+          // 幽灵线：新分界位置预览（不触发任何重排）
+          Rectangle()
+            .fill(Color.accentColor.opacity(0.5))
+            .frame(width: 2)
+            .offset(x: detailDragOffset)
+        }
       }
-      return nil
-    }
-    // 本窗口优先（v1.5 多窗口：NSApp.windows.first 会拨错别的窗口）
-    let hostWindow = session.window ?? NSApp.windows.first { $0.isVisible && $0.contentView != nil }
-    guard let contentView = hostWindow?.contentView,
-      let splitView = findSplitView(in: contentView),
-      splitView.arrangedSubviews.count >= 2
-    else { return }
-    let lastDivider = splitView.arrangedSubviews.count - 2
-    // 266 = detail 面板 minWidth；分隔条位置按目标列左缘计
-    splitView.setPosition(splitView.bounds.width - 266, ofDividerAt: lastDivider)
+      .onHover { hovering in
+        if hovering {
+          NSCursor.resizeLeftRight.push()
+        } else {
+          NSCursor.pop()
+        }
+      }
+      .gesture(
+        DragGesture(minimumDistance: 0)
+          .onChanged { value in
+            detailDragOffset = value.translation.width
+          }
+          .onEnded { value in
+            let start = detailPanelWidth ?? measuredDetailWidth
+            detailPanelWidth = min(max(start - value.translation.width, 240), 640)
+            detailDragOffset = 0
+          }
+      )
+      .help("拖拽调整右侧面板宽度")
   }
 
   /// 右侧面板：AI 助手可见时整栏替代（FR-AI.2 替代式单栏）；
@@ -200,10 +243,8 @@ struct ContentView: View {
   private var detailPanel: some View {
     if workspaceStore.isAIAssistantPresented {
       AIAssistantPanelView()
-        .frame(minWidth: 300)
     } else if let tab = tabStore.activeGroup.activeTab, tab.kind == .pdf, let url = tab.url {
       PDFSidebarView(url: url)
-        .frame(minWidth: 266)
     } else {
       // 大纲 / 反向链接分界线可拖动（VSplitView）；ideal 高度引导首次分配——反向链接默认占较小空间。
       // 限制：拖动后的比例不持久（macOS 13 SplitView 无比例观测 API，同 FR-1.6 已知偏差）
@@ -216,7 +257,6 @@ struct ContentView: View {
           // 初始限制最大高度：反向链接默认只占底部小块（idealHeight 软引导对 VSplitView 布局无效，改用 maxHeight 硬约束）
           .frame(minHeight: 60, idealHeight: 90, maxHeight: 190)
       }
-      .frame(minWidth: 266)
     }
   }
 
