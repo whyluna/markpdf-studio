@@ -58,6 +58,49 @@ final class ViewLayerLogicTests: XCTestCase {
       PDFReaderView.Coordinator.shouldCommitPinch(phase: .ended, isPinching: false))
   }
 
+  // MARK: - 浮动面板几何守卫（NaN 崩溃修复）
+
+  /// 选区 bounds 为 CGRect.null 时，页→视图变换会算出 NaN/inf；
+  /// 交给 setFrame 会让 AppKit 直接 trap（实测 "Invalid view geometry: x is NaN"）
+  func testPanelGeometryRejectsNonFiniteInput() {
+    let container = NSRect(x: 0, y: 0, width: 800, height: 600)
+    let size = NSSize(width: 240, height: 120)
+    XCTAssertTrue(
+      AnnotationToolbarController.isDisplayableGeometry(
+        viewBounds: NSRect(x: 100, y: 100, width: 80, height: 12),
+        panelSize: size, container: container))
+    for bad in [CGFloat.nan, .infinity, -.infinity] {
+      XCTAssertFalse(
+        AnnotationToolbarController.isDisplayableGeometry(
+          viewBounds: NSRect(x: bad, y: 100, width: 80, height: 12),
+          panelSize: size, container: container),
+        "选区几何 \(bad) 必须拒绝")
+      XCTAssertFalse(
+        AnnotationToolbarController.isDisplayableGeometry(
+          viewBounds: NSRect(x: 100, y: 100, width: 80, height: 12),
+          panelSize: NSSize(width: bad, height: 120), container: container),
+        "面板尺寸 \(bad) 必须拒绝")
+    }
+    XCTAssertFalse(
+      AnnotationToolbarController.isDisplayableGeometry(
+        viewBounds: NSRect(x: 100, y: 100, width: 80, height: 12),
+        panelSize: size, container: .null),
+      "容器为 null 矩形（无穷）必须拒绝")
+  }
+
+  /// 容器过窄/面板尺寸为零（首次布局未完成）也不定位：夹取会算出负宽度
+  func testPanelGeometryRejectsDegenerateContainer() {
+    let size = NSSize(width: 240, height: 120)
+    let bounds = NSRect(x: 10, y: 10, width: 80, height: 12)
+    XCTAssertFalse(
+      AnnotationToolbarController.isDisplayableGeometry(
+        viewBounds: bounds, panelSize: size, container: NSRect(x: 0, y: 0, width: 10, height: 600)))
+    XCTAssertFalse(
+      AnnotationToolbarController.isDisplayableGeometry(
+        viewBounds: bounds, panelSize: .zero,
+        container: NSRect(x: 0, y: 0, width: 800, height: 600)))
+  }
+
   // MARK: - 书签页码守卫（Bug 修复 4）
 
   /// 异步加载完成前 currentPage == 0：0 页书签永远跳不到（goTo 有 page>=1 防护），不得产生死书签

@@ -22,6 +22,11 @@ final class ZoomablePDFView: PDFView {
   /// 且手势识别器路径时灵时不灵（PDFView 会先吃掉图标上的点击）
   var onCommentMarkerMouseDown: ((NSPoint) -> Bool)?
 
+  /// 既有标注的点选（FR-4.1 点选删除）：同走 mouseDown 通道且不吞事件——
+  /// 挂在 NSClickGestureRecognizer 上时会被 PDFKit 自己的手势吃掉（新系统实测点不中），
+  /// 与批注图标同一结论
+  var onAnnotationMouseDown: ((NSPoint) -> Void)?
+
   /// 手指光标查询（FR-4.3）：命中批注标记时返回 true。
   /// PDFView 在 /Text 图标上原生显示"抓抓手"，必须在 PDFKit 光标管线内改成手指
   var onPointingHandQuery: ((NSPoint) -> Bool)?
@@ -64,6 +69,8 @@ final class ZoomablePDFView: PDFView {
     if let handler = onCommentMarkerMouseDown, handler(point) {
       return
     }
+    // 既有标注点选（虚线框 + 删除按钮）：不吞事件，划词/取消选区照常
+    onAnnotationMouseDown?(point)
     super.mouseDown(with: event)
   }
 
@@ -77,7 +84,65 @@ final class ZoomablePDFView: PDFView {
       NSCursor.pointingHand.set()
       return
     }
+    // 超链接（目录/交叉引用）：标注设只读后 PDFKit 不再给小手，自己接管
+    if link(at: point) != nil {
+      NSCursor.pointingHand.set()
+      return
+    }
     super.cursorUpdate(with: event)
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    let point = convert(event.locationInWindow, from: nil)
+    // 点击（非拖拽划词）落在超链接上 → 自己执行跳转：
+    // 标注只读后 PDFKit 不再处理 Link 交互（只读是为了压掉它的原生选中蓝框）
+    if let start = lastMouseDownPoint, hypot(point.x - start.x, point.y - start.y) < 3,
+      let annotation = link(at: point)
+    {
+      super.mouseUp(with: event)
+      follow(link: annotation)
+      return
+    }
+    super.mouseUp(with: event)
+  }
+
+  /// 命中该点的超链接标注（Link 子类型）
+  private func link(at point: NSPoint) -> PDFAnnotation? {
+    guard let page = page(for: point, nearest: false) else { return nil }
+    let pagePoint = convert(point, to: page)
+    guard let annotation = page.annotation(at: pagePoint),
+      let raw = annotation.type
+    else { return nil }
+    let name = raw.hasPrefix("/") ? String(raw.dropFirst()) : raw
+    return name == "Link" ? annotation : nil
+  }
+
+  /// 执行超链接：页内目标跳转 / 外部 URL / 命名动作（首末页、翻页）
+  private func follow(link annotation: PDFAnnotation) {
+    if let destination = annotation.destination {
+      go(to: destination)
+      return
+    }
+    switch annotation.action {
+    case let action as PDFActionGoTo:
+      go(to: action.destination)
+    case let action as PDFActionURL:
+      if let url = action.url {
+        NSWorkspace.shared.open(url)
+      }
+    case let action as PDFActionNamed:
+      switch action.name {
+      case .nextPage: goToNextPage(nil)
+      case .previousPage: goToPreviousPage(nil)
+      case .firstPage: goToFirstPage(nil)
+      case .lastPage: goToLastPage(nil)
+      case .goBack: goBack(nil)
+      case .goForward: goForward(nil)
+      default: break
+      }
+    default:
+      break
+    }
   }
 
   override func mouseMoved(with event: NSEvent) {
@@ -508,10 +573,11 @@ struct PDFReaderView: NSViewRepresentable {
           pdfView.setCurrentSelection(nil, animate: false)
         }
       case .changed:
-        guard isPinching else { return }
+        guard isPinching, pinchStartScale > 0 else { return }
         pinchTotalMagnification *= (1 + magnification)
         let target = PDFReaderStore.clamped(pinchStartScale * pinchTotalMagnification)
         let ratio = target / pinchStartScale
+        guard ratio.isFinite else { return }  // 起始倍率异常时不写 NaN 变换（会污染视图几何）
         // 围绕视图中心的图层变换（平移-缩放-平移），不会从角落扩张
         let bounds = pdfView.bounds
         var transform = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)

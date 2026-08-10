@@ -108,19 +108,22 @@ enum SidecarAnnotationStorage {
 }
 
 /// 只读模式写回服务（FR-4.7）：标注写 sidecar JSON（原子写），PDF 本体不动、无 .bak。
-final class SidecarAnnotationWriter: AnnotationWriter {
+final class SidecarAnnotationWriter: AnnotationWriter, @unchecked Sendable {
   private let sidecarURL: URL
 
   init(pdfURL: URL) {
     sidecarURL = SidecarAnnotationStorage.sidecarURL(for: pdfURL)
   }
 
-  func writeBack(document: PDFDocument, to url: URL) throws {
+  func serialize(document: PDFDocument) throws -> Data {
     let file = SidecarAnnotationStorage.SidecarFile(
       version: SidecarAnnotationStorage.currentVersion,
       annotations: SidecarAnnotationStorage.entries(for: document)
     )
-    let data = try JSONEncoder().encode(file)
+    return try JSONEncoder().encode(file)
+  }
+
+  func commit(_ data: Data, to url: URL) throws {
     try data.write(to: sidecarURL, options: .atomic)
   }
 }

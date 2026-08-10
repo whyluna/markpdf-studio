@@ -135,6 +135,82 @@ final class AnnotationListTests: XCTestCase {
     XCTAssertEqual(store.revision, baseline + 1, "防抖窗口内连续增删合并为一次 revision 刷新")
   }
 
+  /// 交互期间（批注编辑框/编辑条打开）不重扫也不落盘：全文档重扫与 PDF 全量写回都在主线程，
+  /// 落在打字/点色那一瞬会卡住 UI（实测新建批注要等约 1 秒才能输入）
+  func testInteractionDefersRescanUntilResumed() async {
+    let (doc, url) = makeDocument()
+    store.attach(document: doc, url: url)
+    var interacting = true
+    store.isInteracting = { interacting }
+    let baseline = store.revision
+    let page = doc.page(at: 0)!
+
+    store.add(highlight(y: 50), to: page)
+    try? await Task.sleep(nanoseconds: 500_000_000)
+    XCTAssertEqual(store.revision, baseline, "交互期间不重扫")
+    XCTAssertTrue(store.hasUnsavedChanges, "但改动已标脏（flush 兜底仍会写）")
+
+    interacting = false
+    store.resumeDeferredWrites()
+    try? await Task.sleep(nanoseconds: 500_000_000)
+    XCTAssertEqual(store.revision, baseline + 1, "交互结束后统一排一次")
+  }
+
+  /// 进入编辑前撤下已排的落盘：新建批注的 markDirty 早于编辑框出现，
+  /// 那次防抖写回正好砸在光标该闪的时刻
+  func testDeferPendingWritesCancelsScheduledRescan() async {
+    let (doc, url) = makeDocument()
+    store.attach(document: doc, url: url)
+    let baseline = store.revision
+    let page = doc.page(at: 0)!
+
+    store.add(highlight(y: 50), to: page)  // 已排 0.3s 重扫 / 0.5s 写回
+    store.deferPendingWrites()  // 编辑框即将出现 → 撤下
+    try? await Task.sleep(nanoseconds: 500_000_000)
+    XCTAssertEqual(store.revision, baseline, "已排的重扫被撤下")
+
+    store.resumeDeferredWrites()
+    try? await Task.sleep(nanoseconds: 500_000_000)
+    XCTAssertEqual(store.revision, baseline + 1, "关闭编辑框后补上")
+  }
+
+  /// PDFKit 原生编辑锁定判定：所有标注一律锁（含 Link）——资料 PDF 给目录/选项行
+  /// 铺满不可见 Link，不锁就会冒出带手柄的蓝框并抢走该区域的文本选择（实测多页复现）
+  func testNativeEditingLockCoversAllAnnotations() {
+    for type in [PDFAnnotationSubtype.highlight, .widget, .square, .text, .link] {
+      let annotation = PDFAnnotation(bounds: .zero, forType: type, withProperties: nil)
+      XCTAssertTrue(
+        PDFAnnotationStore.shouldLockNativeEditing(annotation),
+        "\(type.rawValue) 必须锁掉原生编辑")
+    }
+  }
+
+  /// 点选删除/改色只认自己管理的标注：点目录 Link 不得冒出虚线框 + 垃圾桶（实测）
+  func testOnlyManagedAnnotationsEnterClickSelection() {
+    for type in [PDFAnnotationSubtype.highlight, .underline, .strikeOut, .freeText, .text] {
+      let annotation = PDFAnnotation(bounds: .zero, forType: type, withProperties: nil)
+      XCTAssertTrue(
+        AnnotationToolbarController.isManagedAnnotation(annotation),
+        "\(type.rawValue) 属于本 App 管理")
+    }
+    for type in [PDFAnnotationSubtype.link, .widget, .square, .circle, .stamp] {
+      let annotation = PDFAnnotation(bounds: .zero, forType: type, withProperties: nil)
+      XCTAssertFalse(
+        AnnotationToolbarController.isManagedAnnotation(annotation),
+        "\(type.rawValue) 是 PDF 自带，不参与点选删除")
+    }
+  }
+
+  /// 新建标注即只读：PDFKit 不再提供拖动/缩放手柄
+  func testAddedAnnotationIsReadOnly() {
+    let (doc, url) = makeDocument()
+    store.attach(document: doc, url: url)
+    let page = doc.page(at: 0)!
+    let annotation = highlight(y: 50)
+    store.add(annotation, to: page)
+    XCTAssertTrue(annotation.isReadOnly)
+  }
+
   // MARK: - 排序
 
   private func item(pageIndex: Int, y: CGFloat = 100, kind: AnnotationKind = .highlight, color: NSColor = .yellow) -> AnnotationItem {
@@ -181,5 +257,52 @@ final class AnnotationListTests: XCTestCase {
     ]
     let sorted = AnnotationSort.type.sort(items)
     XCTAssertEqual(sorted.map(\.kind), [.highlight, .underline, .strikeOut])
+  }
+
+  // MARK: - 点选改色（FR-4.4）
+
+  /// 编辑条上的「当前色」按最近色板项标注：PDF 里存的颜色常与四色有色差
+  /// （外部阅读器创建、颜色空间转换）
+  func testClosestColorMatchesPaletteEvenWithDrift() {
+    for color in AnnotationColor.allCases {
+      XCTAssertEqual(AnnotationColor.closest(to: color.nsColor), color, "同色必须自匹配")
+    }
+    // 略偏的黄（色差）仍归黄
+    let driftedYellow = NSColor(red: 0.98, green: 0.80, blue: 0.28, alpha: 1)
+    XCTAssertEqual(AnnotationColor.closest(to: driftedYellow), .yellow)
+    // 深红归红、天蓝归蓝
+    XCTAssertEqual(AnnotationColor.closest(to: NSColor(red: 0.9, green: 0.2, blue: 0.2, alpha: 1)), .red)
+    XCTAssertEqual(AnnotationColor.closest(to: NSColor(red: 0.3, green: 0.7, blue: 0.95, alpha: 1)), .blue)
+  }
+
+  /// 只有文本标记类可改色（批注走编辑框，其颜色不在此路径改）
+  func testOnlyMarkupKindsAreRecolorable() {
+    XCTAssertEqual(AnnotationColor.recolorableKinds, [.highlight, .underline, .strikeOut])
+    XCTAssertFalse(AnnotationColor.recolorableKinds.contains(.freeText))
+  }
+
+  /// 改色经 store.update 写回：颜色即时生效且列表快照随之刷新（同组一起改）
+  func testRecolorUpdatesAnnotationAndSnapshot() {
+    let (doc, url) = makeDocument()
+    store.attach(document: doc, url: url)
+    let page = doc.page(at: 0)!
+    let groupID = UUID().uuidString
+    for annotation in [highlight(y: 150, groupID: groupID), highlight(y: 130, groupID: groupID)] {
+      annotation.color = AnnotationColor.yellow.nsColor
+      page.addAnnotation(annotation)
+    }
+
+    for annotation in page.annotations {
+      store.update(annotation) { $0.color = AnnotationColor.green.nsColor }
+    }
+    XCTAssertTrue(
+      page.annotations.allSatisfy { AnnotationColor.closest(to: $0.color) == .green },
+      "同组标注一起改色"
+    )
+    XCTAssertEqual(
+      store.annotationItems().map { AnnotationColor.closest(to: $0.color) },
+      [.green],
+      "列表快照按新颜色呈现（同组合并为一条）"
+    )
   }
 }

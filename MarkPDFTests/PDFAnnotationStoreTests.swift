@@ -275,4 +275,35 @@ final class PDFAnnotationStoreTests: XCTestCase {
     XCTAssertTrue(store.hasUnsavedChanges, "同一文档重复 attach 不得吞掉挂起改动")
     XCTAssertEqual(store.revision, revisionBefore, "同一文档重复 attach 不得触发列表刷新")
   }
+
+  // MARK: - Popup 伴侣摘除（蓝框吞划词回归）
+
+  /// 回归：从磁盘加载回来的 Popup 伴侣类名是基类 PDFAnnotation，此前 attach 按
+  /// `is PDFAnnotationPopup` 判类导致漏摘——残留伴侣留在 /Annots 里参与命中测试，
+  /// PDFView 给它画带手柄的蓝框并吃掉那块区域的划词（有批注的页点正文即出框）
+  func testAttachRemovesPopupLoadedAsBaseClass() throws {
+    let (dir, url, doc) = try makePDFFixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let page = doc.page(at: 0)!
+    let popup = PDFAnnotation(
+      bounds: CGRect(x: 8, y: 20, width: 128, height: 64),
+      forType: .popup, withProperties: nil)
+    page.addAnnotation(popup)
+    let highlight = makeHighlight()
+    page.addAnnotation(highlight)
+    XCTAssertFalse(popup is PDFAnnotationPopup, "磁盘加载形态的前提：伴侣不是 PDFAnnotationPopup")
+
+    makeStore().attach(document: doc, url: url)
+
+    XCTAssertFalse(page.annotations.contains { $0.isPopup }, "Popup 伴侣必须从页面摘除")
+    XCTAssertTrue(page.annotations.contains { $0 === highlight }, "普通标注不得被连带摘除")
+    XCTAssertTrue(highlight.isReadOnly, "标注须锁掉 PDFKit 原生编辑")
+  }
+
+  /// isPopup 兼容 PDFKit 上报的两种子类型形态
+  func testIsPopupAcceptsBothSubtypeForms() {
+    let annotation = PDFAnnotation(bounds: .zero, forType: .popup, withProperties: nil)
+    XCTAssertTrue(annotation.isPopup)
+    XCTAssertFalse(makeHighlight().isPopup)
+  }
 }

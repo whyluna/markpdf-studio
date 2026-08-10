@@ -51,6 +51,29 @@ enum AnnotationColor: String, CaseIterable, Identifiable {
     case .freeText: .blue
     }
   }
+
+  /// 与四色板最接近的一项（RGB 欧氏距离）：PDF 里存的颜色可能与色板有色差
+  /// （外部阅读器创建、颜色空间转换），据此在编辑条上标出「当前色」
+  static func closest(to color: NSColor) -> AnnotationColor {
+    let rgb = color.usingColorSpace(.deviceRGB) ?? color
+    var best = AnnotationColor.yellow
+    var bestDistance = CGFloat.greatestFiniteMagnitude
+    for candidate in allCases {
+      let target = candidate.nsColor
+      let dr = rgb.redComponent - target.redComponent
+      let dg = rgb.greenComponent - target.greenComponent
+      let db = rgb.blueComponent - target.blueComponent
+      let distance = dr * dr + dg * dg + db * db
+      if distance < bestDistance {
+        bestDistance = distance
+        best = candidate
+      }
+    }
+    return best
+  }
+
+  /// 可改色的标注类型（文本标记类；批注走编辑框，其内容与颜色另行管理）
+  static let recolorableKinds: Set<AnnotationKind> = [.highlight, .underline, .strikeOut]
 }
 
 extension AnnotationKind {
@@ -75,6 +98,15 @@ extension PDFAnnotation {
   var isCommentMarker: Bool {
     guard let type else { return false }
     return type == "Text" || type == PDFAnnotationSubtype.text.rawValue
+  }
+
+  /// 是否 Popup 伴侣窗（/Text 标注的附属，PDFKit 自动创建）。
+  /// 必须按 subtype 判而非 `is PDFAnnotationPopup`：从磁盘加载回来的伴侣类名是基类
+  /// PDFAnnotation，按类判会漏——漏掉的伴侣留在页面 /Annots 里参与命中测试，
+  /// PDFView 给它画带手柄的蓝框并吃掉那块区域的划词（实测有批注的页点正文即出框）
+  var isPopup: Bool {
+    guard let type else { return false }
+    return type == "Popup" || type == PDFAnnotationSubtype.popup.rawValue
   }
 }
 
@@ -155,20 +187,6 @@ enum AnnotationSort: String, CaseIterable, Identifiable {
 
   /// 颜色排序键：与四色板最近者的色板序号
   static func colorOrder(_ color: NSColor) -> Int {
-    let rgb = color.usingColorSpace(.deviceRGB) ?? color
-    var best = Int.max
-    var bestDistance = CGFloat.greatestFiniteMagnitude
-    for (index, candidate) in AnnotationColor.allCases.enumerated() {
-      let c = candidate.nsColor
-      let dr = rgb.redComponent - c.redComponent
-      let dg = rgb.greenComponent - c.greenComponent
-      let db = rgb.blueComponent - c.blueComponent
-      let distance = dr * dr + dg * dg + db * db
-      if distance < bestDistance {
-        bestDistance = distance
-        best = index
-      }
-    }
-    return best
+    AnnotationColor.allCases.firstIndex(of: AnnotationColor.closest(to: color)) ?? .max
   }
 }

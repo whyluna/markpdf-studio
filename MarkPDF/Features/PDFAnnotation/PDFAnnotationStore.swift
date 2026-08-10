@@ -35,6 +35,11 @@ final class PDFAnnotationStore: ObservableObject {
   private var writer: AnnotationWriter
   private let defaults: UserDefaults
   private let debouncer = Debouncer(interval: 0.5)
+  /// 交互进行中查询（批注编辑框 / 点选编辑条是否打开）：由 AnnotationToolbarController 接线。
+  /// 期间的标注变更只标脏不落盘，交互结束统一写（见 markDirty）
+  var isInteracting: (() -> Bool)?
+  /// 交互期间攒下的变更（结束时排一次重扫 + 写回）
+  private var hasDeferredWrites = false
   /// revision 刷新防抖：批注输入每键都 markDirty，全文档重扫（含逐标注文本提取）
   /// 不能按键频跑；列表最终一致即可
   private let revisionDebouncer = Debouncer(interval: 0.3)
@@ -87,14 +92,40 @@ final class PDFAnnotationStore: ObservableObject {
     }
     hasUnsavedChanges = false
     revision += 1
-    // 屏蔽原生 Popup 弹窗：PDFView 点击 /Text 图标会自开 Popup 伴侣窗，
-    // 与我们的批注编辑框双开（编辑统一走自己的 popover）
+    // 屏蔽 PDFKit 的原生标注交互（我们全权管理：点选 → 自绘虚线框 + 编辑条）：
+    // ① Popup 伴侣窗从页面摘除——仅 shouldDisplay=false 仍参与命中测试，PDFView 会
+    //    给它画带手柄的原生选中框（128×64pt，压住正文），还把那块区域的划词吃掉。
+    //    既有批注的伴侣从磁盘加载回来是基类 PDFAnnotation，必须按 subtype 判（isPopup），
+    //    另按父标注的 popup 属性再摘一遍（有些伴侣不在 /Annots 里）；
+    // ② 标注一律设只读（含 PDF 自带的超链接/表单域/图形标注——它们同样会冒出手柄框
+    //    并抢走该区域的文本选择，实测某页点任意处都出框）。
+    // 运行时行为调整，不 markDirty
     for pageIndex in 0..<document.pageCount {
       guard let page = document.page(at: pageIndex) else { continue }
-      for annotation in page.annotations where annotation is PDFAnnotationPopup {
-        annotation.shouldDisplay = false
+      for annotation in page.annotations {
+        if annotation.isPopup {
+          annotation.shouldDisplay = false
+          page.removeAnnotation(annotation)
+          continue
+        }
+        if let popup = annotation.popup {
+          popup.shouldDisplay = false
+          page.removeAnnotation(popup)
+        }
+        if Self.shouldLockNativeEditing(annotation) {
+          annotation.isReadOnly = true
+        }
       }
     }
+  }
+
+  /// 是否应锁掉 PDFKit 原生编辑（纯函数可单测）：所有标注一律锁——
+  /// 本 App 不做表单填写与原生标注编辑，全部交互走自绘通道。
+  /// 含超链接（Link）：这类资料 PDF 给目录/选项行铺满不可见 Link，不锁的话
+  /// PDFView 会选中它们并画带手柄的蓝框，还抢走该区域的文本选择（实测多页复现）。
+  /// 只读只禁"修改标注"，不影响点击跳转（跳转走 PDFView 的 action 处理）
+  nonisolated static func shouldLockNativeEditing(_ annotation: PDFAnnotation) -> Bool {
+    annotation.type != nil
   }
 
   // MARK: - 只读模式（FR-4.7）
@@ -156,6 +187,9 @@ final class PDFAnnotationStore: ObservableObject {
 
   /// 添加标注并调度写回
   func add(_ annotation: PDFAnnotation, to page: PDFPage) {
+    // 只读：PDFKit 不再对它提供原生选中/拖动手柄——交互全走我们自己的通道
+    //（点选 → 虚线框 + 编辑条；批注 → 自绘 popover）
+    annotation.isReadOnly = true
     page.addAnnotation(annotation)
     markDirty()
   }
@@ -266,45 +300,118 @@ final class PDFAnnotationStore: ObservableObject {
     if !hasUnsavedChanges {
       hasUnsavedChanges = true
     }
+    // 交互进行中（批注编辑框/点选编辑条打开）：只标脏，不排重扫与写回——
+    // 全文档重扫（含逐标注文本提取）与写回前的序列化都得在主线程跑，落在打字/点色
+    // 那一瞬会卡住 UI（实测新建批注要等约 1 秒才能输入、点色不跟手）。
+    // 交互结束由 resumeDeferredWrites() 统一排一次；flushPendingWrites 仍照常兜底
+    guard !(isInteracting?() ?? false) else {
+      hasDeferredWrites = true
+      return
+    }
+    scheduleWrites()
+  }
+
+  /// 交互结束（编辑框关闭 / 编辑条收起）：把挂起的重扫与写回排上
+  func resumeDeferredWrites() {
+    guard hasDeferredWrites else { return }
+    hasDeferredWrites = false
+    scheduleWrites()
+  }
+
+  /// 进入交互前撤下已排的落盘（新建批注：创建时的 markDirty 早于编辑框出现，
+  /// 那次 0.5s 写回正好砸在光标该出现的时刻——实测「要等一秒才能打字」）
+  func deferPendingWrites() {
+    guard hasUnsavedChanges else { return }
+    debouncer.cancel()
+    revisionDebouncer.cancel()
+    hasDeferredWrites = true
+  }
+
+  private func scheduleWrites() {
     revisionDebouncer.schedule { [weak self] in
       self?.revision += 1
     }
     debouncer.schedule { [weak self] in
-      self?.writeBackNow()
+      self?.writeBackInBackground()
     }
   }
 
-  /// 立即写回挂起的改动（切换文件 / 退出前）
+  /// 立即写回挂起的改动（切换文件 / 关窗 / 退出前）：同步等落盘完成——
+  /// 这些路径过后 document 即被替换或释放，落盘不能留给后台
   func flushPendingWrites() {
     debouncer.cancel()
-    writeBackNow()
+    hasDeferredWrites = false
+    guard let job = prepareWriteJob() else { return }
+    let result = Self.commitQueue.sync {
+      Result { try job.writer.commit(job.data, to: job.url) }
+    }
+    finish(result, url: job.url)
   }
 
-  private func writeBackNow() {
-    guard hasUnsavedChanges, let document, let url = currentFileURL else { return }
+  /// 防抖到点的写回：主线程只做序列化，落盘走后台——
+  /// .bak 复制 + 原子替换是 O(文件大小) 的磁盘 I/O，跑在主线程会在批注编辑框关闭
+  /// 那一刻卡住 UI（实测之后 1~2 秒划词/新建标注都不跟手）
+  private func writeBackInBackground() {
+    guard let job = prepareWriteJob() else { return }
+    Self.commitQueue.async { [weak self] in
+      let result = Result { try job.writer.commit(job.data, to: job.url) }
+      Task { @MainActor in
+        self?.finish(result, url: job.url)
+      }
+    }
+  }
+
+  /// 待落盘快照（Sendable：跨线程只带字节与目的地，不带 PDFKit 对象）
+  private struct WriteJob: Sendable {
+    let writer: AnnotationWriter
+    let data: Data
+    let url: URL
+  }
+
+  /// 落盘串行队列：后台写与同步兜底写共用，FIFO 保证同一文件的多次写入不交错
+  private static let commitQueue = DispatchQueue(
+    label: "com.whyluna.markpdf.annotation-writeback",
+    qos: .utility
+  )
+
+  /// 定格待落盘快照（序列化碰 PDFKit，必须在主线程）；nil = 无需写回或序列化已失败
+  private func prepareWriteJob() -> WriteJob? {
+    guard hasUnsavedChanges, let document, let url = currentFileURL else { return nil }
     // sidecar 加载失败后禁止写回（Bug 修复 6）：内存标注不完整，写回会用残缺数据
     // 覆盖原 sidecar；用户已在加载失败提示中被告知（修复/删除损坏文件后重开即恢复写回）
     if isSidecarMode, sidecarLoadFailed {
       Logger.pdf.error("sidecar 加载失败后跳过写回，避免覆盖原文件: \(url.path, privacy: .public)")
-      return
+      return nil
     }
     do {
-      try writer.writeBack(document: document, to: url)
+      let data = try writer.serialize(document: document)
+      // 快照已定格，此后的改动归下一次写回
       hasUnsavedChanges = false
+      return WriteJob(writer: writer, data: data, url: url)
+    } catch {
+      finish(.failure(error), url: url)
+      return nil
+    }
+  }
+
+  private func finish(_ result: Result<Void, Error>, url: URL) {
+    switch result {
+    case .success:
       hasReportedWriteFailure = false
       Logger.pdf.debug("标注已写回: \(url.lastPathComponent, privacy: .public)")
-    } catch {
+    case .failure(let error):
+      // 脏标记置回：下次变更或兜底 flush 会重试
+      hasUnsavedChanges = true
       Logger.pdf.error("标注写回失败 \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
       // 持续失败只提示一次（每次标注变更都会重试），避免弹窗轰炸
-      if !hasReportedWriteFailure {
-        hasReportedWriteFailure = true
-        // FR-7.4 审查修复：权限不足（Finder 裸开工作区外 PDF，仅文件授权无法在
-        // 同目录新建 .bak/.tmp/.json）时附补救引导——文案层解决，不加额外按钮
-        if Self.isPermissionError(error) {
-          lastError = String(localized: "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)。文件位于工作区外，设为工作区后即可正常标注。")
-        } else {
-          lastError = String(localized: "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)")
-        }
+      guard !hasReportedWriteFailure else { return }
+      hasReportedWriteFailure = true
+      // FR-7.4 审查修复：权限不足（Finder 裸开工作区外 PDF，仅文件授权无法在
+      // 同目录新建 .bak/.tmp/.json）时附补救引导——文案层解决，不加额外按钮
+      if Self.isPermissionError(error) {
+        lastError = String(localized: "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)。文件位于工作区外，设为工作区后即可正常标注。")
+      } else {
+        lastError = String(localized: "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)")
       }
     }
   }

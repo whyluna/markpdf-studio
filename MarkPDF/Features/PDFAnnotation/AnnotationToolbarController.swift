@@ -49,10 +49,19 @@ final class AnnotationToolbarController: NSObject {
       self?.revealIfSelection(at: event)
       return event
     }
-    // 点击既有标注 → 点选删除
-    let click = NSClickGestureRecognizer(target: self, action: #selector(handleClick(_:)))
-    click.delaysPrimaryMouseButtonEvents = false
-    pdfView.addGestureRecognizer(click)
+    // 点击既有标注 → 点选删除：走 pdfView 的 mouseDown 钩子而非手势识别器
+    //（PDFKit 自己的手势会吃掉标注上的点击，新系统实测点不中；见 onAnnotationMouseDown）
+    if let zoomable = pdfView as? ZoomablePDFView {
+      zoomable.onAnnotationMouseDown = { [weak self] point in
+        self?.handleAnnotationMouseDown(at: point)
+      }
+    }
+    // 交互期间（批注编辑框 / 点选编辑条打开）暂缓落盘：重扫与 PDF 全量写回都在主线程，
+    // 落在打字/点色那一瞬会卡住 UI；交互结束统一写（store.resumeDeferredWrites）
+    store.isInteracting = { [weak self] in
+      guard let self else { return false }
+      return self.commentPopover != nil || self.deleteHosting?.isHidden == false
+    }
     // Esc 退出激活的标注工具（FR-4.4）；不吞事件，查找栏等照常响应
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       if event.keyCode == 53, self?.store.activeTool != nil {
@@ -197,6 +206,13 @@ final class AnnotationToolbarController: NSObject {
     let pageBounds = selection.bounds(for: page)
     let viewBounds = pdfView.convert(pageBounds, from: page)
     let size = hostingView.fittingSize
+    // 几何守卫：选区 bounds 可能是 CGRect.null（无穷原点），页→视图仿射变换后
+    // 会算出 NaN；AppKit 的 setFrame 遇非法几何直接 trap 崩溃
+    //（实测 "Invalid view geometry: x is NaN"）。非法输入一律不显示面板
+    guard Self.isDisplayableGeometry(viewBounds: viewBounds, panelSize: size, container: pdfView.bounds) else {
+      hide()
+      return
+    }
     let width = min(size.width, pdfView.bounds.width - 16)
     let maxY = max(pdfView.bounds.height - size.height - 8, 8)
     // 选区上方居中，水平夹取在视图内
@@ -227,6 +243,21 @@ final class AnnotationToolbarController: NSObject {
     hostingView.frame = NSRect(origin: origin, size: NSSize(width: width, height: size.height))
     hostingView.isHidden = false
     syncCursorRects()
+  }
+
+  /// 面板定位的几何合法性（纯函数可单测）：任一输入非有限（选区 bounds 为
+  /// CGRect.null 时页→视图变换会产出 NaN/inf）或容器过窄，都不得交给 setFrame——
+  /// AppKit 对非法几何直接 trap（实测崩在 "Invalid view geometry: x is NaN"）
+  nonisolated static func isDisplayableGeometry(
+    viewBounds: NSRect, panelSize: NSSize, container: NSRect
+  ) -> Bool {
+    let values = [
+      viewBounds.origin.x, viewBounds.origin.y, viewBounds.width, viewBounds.height,
+      panelSize.width, panelSize.height, container.width, container.height,
+    ]
+    guard values.allSatisfy({ $0.isFinite }) else { return false }
+    // 容器要装得下夹取后的最小面板（宽 16pt 余量 + 上下各 8pt）
+    return container.width > 16 && container.height > 16 && panelSize.width > 0 && panelSize.height > 0
   }
 
   private func hide() {
@@ -339,13 +370,15 @@ final class AnnotationToolbarController: NSObject {
   private var hitAnnotations: [PDFAnnotation] = []
   /// 虚线框覆盖层
   private var borderViews: [NSView] = []
-  /// 删除按钮（光标旁）
-  private var deleteHosting: NSHostingView<DeleteButtonView>?
+  /// 编辑条（光标旁：四色改色 + 删除）
+  private var deleteHosting: NSHostingView<AnnotationEditBarView>?
+  /// 编辑条最后落点（改色后原位重建，位置不跳）
+  private var editBarPoint: NSPoint = .zero
 
-  @objc private func handleClick(_ recognizer: NSClickGestureRecognizer) {
-    guard let pdfView, recognizer.state == .ended else { return }
-    let point = recognizer.location(in: pdfView)
-    // 点击落在删除按钮上：交给按钮自身处理，不再走标注命中（否则会点到按钮背后的标注）
+  /// 按下既有标注：虚线框 + 删除按钮（mouseDown 通道，见 onAnnotationMouseDown 注释）
+  private func handleAnnotationMouseDown(at point: NSPoint) {
+    guard let pdfView else { return }
+    // 落在删除按钮上：交给按钮自身处理，不再走标注命中（否则会点到按钮背后的标注）
     if let deleteHosting, !deleteHosting.isHidden, deleteHosting.frame.contains(point) {
       return
     }
@@ -357,13 +390,16 @@ final class AnnotationToolbarController: NSObject {
     let pagePoint = pdfView.convert(point, to: page)
     guard var annotation = page.annotation(at: pagePoint) else { return }
     // 点中 Popup 伴侣窗口时按标记本体处理
-    if let popup = annotation as? PDFAnnotationPopup,
-      let parent = page.annotations.first(where: { $0.popup === popup })
+    if annotation.isPopup,
+      let parent = page.annotations.first(where: { $0.popup === annotation })
     {
       annotation = parent
     }
     // 批注标记的点击已在 mouseDown 层处理并吞掉事件——这里再处理会双开 popover（闪两次动画）
     if annotation.isCommentMarker { return }
+    // 只认自己管理的标注：PDF 自带的 Link（目录/选项行常铺满不可见链接）、表单域、
+    // 图形标注等不得进点选删除——否则点目录跳转后会冒出红虚线框 + 垃圾桶（实测）
+    guard Self.isManagedAnnotation(annotation) else { return }
     // 整体：同组 ID 的标注一起框选、一起删除
     let group = groupAnnotations(matching: annotation, in: document)
     // 点中批注的高亮/虚线 → 同样打开编辑框（FR-4.3）
@@ -373,7 +409,34 @@ final class AnnotationToolbarController: NSObject {
     }
     hitAnnotations = group
     showDashedBorders(around: hitAnnotations)
-    showDeleteButton(at: point)
+    showEditBar(at: point)
+  }
+
+  /// 命中组里可改色的标注（文本标记类）；空 = 编辑条只显示删除
+  private var recolorableHits: [PDFAnnotation] {
+    hitAnnotations.filter { annotation in
+      guard let kind = AnnotationKind.of(annotation) else { return false }
+      return AnnotationColor.recolorableKinds.contains(kind)
+    }
+  }
+
+  /// 是否本 App 管理的标注（纯函数可单测）：只有它们参与点选删除/改色。
+  /// PDF 自带的 Link/表单域/图形标注一律排除——它们不是用户在本 App 里标的
+  nonisolated static func isManagedAnnotation(_ annotation: PDFAnnotation) -> Bool {
+    AnnotationKind.of(annotation) != nil || annotation.isCommentMarker
+  }
+
+  /// 把命中组改成指定色（FR-4.4）：逐个写回 + 重绘；编辑条留在原位以便连续试色
+  private func recolorHits(to color: AnnotationColor) {
+    guard let pdfView else { return }
+    let targets = recolorableHits
+    guard !targets.isEmpty else { return }
+    for annotation in targets {
+      store.update(annotation) { $0.color = color.nsColor }
+    }
+    pdfView.setNeedsDisplay(pdfView.bounds)
+    // 当前色标记随之更新（rootView 重建，位置不动）
+    showEditBar(at: editBarPoint)
   }
 
   /// 按组 ID 收集同组标注（无组 ID 的单标注返回自身；作者名 userName 不算组 ID）
@@ -408,13 +471,25 @@ final class AnnotationToolbarController: NSObject {
     }
   }
 
-  /// 删除按钮出现在光标旁（夹取在视图内；置顶于虚线框之上）
-  private func showDeleteButton(at point: NSPoint) {
+  /// 编辑条出现在光标旁（夹取在视图内；置顶于虚线框之上）。
+  /// 文本标记类给四色改色 + 删除，其余只给删除；改色后原位重建以更新「当前色」标记
+  private func showEditBar(at point: NSPoint) {
     guard let pdfView else { return }
-    if deleteHosting == nil {
-      let hosting = NSHostingView(rootView: DeleteButtonView { [weak self] in
+    editBarPoint = point
+    let currentColor = recolorableHits.first.map { AnnotationColor.closest(to: $0.color) }
+    let rootView = AnnotationEditBarView(
+      currentColor: currentColor,
+      onPick: { [weak self] color in
+        self?.recolorHits(to: color)
+      },
+      onDelete: { [weak self] in
         self?.deleteHit()
-      })
+      }
+    )
+    if let deleteHosting {
+      deleteHosting.rootView = rootView
+    } else {
+      let hosting = NSHostingView(rootView: rootView)
       pdfView.addSubview(hosting)
       deleteHosting = hosting
     }
@@ -450,6 +525,8 @@ final class AnnotationToolbarController: NSObject {
     borderViews = []
     deleteHosting?.isHidden = true
     syncCursorRects()
+    // 编辑条收起 = 交互结束：把改色期间攒下的重扫与写回排上
+    store.resumeDeferredWrites()
   }
 
   // MARK: - 批注（FR-4.3）
@@ -500,11 +577,12 @@ final class AnnotationToolbarController: NSObject {
     marker.userName = groupID
     marker.contents = ""
     store.add(marker, to: page)
-    // PDFKit 添加 /Text 会自动补 Popup 伴侣；PDFView 点击图标会原生打开它，
-    // 与我们的编辑框双开——彻底屏蔽（关闭 + 不渲染）
+    // PDFKit 添加 /Text 会自动补 Popup 伴侣：仅 shouldDisplay=false 仍参与命中测试，
+    // PDFView 会给它画带手柄的原生选中框并吃掉那块区域的划词——直接从页面摘除
     if let popup = marker.popup {
       (popup as? PDFAnnotationPopup)?.isOpen = false
       popup.shouldDisplay = false
+      page.removeAnnotation(popup)
     }
 
     // 点状虚线直线连接：内容块边缘 → 图标中心（排队错位时呈斜线，对应关系一目了然）
@@ -589,7 +667,7 @@ final class AnnotationToolbarController: NSObject {
     else { return nil }
     var hit = page.annotation(at: pdfView.convert(point, to: page))
     // 点中 Popup 伴侣窗口时按标记本体处理（无 parent 属性，反查）
-    if let popup = hit as? PDFAnnotationPopup,
+    if let popup = hit, popup.isPopup,
       let parent = page.annotations.first(where: { $0.popup === popup })
     {
       hit = parent
@@ -608,6 +686,8 @@ final class AnnotationToolbarController: NSObject {
   /// 弹出批注编辑框（锚定图标，朝页面内容一侧展开）
   private func edit(comment marker: PDFAnnotation) {
     guard let pdfView, let page = marker.page else { return }
+    // 撤下创建时已排的落盘：否则那次写回正好砸在编辑框出现、光标该闪的时刻
+    store.deferPendingWrites()
     commentPopover?.close()
     // 点击图标可能刚把原生 Popup 伴侣窗打开，压掉（编辑统一走我们的 popover）
     if let popup = marker.popup {
@@ -625,6 +705,10 @@ final class AnnotationToolbarController: NSObject {
       draft: draft,
       onDelete: { [weak self] in
         self?.deleteComment(marker)
+      },
+      onCommit: { [weak self] in
+        // ↵ = 提交并关闭（内容由 popoverDidClose 一次性写回，同点击空白处）
+        self?.commentPopover?.close()
       }
     ))
     let isLeft = marker.bounds.midX < page.bounds(for: pdfView.displayBox).midX
@@ -684,14 +768,19 @@ extension AnnotationToolbarController: NSPopoverDelegate {
   }
 
   func popoverDidClose(_ notification: Notification) {
-    if let marker = editingComment, let draft = commentDraft {
+    // 先清引用再落盘：isInteracting 据此判定交互已结束，否则 update 只标脏不写
+    let marker = editingComment
+    let draft = commentDraft
+    editingComment = nil
+    commentDraft = nil
+    commentPopover = nil
+    if let marker, let draft {
       // 打字全程只进草稿，关闭时一次性写回标注（每键直改 PDFAnnotation 是卡顿根因）
       store.update(marker) { $0.contents = draft.text }
       discardCommentIfEmpty(marker)
     }
-    editingComment = nil
-    commentDraft = nil
-    commentPopover = nil
+    // 编辑框关闭 = 交互结束：把创建/输入期间攒下的重扫与写回排上
+    store.resumeDeferredWrites()
   }
 }
 
