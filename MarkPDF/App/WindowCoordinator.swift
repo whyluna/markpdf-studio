@@ -39,6 +39,12 @@ final class WindowCoordinator: ObservableObject {
   private var requests: [WindowRequest] = []
   /// 由窗口根视图注入的 openWindow 动作（SwiftUI 环境值只能在视图层取）
   var openNewWindow: (() -> Void)?
+  /// 活窗工作区清单变化回调（关窗/开窗即落盘；App 层接线到快照存储）
+  var onOpenWindowRootsChanged: (([String]) -> Void)?
+  /// 退出流程中（willTerminate 已到）：此后关窗不再改写窗口清单——
+  /// ⌘Q 的顺序是 willTerminate 写入完整清单 → 窗口逐个关闭，
+  /// 若放任关窗事件改写，清单会被洗空，「退出后恢复全部窗口」失效
+  private(set) var isTerminating = false
 
   // MARK: - 注册
 
@@ -55,6 +61,28 @@ final class WindowCoordinator: ObservableObject {
 
   func unregister(_ session: WindowSession) {
     sessions.removeAll { $0 === session }
+    // 关窗即更新清单（点 × 不是退出：进程仍活着，点 Dock 图标重开窗口时
+    // 读的是磁盘清单——只在退出时采集会让它停在上一次退出的旧状态，
+    // 把早已关掉的工作区又开回来，实测）
+    publishOpenWindowRoots()
+  }
+
+  /// 工作区根清单落盘（退出流程中不动，见 isTerminating）
+  func publishOpenWindowRoots() {
+    guard !isTerminating else { return }
+    onOpenWindowRootsChanged?(workspaceRoots())
+  }
+
+  /// 当前活窗的工作区根（顺序即窗口顺序；单文件窗口无根，不占位）
+  func workspaceRoots() -> [String] {
+    sessions.compactMap { $0.stateStore.currentRootPath }
+  }
+
+  /// 退出前兜底：定格窗口清单（此后关窗不再改写）+ 逐窗口落盘
+  func prepareForTermination() {
+    onOpenWindowRootsChanged?(workspaceRoots())
+    isTerminating = true
+    flushAll()
   }
 
   /// 退出前兜底：逐窗口落盘（标签/标注/快照/AI 会话）

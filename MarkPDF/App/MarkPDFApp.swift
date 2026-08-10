@@ -122,6 +122,11 @@ struct MarkPDFApp: App {
     _windowCoordinator = StateObject(wrappedValue: coordinator)
     _externalOpen = StateObject(wrappedValue: externalOpen)
     MarkPDFAppDelegate.wire(externalOpen)
+    // 开着的工作区窗口清单：开窗/切工作区/关窗即落盘（点 × 不是退出，进程仍活着——
+    // 只在退出时采集会让清单停在上一次退出的旧状态，重新激活时把早已关掉的工作区开回来）
+    coordinator.onOpenWindowRootsChanged = { roots in
+      snapshotStore.recordOpenWindowRoots(roots)
+    }
     // 退出前兜底落盘（FR-2.7 全部标签 + FR-4.6 标注写回 + FR-1.6 快照 + AI 会话）：
     // 红钮关窗后再 ⌘Q 时视图已销毁、无人接收通知——挂 App 级，逐窗口 flush + 共享存储 flush
     NotificationCenter.default.addObserver(
@@ -129,9 +134,8 @@ struct MarkPDFApp: App {
       object: nil,
       queue: .main
     ) { _ in
-      // 开着的工作区窗口清单（v1.5：重启逐个恢复；全部关闭后退出则清空，回退最后工作区）
-      snapshotStore.recordOpenWindowRoots(coordinator.windowInfos().compactMap(\.rootPath))
-      coordinator.flushAll()
+      // 定格窗口清单（此后关窗不再改写：退出流程逐个关窗会把清单洗空）+ 逐窗口 flush
+      coordinator.prepareForTermination()
       snapshotStore.flush()
       aiSessions.flush()
     }

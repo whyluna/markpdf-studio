@@ -150,6 +150,8 @@ final class WindowSession: ObservableObject, Identifiable {
       self.backlinksStore.setWorkspaceRoot(self.workspaceStore.root?.id)
       // AI 会话随工作区载入/落盘（同根幂等；root 为扫描完成后异步赋值，届时再触发）
       self.aiChatStore.workspaceDidChange(root: self.workspaceStore.root?.id)
+      // 窗口清单跟随（开窗/切工作区即落盘；同值跳过，折叠态等路过事件无开销）
+      self.coordinator?.publishOpenWindowRoots()
     }
     // 反向链接（FR-5.4）：仅 md 文件集合实际变化（新增/删除/重命名/外部变更）后重扫，新引用 5s 内出现
     workspaceStore.onMarkdownFilesChange = { [weak self] in

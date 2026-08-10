@@ -158,4 +158,99 @@ final class WindowCoordinatorTests: XCTestCase {
     )
     XCTAssertNil(coordinator.takePendingRequest(), "只升级不追加")
   }
+
+  // MARK: - 窗口清单采集（点 × 不是退出）
+
+  /// 关窗即更新清单：点 × 只关窗、进程仍活着，重新激活（点 Dock 图标）时读磁盘清单——
+  /// 只在退出时采集会让它停在上一次退出的旧状态，把早已关掉的工作区又开回来（实测）
+  @MainActor
+  func testUnregisterPublishesRemainingWorkspaceRoots() {
+    let fixture = SessionFixture()
+    let coordinator = WindowCoordinator()
+    var published: [[String]] = []
+    coordinator.onOpenWindowRootsChanged = { published.append($0) }
+    let windowA = fixture.makeSession(root: "/tmp/wsA")
+    let windowB = fixture.makeSession(root: "/tmp/wsB")
+    coordinator.register(windowA)
+    coordinator.register(windowB)
+
+    coordinator.unregister(windowA)
+    XCTAssertEqual(published.last, ["/tmp/wsB"], "关掉一个窗口后清单只剩另一个")
+    coordinator.unregister(windowB)
+    XCTAssertEqual(published.last, [], "零窗口写空清单 → 重新激活时回退「最后使用的工作区」")
+  }
+
+  /// 单文件窗口无工作区根，不占清单位（沙盒授权随进程失效，初版不恢复）
+  @MainActor
+  func testFileOnlyWindowNotInWorkspaceRoots() {
+    let fixture = SessionFixture()
+    let coordinator = WindowCoordinator()
+    coordinator.register(fixture.makeSession(root: "/tmp/wsA"))
+    coordinator.register(fixture.makeSession(root: nil))
+    XCTAssertEqual(coordinator.workspaceRoots(), ["/tmp/wsA"])
+  }
+
+  /// 退出流程定格清单：⌘Q 的顺序是 willTerminate 写入完整清单 → 窗口逐个关闭，
+  /// 若放任关窗改写，清单会被洗空，「退出后恢复全部窗口」失效
+  @MainActor
+  func testTerminationFreezesRootsAgainstWindowClosing() {
+    let fixture = SessionFixture()
+    let coordinator = WindowCoordinator()
+    var published: [[String]] = []
+    coordinator.onOpenWindowRootsChanged = { published.append($0) }
+    let windowA = fixture.makeSession(root: "/tmp/wsA")
+    let windowB = fixture.makeSession(root: "/tmp/wsB")
+    coordinator.register(windowA)
+    coordinator.register(windowB)
+
+    coordinator.prepareForTermination()
+    XCTAssertEqual(published.last, ["/tmp/wsA", "/tmp/wsB"], "退出时定格当时的全部窗口")
+    coordinator.unregister(windowA)
+    coordinator.unregister(windowB)
+    XCTAssertEqual(published.last, ["/tmp/wsA", "/tmp/wsB"], "退出过程中关窗不得改写清单")
+  }
+
+  /// 窗口 session 工装：共享快照存储 + 内存密钥 + 临时全局会话目录（不碰用户真实数据）
+  @MainActor
+  private final class SessionFixture {
+    private let suiteName = "WindowCoordinatorTests"
+    private let defaults: UserDefaults
+    private let snapshotStore: WorkspaceSnapshotStore
+    private let aiSettings: AISettingsStore
+    private let aiKeys = AIKeyStore(storage: InMemoryAIKeyStorage())
+    private let aiSessions: AISessionRepository
+    /// 测试需强持有 session（coordinator 只按顺序登记）
+    private var sessions: [WindowSession] = []
+
+    init() {
+      defaults = UserDefaults(suiteName: suiteName)!
+      defaults.removePersistentDomain(forName: suiteName)
+      snapshotStore = WorkspaceSnapshotStore(defaults: defaults)
+      aiSettings = AISettingsStore(defaults: defaults)
+      AISessionStore.globalStoreDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("WindowCoordinatorTests-\(UUID().uuidString)")
+      aiSessions = AISessionRepository()
+    }
+
+    deinit {
+      try? FileManager.default.removeItem(at: AISessionStore.globalStoreDirectory)
+      defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    /// 建一个窗口 session；root 为 nil = 单文件窗口（无工作区）
+    func makeSession(root: String?) -> WindowSession {
+      let session = WindowSession(
+        snapshotStore: snapshotStore,
+        aiSettings: aiSettings,
+        aiKeys: aiKeys,
+        aiSessions: aiSessions
+      )
+      if let root {
+        session.stateStore.workspaceDidChange(
+          root: URL(fileURLWithPath: root), collapsedFolders: [])
+      }
+      sessions.append(session)
+      return session
+    }
+  }
 }

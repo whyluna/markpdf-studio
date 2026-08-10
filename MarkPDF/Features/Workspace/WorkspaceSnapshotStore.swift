@@ -91,8 +91,9 @@ final class WorkspaceSnapshotStore: ObservableObject {
     }
   }
 
-  /// 记录当前开着的工作区窗口（退出/关窗时采集，重启逐个恢复）
+  /// 记录当前开着的工作区窗口（开窗/关窗/退出即采集，重启逐个恢复）；同值跳过免无谓落盘
   func recordOpenWindowRoots(_ roots: [String]) {
+    guard state.openWindowRoots != roots else { return }
     state.openWindowRoots = roots
     schedulePersist()
   }
