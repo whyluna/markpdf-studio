@@ -521,12 +521,16 @@ final class AnnotationToolbarController: NSObject {
     hideDelete()
   }
 
-  /// 标注增删后立刻重画（PDFView 的页面是缓存渲染的，只 setNeedsDisplay 不会重画标注层——
-  /// 实测删掉批注后高亮/虚线/图标要等下一次刷新才消失，约 1 秒的"残留"）
+  /// 标注增删后立刻重画（只涉及改动过的那几页，实际绘制仅发生在可见区域，开销可忽略）。
+  /// 关键是失效通知要打在 documentView 上——页面是画在 PDFView 的内层文档视图里的，
+  /// 只标脏 PDFView 自己不会重画标注层，实测删掉批注后高亮/虚线/图标要等下一次刷新才消失
   private func redraw(pages: [PDFPage]) {
     guard let pdfView else { return }
     for page in pages {
       pdfView.annotationsChanged(on: page)
+    }
+    if let documentView = pdfView.documentView {
+      documentView.setNeedsDisplay(documentView.bounds)
     }
     pdfView.setNeedsDisplay(pdfView.bounds)
   }
@@ -789,7 +793,20 @@ extension AnnotationToolbarController: NSPopoverDelegate {
     textView.updateInsertionPointStateAndRestartTimer(true)
   }
 
+  func popoverWillClose(_ notification: Notification) {
+    // 提前到 willClose：didClose 要等关闭动画走完才到，那段时间页面上的高亮/虚线/图标
+    // 白白多赖着（用户看到编辑框已关而标注还在）
+    finishCommentEditing(for: notification.object as? NSPopover)
+  }
+
   func popoverDidClose(_ notification: Notification) {
+    finishCommentEditing(for: notification.object as? NSPopover)
+  }
+
+  /// 落定批注内容并收尾（幂等）。只认当前那个 popover——`edit(comment:)` 会先关掉上一个，
+  /// 它迟到的 didClose 不能把新开的这条误当成自己落定
+  private func finishCommentEditing(for popover: NSPopover?) {
+    guard let popover, popover === commentPopover else { return }
     // 先清引用再落盘：isInteracting 据此判定交互已结束，否则 update 只标脏不写
     let marker = editingComment
     let draft = commentDraft
