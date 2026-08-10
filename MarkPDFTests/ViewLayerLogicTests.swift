@@ -29,6 +29,35 @@ final class ViewLayerLogicTests: XCTestCase {
       PDFReaderView.shouldSyncScale(hasDocument: true, scaleFactor: 1.0, targetScale: 1.0005))
   }
 
+  // MARK: - 捏合落定判定（「缩小后滚动被放大」修复）
+
+  /// 缺 `.ended` 时（阶段事件偶发丢失）也要落定：否则图层变换悬着——
+  /// 视觉已缩小但真实倍率与右下角比例都没变，随后任何重排丢弃变换就「弹回」
+  func testPinchCommitsOnEndCancelAndUnknownPhase() {
+    for phase in [NSEvent.Phase.ended, .cancelled, []] as [NSEvent.Phase] {
+      XCTAssertTrue(
+        PDFReaderView.Coordinator.shouldCommitPinch(phase: phase, isPinching: true),
+        "阶段 \(phase.rawValue) 应落定")
+    }
+  }
+
+  /// 手势推进中不落定（否则每帧真实重排，卡顿）
+  func testPinchNotCommittedWhileInProgress() {
+    XCTAssertFalse(
+      PDFReaderView.Coordinator.shouldCommitPinch(phase: .began, isPinching: true))
+    XCTAssertFalse(
+      PDFReaderView.Coordinator.shouldCommitPinch(phase: .changed, isPinching: true))
+    XCTAssertFalse(
+      PDFReaderView.Coordinator.shouldCommitPinch(phase: .mayBegin, isPinching: true),
+      "mayBegin 早于 began，不得当成结束")
+  }
+
+  /// 非捏合期间任何阶段都不落定（幂等：滚动兜底与看门狗可随意调用）
+  func testPinchCommitIgnoredWhenNotPinching() {
+    XCTAssertFalse(
+      PDFReaderView.Coordinator.shouldCommitPinch(phase: .ended, isPinching: false))
+  }
+
   // MARK: - 书签页码守卫（Bug 修复 4）
 
   /// 异步加载完成前 currentPage == 0：0 页书签永远跳不到（goTo 有 page>=1 防护），不得产生死书签
