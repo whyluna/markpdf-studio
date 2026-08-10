@@ -507,14 +507,28 @@ final class AnnotationToolbarController: NSObject {
 
   private func deleteHit() {
     guard let pdfView, let document = pdfView.document else { return }
+    var touched: [PDFPage] = []
     for index in 0..<document.pageCount {
       guard let page = document.page(at: index) else { continue }
       for annotation in hitAnnotations where annotation.page === page {
         store.remove(annotation, from: page)
+        if !touched.contains(where: { $0 === page }) {
+          touched.append(page)
+        }
       }
     }
-    pdfView.setNeedsDisplay(pdfView.bounds)
+    redraw(pages: touched)
     hideDelete()
+  }
+
+  /// 标注增删后立刻重画（PDFView 的页面是缓存渲染的，只 setNeedsDisplay 不会重画标注层——
+  /// 实测删掉批注后高亮/虚线/图标要等下一次刷新才消失，约 1 秒的"残留"）
+  private func redraw(pages: [PDFPage]) {
+    guard let pdfView else { return }
+    for page in pages {
+      pdfView.annotationsChanged(on: page)
+    }
+    pdfView.setNeedsDisplay(pdfView.bounds)
   }
 
   private func hideDelete() {
@@ -724,13 +738,17 @@ final class AnnotationToolbarController: NSObject {
   /// 删除整条批注（图标 + 虚线段 + 高亮，同组；Popup 伴侣由 store.remove 连带）
   private func deleteComment(_ marker: PDFAnnotation) {
     guard let pdfView, let document = pdfView.document else { return }
+    var touched: [PDFPage] = []
     for annotation in groupAnnotations(matching: marker, in: document) {
       if let page = annotation.page {
         store.remove(annotation, from: page)
+        if !touched.contains(where: { $0 === page }) {
+          touched.append(page)
+        }
       }
     }
     editingComment = nil
-    pdfView.setNeedsDisplay(pdfView.bounds)
+    redraw(pages: touched)
     commentPopover?.close()
     commentPopover = nil
   }
@@ -740,12 +758,16 @@ final class AnnotationToolbarController: NSObject {
     guard (marker.contents ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       let document = pdfView?.document
     else { return }
+    var touched: [PDFPage] = []
     for annotation in groupAnnotations(matching: marker, in: document) {
       if let page = annotation.page {
         store.remove(annotation, from: page)
+        if !touched.contains(where: { $0 === page }) {
+          touched.append(page)
+        }
       }
     }
-    pdfView?.setNeedsDisplay(pdfView?.bounds ?? .zero)
+    redraw(pages: touched)
   }
 }
 
