@@ -78,17 +78,27 @@ final class PDFAnnotationStore: ObservableObject {
   /// 重复 attach 同一文档是 no-op——焦点认领每次点击都会调用，重跑会无谓 flush、
   /// 全页扫描屏蔽 Popup 并触发标注列表刷新
   func attach(document: PDFDocument, url: URL) {
-    guard self.document !== document || currentFileURL != url else { return }
+    // 写回目的地一律以文档自带的 URL 为准。视图侧传来的 url 在切标签时会先于异步加载
+    // 完成的 document 更新，那个空窗里的焦点认领会把「旧文档 + 新路径」配成一对，
+    // 随后写回就把 A 文档整份序列化进 B 文件——实测答案那份覆盖了讲义，112 页原稿全丢。
+    // 文档自带 URL 是唯一不会错配的事实来源（内存文档没有，退回调用方给的 url）
+    let target = document.documentURL ?? url
+    if !Self.isSameFile(target, url) {
+      Logger.pdf.error(
+        "attach 收到文档与路径错配，按文档自带 URL 纠正: 视图=\(url.path, privacy: .public) 文档=\(target.path, privacy: .public)"
+      )
+    }
+    guard self.document !== document || currentFileURL != target else { return }
     flushPendingWrites()
     self.document = document
-    currentFileURL = url
+    currentFileURL = target
     // FR-4.7：按文件恢复只读模式与对应写回通道
-    let sidecar = Self.persistedSidecarPaths(defaults: defaults).contains(url.path)
+    let sidecar = Self.persistedSidecarPaths(defaults: defaults).contains(target.path)
     isSidecarMode = sidecar
-    writer = sidecar ? SidecarAnnotationWriter(pdfURL: url) : LiveAnnotationWriter()
+    writer = sidecar ? SidecarAnnotationWriter(pdfURL: target) : LiveAnnotationWriter()
     if sidecar {
       // 只读模式：从 sidecar JSON 重建标注到页面（失败经 lastError 上报，Bug 修复 6）
-      restoreSidecarAnnotations(into: document, url: url)
+      restoreSidecarAnnotations(into: document, url: target)
     }
     hasUnsavedChanges = false
     revision += 1
@@ -377,6 +387,14 @@ final class PDFAnnotationStore: ObservableObject {
   /// 定格待落盘快照（读 PDFKit 对象，必须在主线程）；nil = 无需写回或提取已失败
   private func prepareWriteJob() -> WriteJob? {
     guard hasUnsavedChanges, let document, let url = currentFileURL else { return nil }
+    // 最后一道闸：文档与目的地必须是同一文件。attach 已按文档自带 URL 纠正错配，
+    // 万一被绕过也绝不能写——把 A 文档写进 B 文件是不可逆的数据损失（实测毁掉过原稿）
+    if let documentURL = document.documentURL, !Self.isSameFile(documentURL, url) {
+      Logger.pdf.error(
+        "写回目的地与文档不一致，已拒写: 文档=\(documentURL.path, privacy: .public) 目的地=\(url.path, privacy: .public)"
+      )
+      return nil
+    }
     // sidecar 加载失败后禁止写回（Bug 修复 6）：内存标注不完整，写回会用残缺数据
     // 覆盖原 sidecar；用户已在加载失败提示中被告知（修复/删除损坏文件后重开即恢复写回）
     if isSidecarMode, sidecarLoadFailed {
@@ -414,6 +432,12 @@ final class PDFAnnotationStore: ObservableObject {
         lastError = String(localized: "标注写回失败「\(url.lastPathComponent)」：\(error.localizedDescription)")
       }
     }
+  }
+
+  /// 是否同一文件（纯函数可单测）：符号链接与 /private 前缀等路径形态都归一后再比
+  nonisolated static func isSameFile(_ lhs: URL, _ rhs: URL) -> Bool {
+    lhs.standardizedFileURL.resolvingSymlinksInPath()
+      == rhs.standardizedFileURL.resolvingSymlinksInPath()
   }
 
   /// 是否沙盒权限不足错误（纯函数可单测）：Cocoa 257/513 或 POSIX EPERM/EACCES。

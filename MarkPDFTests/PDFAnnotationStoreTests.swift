@@ -306,4 +306,55 @@ final class PDFAnnotationStoreTests: XCTestCase {
     XCTAssertTrue(annotation.isPopup)
     XCTAssertFalse(makeHighlight().isPopup)
   }
+
+  // MARK: - 目的地错配（数据损失事故回归）
+
+  /// 事故回归：切标签时视图的 url 先更新、document 要等异步加载完才换，那个空窗里的
+  /// 焦点认领会把「旧文档 + 新路径」配成一对 → 写回把 A 文档整份写进 B 文件
+  ///（实测答案那份覆盖了讲义，112 页原稿全丢）。attach 必须按文档自带 URL 纠正，
+  /// 另一份文件的字节一个都不许动
+  func testAttachCorrectsMismatchedTargetToDocumentURL() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("PDFAnnotationStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let urlA = dir.appendingPathComponent("a.pdf")
+    let urlB = dir.appendingPathComponent("b.pdf")
+    XCTAssertTrue(makePDFDocument().write(to: urlA))
+    XCTAssertTrue(makePDFDocument().write(to: urlB))
+    let bytesB = try Data(contentsOf: urlB)
+    let docA = try XCTUnwrap(PDFDocument(url: urlA))
+
+    // 错配：A 的文档配 B 的路径
+    let store = makeStore()
+    store.attach(document: docA, url: urlB)
+    XCTAssertEqual(
+      store.currentFileURL?.lastPathComponent, urlA.lastPathComponent,
+      "目的地必须按文档自带 URL 纠正")
+
+    store.add(makeHighlight(), to: docA.page(at: 0)!)
+    store.flushPendingWrites()
+
+    XCTAssertEqual(PDFDocument(url: urlA)?.page(at: 0)?.annotations.count, 1, "标注应写进 A")
+    XCTAssertEqual(try Data(contentsOf: urlB), bytesB, "B 文件必须一个字节都没动")
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: urlB.appendingPathExtension("bak").path),
+      "B 不该被写回，更不该产生 .bak")
+  }
+
+  /// 同一文件判定：符号链接与 /private 前缀等路径形态归一后再比
+  func testIsSameFileNormalizesPathForms() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("PDFAnnotationStoreTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let real = dir.appendingPathComponent("real.pdf")
+    try Data("pdf".utf8).write(to: real)
+    let link = dir.appendingPathComponent("link.pdf")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+    XCTAssertTrue(PDFAnnotationStore.isSameFile(real, link))
+    XCTAssertTrue(PDFAnnotationStore.isSameFile(real, dir.appendingPathComponent("./real.pdf")))
+    XCTAssertFalse(PDFAnnotationStore.isSameFile(real, dir.appendingPathComponent("other.pdf")))
+  }
 }

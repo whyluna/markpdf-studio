@@ -642,7 +642,9 @@ struct PDFReaderView: NSViewRepresentable {
     func claimFocus() {
       parent.pdfStore.pdfView = pdfView
       if let pdfView, let document = pdfView.document {
-        parent.annotationStore.attach(document: document, url: parent.url)
+        // 目的地取文档自带 URL：切标签时 parent.url 先更新、document 要等异步加载完才换，
+        // 这个空窗里用 parent.url 会把「旧文档 + 新路径」配成一对（Store 侧也有兜底纠正）
+        parent.annotationStore.attach(document: document, url: document.documentURL ?? parent.url)
       }
     }
 
