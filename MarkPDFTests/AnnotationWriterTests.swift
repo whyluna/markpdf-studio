@@ -171,4 +171,90 @@ final class AnnotationWriterTests: XCTestCase {
     let rescued = PDFDocument(url: tmpURL)
     XCTAssertEqual(rescued?.page(at: 0)?.annotations.count ?? -1, 1, "tmp 应为含最新标注的完整 PDF")
   }
+
+  // MARK: - 后台副本写回（主线程不做重绘）
+
+  private func linkAnnotation() -> PDFAnnotation {
+    let annotation = PDFAnnotation(
+      bounds: NSRect(x: 10, y: 150, width: 100, height: 12),
+      forType: .link,
+      withProperties: nil
+    )
+    annotation.action = PDFActionURL(url: URL(string: "https://example.com/paper")!)
+    return annotation
+  }
+
+  /// 落盘在后台副本上做：从磁盘现状重开一份、只重放本应用管理的标注。
+  /// PDF 自带的超链接不经重建流程（重建只保 bounds/颜色/内容，会丢动作），须原样保留
+  func testForeignAnnotationsSurviveWriteBack() throws {
+    let (base, url) = try makePDF(named: "foreign.pdf")
+    base.page(at: 0)?.addAnnotation(linkAnnotation())
+    XCTAssertTrue(base.write(to: url))
+
+    let doc = try XCTUnwrap(PDFDocument(url: url))
+    let highlight = highlightAnnotation()
+    highlight.userName = UUID().uuidString
+    doc.page(at: 0)?.addAnnotation(highlight)
+    try writer.writeBack(document: doc, to: url)
+
+    let annotations = try XCTUnwrap(PDFDocument(url: url)?.page(at: 0)?.annotations)
+    let links = annotations.filter { $0.type == "Link" || $0.type == "/Link" }
+    XCTAssertEqual(links.count, 1, "外来超链接必须保留")
+    XCTAssertEqual((links.first?.action as? PDFActionURL)?.url?.absoluteString, "https://example.com/paper")
+    XCTAssertEqual(annotations.filter(\.isAppManaged).count, 1, "本应用标注写入一条")
+  }
+
+  /// 反复写回不重复堆积（先摘上次写进去的本应用标注，再按快照重放）
+  func testRepeatedWriteBackDoesNotDuplicate() throws {
+    let (doc, url) = try makePDF(named: "repeat.pdf")
+    doc.page(at: 0)?.addAnnotation(highlightAnnotation())
+
+    try writer.writeBack(document: doc, to: url)
+    try writer.writeBack(document: doc, to: url)
+    try writer.writeBack(document: doc, to: url)
+
+    XCTAssertEqual(PDFDocument(url: url)?.page(at: 0)?.annotations.count, 1, "三次写回仍只有一条")
+  }
+
+  /// 删除能落地：快照里没有的标注不会从磁盘旧版本里被带回来
+  func testDeletionPropagatesToFile() throws {
+    let (base, url) = try makePDF(named: "delete.pdf")
+    base.page(at: 0)?.addAnnotation(linkAnnotation())
+    XCTAssertTrue(base.write(to: url))
+
+    let doc = try XCTUnwrap(PDFDocument(url: url))
+    let highlight = highlightAnnotation()
+    doc.page(at: 0)?.addAnnotation(highlight)
+    try writer.writeBack(document: doc, to: url)
+    XCTAssertEqual(PDFDocument(url: url)?.page(at: 0)?.annotations.filter(\.isAppManaged).count, 1)
+
+    doc.page(at: 0)?.removeAnnotation(highlight)
+    try writer.writeBack(document: doc, to: url)
+
+    let annotations = try XCTUnwrap(PDFDocument(url: url)?.page(at: 0)?.annotations)
+    XCTAssertEqual(annotations.filter(\.isAppManaged).count, 0, "删除必须落地")
+    XCTAssertEqual(annotations.filter { $0.type == "Link" || $0.type == "/Link" }.count, 1, "外来标注仍在")
+  }
+
+  /// 批注标记经重建后仍是便签图标（iconType 不带在快照字段里，须按类型补回）
+  func testCommentMarkerIconSurvivesRebuild() throws {
+    let (doc, url) = try makePDF(named: "icon.pdf")
+    let marker = PDFAnnotation(
+      bounds: NSRect(x: 4, y: 129, width: 22, height: 22),
+      forType: .text,
+      withProperties: nil
+    )
+    marker.iconType = .comment
+    marker.contents = "图标回归"
+    marker.userName = UUID().uuidString
+    doc.page(at: 0)?.addAnnotation(marker)
+
+    try writer.writeBack(document: doc, to: url)
+
+    let reopened = try XCTUnwrap(PDFDocument(url: url)?.page(at: 0)?.annotations)
+    let markers = reopened.filter(\.isCommentMarker)
+    XCTAssertEqual(markers.count, 1)
+    XCTAssertEqual(markers.first?.iconType, .comment)
+    XCTAssertEqual(markers.first?.contents, "图标回归")
+  }
 }

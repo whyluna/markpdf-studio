@@ -343,28 +343,28 @@ final class PDFAnnotationStore: ObservableObject {
     hasDeferredWrites = false
     guard let job = prepareWriteJob() else { return }
     let result = Self.commitQueue.sync {
-      Result { try job.writer.commit(job.data, to: job.url) }
+      Result { try job.writer.commit(job.entries, to: job.url) }
     }
     finish(result, url: job.url)
   }
 
-  /// 防抖到点的写回：主线程只做序列化，落盘走后台——
-  /// .bak 复制 + 原子替换是 O(文件大小) 的磁盘 I/O，跑在主线程会在批注编辑框关闭
-  /// 那一刻卡住 UI（实测之后 1~2 秒划词/新建标注都不跟手）
+  /// 防抖到点的写回：主线程只把标注收成纯数据，重绘与落盘全在后台副本上做——
+  /// PDFDocument.dataRepresentation() 会把每一页重新绘制一遍（采样实锤 0.4~1.5s），
+  /// 留在主线程就是每次标注动作后的整秒卡顿
   private func writeBackInBackground() {
     guard let job = prepareWriteJob() else { return }
     Self.commitQueue.async { [weak self] in
-      let result = Result { try job.writer.commit(job.data, to: job.url) }
+      let result = Result { try job.writer.commit(job.entries, to: job.url) }
       Task { @MainActor in
         self?.finish(result, url: job.url)
       }
     }
   }
 
-  /// 待落盘快照（Sendable：跨线程只带字节与目的地，不带 PDFKit 对象）
+  /// 待落盘快照（Sendable：跨线程只带纯数据与目的地，不带 PDFKit 对象）
   private struct WriteJob: Sendable {
     let writer: AnnotationWriter
-    let data: Data
+    let entries: [SidecarAnnotationStorage.Entry]
     let url: URL
   }
 
@@ -374,7 +374,7 @@ final class PDFAnnotationStore: ObservableObject {
     qos: .utility
   )
 
-  /// 定格待落盘快照（序列化碰 PDFKit，必须在主线程）；nil = 无需写回或序列化已失败
+  /// 定格待落盘快照（读 PDFKit 对象，必须在主线程）；nil = 无需写回或提取已失败
   private func prepareWriteJob() -> WriteJob? {
     guard hasUnsavedChanges, let document, let url = currentFileURL else { return nil }
     // sidecar 加载失败后禁止写回（Bug 修复 6）：内存标注不完整，写回会用残缺数据
@@ -384,10 +384,10 @@ final class PDFAnnotationStore: ObservableObject {
       return nil
     }
     do {
-      let data = try writer.serialize(document: document)
+      let entries = try writer.snapshot(document: document)
       // 快照已定格，此后的改动归下一次写回
       hasUnsavedChanges = false
-      return WriteJob(writer: writer, data: data, url: url)
+      return WriteJob(writer: writer, entries: entries, url: url)
     } catch {
       finish(.failure(error), url: url)
       return nil

@@ -423,7 +423,7 @@ final class AnnotationToolbarController: NSObject {
   /// 是否本 App 管理的标注（纯函数可单测）：只有它们参与点选删除/改色。
   /// PDF 自带的 Link/表单域/图形标注一律排除——它们不是用户在本 App 里标的
   nonisolated static func isManagedAnnotation(_ annotation: PDFAnnotation) -> Bool {
-    AnnotationKind.of(annotation) != nil || annotation.isCommentMarker
+    annotation.isAppManaged
   }
 
   /// 把命中组改成指定色（FR-4.4）：逐个写回 + 重绘；编辑条留在原位以便连续试色

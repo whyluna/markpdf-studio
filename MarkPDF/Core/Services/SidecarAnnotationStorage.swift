@@ -10,7 +10,7 @@ enum SidecarAnnotationStorage {
   }
 
   /// 单条标注的序列化形态
-  struct Entry: Codable, Equatable {
+  struct Entry: Codable, Equatable, Sendable {
     /// 0 起页码
     var page: Int
     /// PDFAnnotation subtype（"Highlight" / "Text" 等）
@@ -22,6 +22,9 @@ enum SidecarAnnotationStorage {
     var contents: String?
     /// 组 ID（本应用生成的 UUID 串）
     var userName: String?
+    /// 四边形点（页坐标，x/y 交替）：外部阅读器建的跨行高亮把多行放在一条标注里，
+    /// 只按包围盒重建会摊成一大块，带上原值才能保真
+    var quad: [Double]?
   }
 
   struct SidecarFile: Codable {
@@ -34,8 +37,13 @@ enum SidecarAnnotationStorage {
   // MARK: - 序列化（document → entries）
 
   /// 提取文档中应持久化的标注（排除 Popup 伴侣——创建时自动伴随，无需存储；
-  /// 注意 PDFKit 自动创建的伴侣类名是 PDFAnnotation 而非 PDFAnnotationPopup，必须按 type 判）
-  static func entries(for document: PDFDocument) -> [Entry] {
+  /// 注意 PDFKit 自动创建的伴侣类名是 PDFAnnotation 而非 PDFAnnotationPopup，必须按 type 判）。
+  /// - Parameter include: 额外筛选（写回 PDF 本体时只取本应用管理的标注，PDF 自带的
+  ///   超链接/表单域原样留在文件里，不经我们的重建流程）
+  static func entries(
+    for document: PDFDocument,
+    include: (PDFAnnotation) -> Bool = { _ in true }
+  ) -> [Entry] {
     var entries: [Entry] = []
     for pageIndex in 0..<document.pageCount {
       guard let page = document.page(at: pageIndex) else { continue }
@@ -43,6 +51,7 @@ enum SidecarAnnotationStorage {
         guard let type = annotation.type else { continue }
         let subtype = type.hasPrefix("/") ? String(type.dropFirst()) : type
         if subtype == "Popup" { continue }
+        guard include(annotation) else { continue }
         let bounds = annotation.bounds
         entries.append(
           Entry(
@@ -54,7 +63,10 @@ enum SidecarAnnotationStorage {
             ],
             color: hexString(for: annotation.color),
             contents: annotation.contents,
-            userName: annotation.userName
+            userName: annotation.userName,
+            quad: annotation.quadrilateralPoints?.flatMap {
+              [Double($0.pointValue.x), Double($0.pointValue.y)]
+            }
           ))
       }
     }
@@ -68,7 +80,12 @@ enum SidecarAnnotationStorage {
   /// 那会让用户标注无声消失（违反 NFR-5），调用方需据此提示并保护原文件
   static func annotations(from data: Data) throws -> [(page: Int, annotation: PDFAnnotation)] {
     let file = try JSONDecoder().decode(SidecarFile.self, from: data)
-    return file.annotations.compactMap { entry in
+    return annotations(from: file.annotations)
+  }
+
+  /// entries → 标注（sidecar 恢复与 PDF 写回共用）
+  static func annotations(from entries: [Entry]) -> [(page: Int, annotation: PDFAnnotation)] {
+    entries.compactMap { entry in
       guard entry.bounds.count == 4,
         let subtype = PDFAnnotationSubtype(rawValue: "/\(entry.type)") as PDFAnnotationSubtype?
       else { return nil }
@@ -82,6 +99,15 @@ enum SidecarAnnotationStorage {
       }
       annotation.contents = entry.contents
       annotation.userName = entry.userName
+      // 批注标记只用便签图标一种；不补的话重建出来的图标是空白
+      if annotation.isCommentMarker {
+        annotation.iconType = .comment
+      }
+      if let quad = entry.quad, quad.count >= 8, quad.count % 2 == 0 {
+        annotation.quadrilateralPoints = stride(from: 0, to: quad.count, by: 2).map {
+          NSValue(point: NSPoint(x: quad[$0], y: quad[$0 + 1]))
+        }
+      }
       return (entry.page, annotation)
     }
   }
@@ -115,15 +141,15 @@ final class SidecarAnnotationWriter: AnnotationWriter, @unchecked Sendable {
     sidecarURL = SidecarAnnotationStorage.sidecarURL(for: pdfURL)
   }
 
-  func serialize(document: PDFDocument) throws -> Data {
-    let file = SidecarAnnotationStorage.SidecarFile(
-      version: SidecarAnnotationStorage.currentVersion,
-      annotations: SidecarAnnotationStorage.entries(for: document)
-    )
-    return try JSONEncoder().encode(file)
+  func snapshot(document: PDFDocument) throws -> [SidecarAnnotationStorage.Entry] {
+    SidecarAnnotationStorage.entries(for: document)
   }
 
-  func commit(_ data: Data, to url: URL) throws {
-    try data.write(to: sidecarURL, options: .atomic)
+  func commit(_ entries: [SidecarAnnotationStorage.Entry], to url: URL) throws {
+    let file = SidecarAnnotationStorage.SidecarFile(
+      version: SidecarAnnotationStorage.currentVersion,
+      annotations: entries
+    )
+    try JSONEncoder().encode(file).write(to: sidecarURL, options: .atomic)
   }
 }

@@ -108,6 +108,12 @@ extension PDFAnnotation {
     guard let type else { return false }
     return type == "Popup" || type == PDFAnnotationSubtype.popup.rawValue
   }
+
+  /// 是否本应用管理的标注（文本标记类 + 批注标记）。
+  /// PDF 自带的超链接/表单域/图形标注不在其内——它们不参与点选编辑，写回时原样保留
+  var isAppManaged: Bool {
+    AnnotationKind.of(self) != nil || isCommentMarker
+  }
 }
 
 /// 是否本应用生成的标注组 ID。
