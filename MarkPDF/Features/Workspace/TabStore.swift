@@ -75,10 +75,10 @@ final class TabStore: ObservableObject {
     if let found = findOpenTab(url: node.id) {
       activeGroupID = found.group.id
       found.group.activate(found.tab)
-      onOpenFile?(node.id)
-      return
+    } else {
+      activeGroup.open(node)
     }
-    activeGroup.open(node)
+    collapseEmptyGroups()
     onOpenFile?(node.id)
   }
 
@@ -93,7 +93,12 @@ final class TabStore: ObservableObject {
         }
       }
     }
-    // 空组收起（多分栏时欢迎草稿可能是某组唯一标签）；只剩一个空组则保留，由 open 填入
+  }
+
+  /// 收起空组（多分栏时欢迎草稿可能是某组唯一标签）；只剩一个空组则保留。
+  /// 必须在标签就位之后调用：清场时就收会把刚 toggleSplit 出来的空右组一并收掉，
+  /// 文件落回左栏（分栏白点一次）
+  private func collapseEmptyGroups() {
     while groups.count > 1, let empty = groups.first(where: { $0.tabs.isEmpty }) {
       groups.removeAll { $0.id == empty.id }
     }

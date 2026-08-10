@@ -157,7 +157,8 @@ final class TabStoreCrossGroupOpenTests: XCTestCase {
     XCTAssertEqual(store.activeGroup.activeTab?.url, aURL)
   }
 
-  /// url=nil 的草稿标签不参与匹配：另一组有草稿时 open 文件仍正常新建文件标签
+  /// url=nil 的草稿标签不参与匹配：另一组有草稿时 open 文件仍新建文件标签
+  ///（未触碰的欢迎草稿随开随关，见 closeUntouchedWelcomeDrafts）
   func testDraftTabsNeverMatchFileURL() throws {
     let aURL = try makeMarkdown("a.md", "# a")
     let store = TabStore()
@@ -169,8 +170,8 @@ final class TabStoreCrossGroupOpenTests: XCTestCase {
     store.open(FileNode(id: aURL, name: "a.md", kind: .markdown))
 
     XCTAssertEqual(store.activeGroupID, rightID, "无匹配文件标签时仍在当前组打开")
-    XCTAssertEqual(store.groups[1].tabs.count, 2, "草稿保留，新文件标签正常新建")
-    XCTAssertEqual(store.activeGroup.activeTab?.url, aURL)
+    XCTAssertEqual(store.activeGroup.activeTab?.url, aURL, "草稿不得被当成 a.md 复用")
+    XCTAssertEqual(store.activeGroup.tabs.count, 1, "未触碰的欢迎草稿随开随关")
   }
 }
 
