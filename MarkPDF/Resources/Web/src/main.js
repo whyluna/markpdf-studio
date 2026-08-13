@@ -225,15 +225,17 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") flushPendingNotify();
 });
 
-/* ---------- 光标行上报（防抖 500ms，FR-1.6 编辑位置记忆） ---------- */
+/* ---------- 光标行上报（防抖 150ms，FR-1.6 编辑位置记忆 + 大纲当前节跟随） ----------
+   曾为落盘记忆设 500ms，大纲跟随上线后体感延迟明显；落盘侧自有防抖，缩短无负担 */
 
+let cursorTimerDelay = 150;
 let cursorTimer = null;
 function scheduleCursorNotify() {
   clearTimeout(cursorTimer);
   cursorTimer = setTimeout(() => {
     const line = view.state.doc.lineAt(view.state.selection.main.head).number;
     Bridge.notify("editor.cursor", { line });
-  }, 500);
+  }, cursorTimerDelay);
 }
 
 /* ---------- 大纲提取（FR-2.6）：ATX / Setext 标题 → { level, text, line } ---------- */

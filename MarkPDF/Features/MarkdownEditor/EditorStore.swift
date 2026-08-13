@@ -115,8 +115,12 @@ final class EditorStore: ObservableObject {
   /// 光标行变化回调（FR-1.6 编辑位置记忆；参数为文件 URL 与 1 起行号）
   var onCursorLineChange: ((URL, Int) -> Void)?
 
+  /// 光标当前行（1 起；大纲面板当前节高亮跟随）
+  @Published private(set) var currentLine = 0
+
   /// 内核光标上报入口（防抖已由内核完成）
   func cursorDidMove(to line: Int) {
+    currentLine = line
     guard let url = currentFileURL else { return }
     onCursorLineChange?(url, line)
   }

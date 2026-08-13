@@ -249,10 +249,12 @@ struct ContentView: View {
       // 大纲 / 反向链接分界线可拖动（VSplitView）；ideal 高度引导首次分配——反向链接默认占较小空间。
       // 限制：拖动后的比例不持久（macOS 13 SplitView 无比例观测 API，同 FR-1.6 已知偏差）
       VSplitView {
-        OutlinePanelView(items: tabStore.activeEditorStore?.outline ?? []) { heading in
-          tabStore.activeEditorStore?.scrollTo(line: heading.line)
+        if let store = tabStore.activeEditorStore {
+          OutlinePanelView(store: store) { heading in
+            store.scrollTo(line: heading.line)
+          }
+          .frame(minHeight: 120, idealHeight: 1000, maxHeight: .infinity)
         }
-        .frame(minHeight: 120, idealHeight: 1000, maxHeight: .infinity)
         BacklinksPanelView(target: tabStore.activeGroup.activeTab?.url)
           // 初始限制最大高度：反向链接默认只占底部小块（idealHeight 软引导对 VSplitView 布局无效，改用 maxHeight 硬约束）
           .frame(minHeight: 60, idealHeight: 90, maxHeight: 190)

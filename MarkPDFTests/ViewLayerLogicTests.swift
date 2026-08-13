@@ -150,3 +150,17 @@ final class ViewLayerLogicTests: XCTestCase {
   }
 }
 
+
+extension ViewLayerLogicTests {
+  // MARK: - 当前节定位（PDF 目录 / md 大纲跟随滚动）
+
+  /// 最后一个起始位置 ≤ 当前位置的条目为激活节；全部在后为 nil
+  func testActiveSectionIndex() {
+    XCTAssertNil(ActiveSection.index(positions: [], current: 1))
+    XCTAssertNil(ActiveSection.index(positions: [5, 12, 30], current: 3), "全部在后：无激活节")
+    XCTAssertEqual(ActiveSection.index(positions: [5, 12, 30], current: 5), 0)
+    XCTAssertEqual(ActiveSection.index(positions: [5, 12, 30], current: 11), 0, "未到下一节仍属上一节")
+    XCTAssertEqual(ActiveSection.index(positions: [5, 12, 30], current: 12), 1)
+    XCTAssertEqual(ActiveSection.index(positions: [5, 12, 30], current: 99), 2)
+  }
+}

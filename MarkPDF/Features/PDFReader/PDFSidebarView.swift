@@ -20,7 +20,7 @@ struct PDFSidebarView: View {
     var title: String {
       switch self {
       case .thumbnails: String(localized: "缩略图")
-      case .bookmarks: String(localized: "书签")
+      case .bookmarks: String(localized: "目录")
       case .annotations: String(localized: "标注")
       case .references: String(localized: "引用")
       }
@@ -57,58 +57,127 @@ struct PDFSidebarView: View {
     }
   }
 
-  // MARK: - 书签（文档大纲 + 用户书签）
+  // MARK: - 目录（文档大纲 + 用户书签）
+
+  /// 大纲扁平条目（行级渲染用；层级即缩进）
+  fileprivate struct OutlineEntry: Identifiable {
+    let outline: PDFOutline
+    let level: Int
+    /// 目标页（1 起；无目标为 nil——仅作容器的大纲节点不参与当前节判定）
+    let page: Int?
+    var id: ObjectIdentifier { ObjectIdentifier(outline) }
+  }
+
+  /// 扁平化缓存（@State）：原实现每次 body 求值都重建递归行树，
+  /// 而 currentPage 在滚动中持续发布 → 整树每秒重建几十次（下滚抽搐的根因）。
+  /// 换文档（docKey 变化）才重建
+  @State private var outlineEntries: [OutlineEntry] = []
+  @State private var outlineDocKey = ""
+
+  /// 扁平化文档大纲（递归转先序序列；目标页取 destination 页，命名目的地经 document 解析）
+  fileprivate static func flattenOutline(root: PDFOutline, in document: PDFDocument?) -> [OutlineEntry] {
+    var entries: [OutlineEntry] = []
+
+    func page(of outline: PDFOutline) -> Int? {
+      guard let page = outline.destination?.page, let document else { return nil }
+      return document.index(for: page) + 1
+    }
+    func walk(_ outline: PDFOutline, level: Int) {
+      entries.append(OutlineEntry(outline: outline, level: level, page: page(of: outline)))
+      for index in 0..<outline.numberOfChildren {
+        if let child = outline.child(at: index) {
+          walk(child, level: level + 1)
+        }
+      }
+    }
+    for index in 0..<root.numberOfChildren {
+      if let child = root.child(at: index) {
+        walk(child, level: 0)
+      }
+    }
+    return entries
+  }
 
   private var bookmarkContent: some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 0) {
-        if let outlineRoot = pdfStore.pdfView?.document?.outlineRoot, outlineRoot.numberOfChildren > 0 {
-          sectionTitle(String(localized: "文档大纲"))
-          ForEach(0..<outlineRoot.numberOfChildren, id: \.self) { index in
-            if let child = outlineRoot.child(at: index) {
-              PDFOutlineRow(outline: child) { destination in
+    ScrollViewReader { proxy in
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: 0) {
+          if !outlineEntries.isEmpty {
+            sectionTitle(String(localized: "文档大纲"))
+            ForEach(outlineEntries) { entry in
+              PDFOutlineRow(
+                entry: entry,
+                isActive: entry.id == activeOutlineEntryID
+              ) { destination in
                 pdfStore.go(to: destination)
               }
             }
           }
-        }
-        sectionTitle(String(localized: "我的书签"))
-        Button {
-          // 加载窗口期（异步解析未完成）currentPage 为 0：0 页书签永远跳不到
-          //（goTo 有 page>=1 防护），不得产生死书签（Bug 修复 4）
-          guard Self.isBookmarkablePage(pdfStore.currentPage) else { return }
-          bookmarksStore.toggle(page: pdfStore.currentPage, for: url)
-        } label: {
-          Label(
-            bookmarksStore.contains(page: pdfStore.currentPage, for: url) ? String(localized: "移除当前页书签") : String(localized: "书签当前页"),
-            systemImage: bookmarksStore.contains(page: pdfStore.currentPage, for: url) ? "bookmark.fill" : "bookmark"
-          )
-          .font(.callout)
-          .padding(.horizontal, 10)
-          .padding(.vertical, 6)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.accentColor)
-        .disabled(!Self.isBookmarkablePage(pdfStore.currentPage))
-        let pages = bookmarksStore.pages(for: url)
-        if pages.isEmpty {
-          Text("暂无书签")
+          sectionTitle(String(localized: "我的书签"))
+          Button {
+            // 加载窗口期（异步解析未完成）currentPage 为 0：0 页书签永远跳不到
+            //（goTo 有 page>=1 防护），不得产生死书签（Bug 修复 4）
+            guard Self.isBookmarkablePage(pdfStore.currentPage) else { return }
+            bookmarksStore.toggle(page: pdfStore.currentPage, for: url)
+          } label: {
+            Label(
+              bookmarksStore.contains(page: pdfStore.currentPage, for: url) ? String(localized: "移除当前页书签") : String(localized: "书签当前页"),
+              systemImage: bookmarksStore.contains(page: pdfStore.currentPage, for: url) ? "bookmark.fill" : "bookmark"
+            )
             .font(.callout)
-            .foregroundStyle(.secondary)
             .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-        } else {
-          ForEach(pages, id: \.self) { page in
-            BookmarkRow(page: page) {
-              pdfStore.goTo(page: page)
-            } onDelete: {
-              bookmarksStore.remove(page: page, for: url)
+            .padding(.vertical, 6)
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(Color.accentColor)
+          .disabled(!Self.isBookmarkablePage(pdfStore.currentPage))
+          let pages = bookmarksStore.pages(for: url)
+          if pages.isEmpty {
+            Text("暂无书签")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+              .padding(.horizontal, 10)
+              .padding(.vertical, 4)
+          } else {
+            ForEach(pages, id: \.self) { page in
+              BookmarkRow(page: page) {
+                pdfStore.goTo(page: page)
+              } onDelete: {
+                bookmarksStore.remove(page: page, for: url)
+              }
             }
           }
         }
+        .padding(8)
       }
-      .padding(8)
+      .onAppear { rebuildOutlineEntriesIfNeeded() }
+      .onChange(of: pdfStore.pdfView?.document?.documentURL?.path ?? "") { _, _ in
+        rebuildOutlineEntriesIfNeeded()
+      }
+      // 当前节跟随：滚动实时跟页，激活项滚到可见（anchor: nil 最小滚动不惊扰）
+      .onChange(of: activeOutlineEntryID) { _, activeID in
+        guard let activeID else { return }
+        withAnimation(.easeOut(duration: 0.15)) {
+          proxy.scrollTo(activeID)
+        }
+      }
     }
+  }
+
+  /// 当前阅读页所属大纲条目（最后一个目标页 ≤ 当前页的条目）
+  private var activeOutlineEntryID: ObjectIdentifier? {
+    ActiveSection.index(
+      positions: outlineEntries.map { $0.page ?? .max },
+      current: pdfStore.currentPage
+    ).map { outlineEntries[$0].id }
+  }
+
+  private func rebuildOutlineEntriesIfNeeded() {
+    let document = pdfStore.pdfView?.document
+    let key = document?.documentURL?.path ?? ""
+    guard key != outlineDocKey else { return }
+    outlineDocKey = key
+    outlineEntries = document?.outlineRoot.flatMap { Self.flattenOutline(root: $0, in: document) } ?? []
   }
 
   private func sectionTitle(_ title: String) -> some View {
@@ -128,38 +197,39 @@ struct PDFSidebarView: View {
   }
 }
 
-// MARK: - 文档大纲行（递归）
+// MARK: - 文档大纲行（扁平条目 + 当前节高亮）
 
 private struct PDFOutlineRow: View {
-  let outline: PDFOutline
+  let entry: PDFSidebarView.OutlineEntry
+  let isActive: Bool
   let onJump: (PDFDestination) -> Void
   @State private var isHovered = false
 
   var body: some View {
     Button {
-      if let destination = outline.destination {
+      if let destination = entry.outline.destination {
         onJump(destination)
       }
     } label: {
-      Text(outline.label ?? String(localized: "未命名"))
+      Text(entry.outline.label ?? String(localized: "未命名"))
         .font(.system(size: 13))
+        .fontWeight(isActive ? .semibold : .regular)
+        .foregroundStyle(isActive ? Color.accentColor : Color.primary)
         .lineLimit(1)
         .truncationMode(.tail)
+        .padding(.leading, CGFloat(entry.level) * 14)
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isHovered ? Color.primary.opacity(0.05) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+        .background(
+          isActive
+            ? Color.accentColor.opacity(0.12)
+            : (isHovered ? Color.primary.opacity(0.05) : Color.clear),
+          in: RoundedRectangle(cornerRadius: 6)
+        )
     }
     .buttonStyle(.plain)
     .onHover { isHovered = $0 }
-    if outline.numberOfChildren > 0 {
-      ForEach(0..<outline.numberOfChildren, id: \.self) { index in
-        if let child = outline.child(at: index) {
-          PDFOutlineRow(outline: child, onJump: onJump)
-            .padding(.leading, 14)
-        }
-      }
-    }
   }
 }
 
