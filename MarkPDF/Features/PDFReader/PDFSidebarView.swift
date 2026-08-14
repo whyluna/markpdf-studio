@@ -8,11 +8,11 @@ struct PDFSidebarView: View {
   @EnvironmentObject private var pdfStore: PDFReaderStore
   @EnvironmentObject private var bookmarksStore: PDFBookmarksStore
   @EnvironmentObject private var annotationStore: PDFAnnotationStore
-  @State private var segment = Segment.thumbnails
+  @State private var segment = Segment.bookmarks
 
   private enum Segment: String, CaseIterable, Identifiable {
-    case thumbnails
     case bookmarks
+    case thumbnails
     case annotations
     case references
     var id: String { rawValue }
@@ -150,9 +150,22 @@ struct PDFSidebarView: View {
         }
         .padding(8)
       }
-      .onAppear { rebuildOutlineEntriesIfNeeded() }
+      .onAppear {
+        rebuildOutlineEntriesIfNeeded()
+        // 段切换重建 ScrollView 后回到当前节（否则回到文档开头）
+        if let activeID = activeOutlineEntryID {
+          proxy.scrollTo(activeID)
+        }
+      }
       .onChange(of: pdfStore.pdfView?.document?.documentURL?.path ?? "") { _, _ in
         rebuildOutlineEntriesIfNeeded()
+        // 切标签/换文档：等行重建与阅读位置恢复落定后滚到当前节
+        //（异步解析 + currentPage 回写分几步完成，同步滚会打到旧位置）
+        DispatchQueue.main.async {
+          if let activeID = activeOutlineEntryID {
+            proxy.scrollTo(activeID)
+          }
+        }
       }
       // 当前节跟随：滚动实时跟页，激活项滚到可见（anchor: nil 最小滚动不惊扰）
       .onChange(of: activeOutlineEntryID) { _, activeID in
