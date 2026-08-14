@@ -303,6 +303,11 @@ final class AnnotationToolbarController: NSObject {
   // MARK: - 标注动作
 
   private func apply(kind: AnnotationKind) {
+    // 间歇标注失败取证（error 级持久化，复发后 log show 可取）：入参实况
+    let probePages = pdfView?.currentSelection?.pages.count ?? -1
+    let probeLines = pdfView?.currentSelection?.selectionsByLine().count ?? -1
+    let probeHasSel = pdfView?.currentSelection != nil
+    Logger.pdf.error("探针 apply(\(kind.rawValue, privacy: .public)) hasSel=\(probeHasSel) pages=\(probePages) lines=\(probeLines)")
     guard let pdfView, let selection = pdfView.currentSelection else { return }
     // 批注（FR-4.3）：页边插框 + 虚线连接内容块
     if kind == .freeText {
@@ -326,7 +331,10 @@ final class AnnotationToolbarController: NSObject {
     for lineSelection in selection.selectionsByLine() {
       for page in lineSelection.pages {
         var bounds = lineSelection.bounds(for: page)
-        guard !bounds.isNull, !bounds.isEmpty else { continue }
+        guard !bounds.isNull, !bounds.isEmpty else {
+          Logger.pdf.error("探针 apply 跳过行: bounds 非法 \(String(describing: bounds))")
+          continue
+        }
         switch kind {
         case .highlight:
           // 上下各缩 14%：高亮贴合文字，相邻行不再互相叠块
@@ -359,6 +367,8 @@ final class AnnotationToolbarController: NSObject {
     if created > 0 {
       Logger.pdf.debug("添加文本标注[\(kind.rawValue)]: \(created) 行")
       pdfView.setNeedsDisplay(pdfView.bounds)
+    } else {
+      Logger.pdf.error("探针 apply 结果: 一行未建（全部行包围盒非法或选区为空）")
     }
     pdfView.clearSelection()
     hide()
