@@ -54,6 +54,11 @@ private final class CommentTextView: NSTextView {
   var onCommit: (() -> Void)?
 
   override func keyDown(with event: NSEvent) {
+    // 输入法组字期（有 marked text）：回车是「确认字母上屏」，交 IME 流程，不当提交关闭
+    if hasMarkedText() {
+      super.keyDown(with: event)
+      return
+    }
     // 36 = Return，76 = 小键盘 Enter
     if event.keyCode == 36 || event.keyCode == 76 {
       if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) {
