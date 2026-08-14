@@ -447,8 +447,12 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     @objc func pageChanged(_ note: Notification) {
-      syncPageState()
-      schedulePositionSave()
+      // @Published 写入推迟出显示周期（拖动右栏时窗口在持续 display cycle，
+      // 直写触发托管视图中途失效约束 = AppKit trap 闪退）
+      DispatchQueue.main.async { [weak self] in
+        self?.syncPageState()
+        self?.schedulePositionSave()
+      }
     }
 
     // MARK: - 滚动实时跟页（缩略图/页码同步）
@@ -474,12 +478,14 @@ struct PDFReaderView: NSViewRepresentable {
     @objc private func liveScrolled(_ note: Notification) {
       guard let pdfView, let doc = pdfView.document, let page = visibleCenterPage() else { return }
       let index = doc.index(for: page)
-      if index != lastLivePageIndex {
-        lastLivePageIndex = index
+      guard index != lastLivePageIndex else { return }
+      lastLivePageIndex = index
+      // @Published 写入推迟出显示周期：拖动右栏（检查器）时窗口在持续 display cycle，
+      // 这里直写会让 SwiftUI 托管视图在布局中途失效窗口约束——AppKit 直接 trap（实测闪退）
+      DispatchQueue.main.async { [weak self, weak pdfView] in
+        guard let self, let pdfView, self.parent.pdfStore.pdfView === pdfView else { return }
         // 分栏双 PDF：只有焦点视图才回写共享 Store，否则两窗滚动互相覆盖页码
-        if parent.pdfStore.pdfView === pdfView {
-          parent.pdfStore.currentPage = index + 1
-        }
+        self.parent.pdfStore.currentPage = index + 1
       }
     }
 
@@ -488,16 +494,20 @@ struct PDFReaderView: NSViewRepresentable {
       // 拆卸/清文档（document=nil）时 scaleFactor 回落 1.0：不回写 Store，
       // 否则切标签把好端端的缩放存档冲成 100%
       guard pdfView.document != nil else { return }
-      parent.pdfStore.scale = pdfView.scaleFactor
-      schedulePositionSave()
+      let scale = pdfView.scaleFactor
+      DispatchQueue.main.async { [weak self] in
+        self?.parent.pdfStore.scale = scale
+        self?.schedulePositionSave()
+      }
     }
 
     /// 选区变化（FR-5.2 菜单启用条件）
     @objc func selectionChanged(_ note: Notification) {
       guard let pdfView else { return }
       let has = pdfView.currentSelection != nil
-      if parent.pdfStore.hasSelection != has {
-        parent.pdfStore.hasSelection = has
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.parent.pdfStore.hasSelection != has else { return }
+        self.parent.pdfStore.hasSelection = has
       }
     }
 
