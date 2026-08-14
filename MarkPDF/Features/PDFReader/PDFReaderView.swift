@@ -3,16 +3,11 @@ import PDFKit
 import SwiftUI
 
 /// 支持捏合缩放的 PDFView（FR-3.2）。
-/// 走响应链 `magnify(with:)` 通道：不占用手势识别器，避免与 PDFView 内部手势互斥
-/// （此前 NSMagnificationGestureRecognizer 方案时好时坏、忽而失效的根因）。
+/// 捏合走 PDFKit 原生通道（不再自绘管线）：自绘方案（图层缩放 + 结束落定）两条事件
+/// 通道都被 PDFKit 内部管线间歇吞掉（响应链/手势识别器各自实测失效过），且 PDFKit
+/// 重排会丢弃残留图层变换（视觉弹回）。原生 pinch 直接改 scaleFactor，经
+/// PDFViewScaleChanged 通知同步 Store，状态栏比例实时跟随，边界由 min/maxScaleFactor 钳制
 final class ZoomablePDFView: PDFView {
-  /// 捏合事件回调（事件阶段 + 当次增量），由 Coordinator 接管
-  var onMagnify: ((_ phase: NSEvent.Phase, _ magnification: CGFloat) -> Void)?
-
-  /// 滚动开始回调：把挂起的捏合结果先落定——手势阶段偶发收不到 `.ended`
-  /// （残留图层变换会在 PDFKit 重排时被丢弃，视觉「弹回」旧倍率，右下角比例也不更新）
-  var onScrollWheel: (() -> Void)?
-
   /// 手型光标区域（视图坐标）：命中时显示手型并屏蔽 PDFKit 的文本 I 形光标
   /// （用于浮动按钮——PDFView 会按文字命中把光标抢设为 I 形，必须在 PDFKit 管线内拦截）
   var handCursorRects: [CGRect] = []
@@ -50,15 +45,6 @@ final class ZoomablePDFView: PDFView {
   override func cancelOperation(_ sender: Any?) {
     if onEscape?() == true { return }
     super.cancelOperation(sender)
-  }
-
-  override func magnify(with event: NSEvent) {
-    onMagnify?(event.phase, event.magnification)
-  }
-
-  override func scrollWheel(with event: NSEvent) {
-    onScrollWheel?()
-    super.scrollWheel(with: event)
   }
 
   override func mouseDown(with event: NSEvent) {
@@ -177,14 +163,10 @@ struct PDFReaderView: NSViewRepresentable {
     pdfView.displayMode = settings.pdfViewMode.pdfDisplayMode
     pdfView.displayDirection = .vertical
     pdfView.autoScales = true
+    // 捏合缩放走 PDFKit 原生通道，边界与按钮缩放同域（50%–400%）
+    pdfView.minScaleFactor = PDFReaderStore.minScale
+    pdfView.maxScaleFactor = PDFReaderStore.maxScale
     applyReadingTheme(settings.pdfReadingTheme, to: pdfView)
-    pdfView.onMagnify = { [weak coordinator = context.coordinator] phase, magnification in
-      coordinator?.handleMagnify(phase: phase, magnification: magnification)
-    }
-    // 滚动前先落定挂起的捏合：否则残留图层变换被 PDFKit 重排丢弃，视觉弹回旧倍率
-    pdfView.onScrollWheel = { [weak coordinator = context.coordinator] in
-      coordinator?.commitPinch()
-    }
     // Esc 退出查找（FR-3.4）：焦点在 PDF 上时也能退出，无需先聚焦查找框
     pdfView.onEscape = { [weak coordinator = context.coordinator] in
       coordinator?.handleEscape() ?? false
@@ -226,6 +208,12 @@ struct PDFReaderView: NSViewRepresentable {
     )
     context.coordinator.pdfView = pdfView
     pdfStore.pdfView = pdfView
+    // 捏合缩放（FR-3.2）窗口级接管：事件进 App 的监控通道实测永不丢（PDFKit 内部
+    //  pinch 在文档重挂载后只预览不落 scaleFactor——视觉变了又弹回、状态栏不跟；
+    //  响应链 magnify(with:) 也会被其间歇吞掉），落点在本视图内即就地缩放并吞掉事件
+    context.coordinator.magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak coordinator = context.coordinator] event in
+      coordinator?.handleWindowMagnify(event)
+    }
     // 划词浮动工具条（FR-4.1 + FR-AI.1 划词翻译）与标注写回关联（FR-4.6）
     context.coordinator.toolbarController = AnnotationToolbarController(
       pdfView: pdfView,
@@ -239,11 +227,18 @@ struct PDFReaderView: NSViewRepresentable {
   }
 
   func updateNSView(_ pdfView: PDFView, context: Context) {
+    // 视图被同类标签复用（切标签不重建，同类不同文档共用同一 PDFView）：
+    // parent 必须每轮跟随——否则 coordinator 里的 url 停留在首个文档，
+    // 位置/缩放存档全部写到第一个文件名下（实测「答案」的存档全记到「讲义」）
+    context.coordinator.parent = self
     if context.coordinator.requestedURL != url {
       // 切换文档前先落盘挂起的标注写回（Bug C1）：store 对 document 是弱引用，
       // 下面清空 pdfView.document 后旧文档强引用归零，flush 会静默失败，
       // 500ms 防抖窗口内的标注改动将无提示丢失
       annotationStore.flushPendingWrites()
+      // 同理落盘旧文档的阅读位置：防抖挂起的存档若留到新文档挂载后才落定，
+      // 会用新文档的第 1 页覆盖旧文件的好存档（实测切标签丢位置的根因）
+      context.coordinator.flushPositionSave()
       // Bug 修复 1/2：查找状态整体复位（findMatches 是旧文档的 PDFSelection，
       // ⌘G/回车会作用于新文档，行为未定义）；缩放归位 100%，避免旧倍率在加载窗口期
       // 误关 autoScales（存档缩放由加载完成后的 restorePosition 恢复，不受影响）
@@ -321,19 +316,6 @@ struct PDFReaderView: NSViewRepresentable {
     var toolbarController: AnnotationToolbarController?
     /// 阅读位置落盘防抖（FR-3.5：翻页/缩放高频，合并写）
     private let positionDebouncer = Debouncer(interval: 0.5)
-    /// 捏合手势进行中（此时不回写 Store，避免逐帧触发 SwiftUI 重渲染）
-    private var isPinching = false
-    /// 手势期间临时收起的文本选区（结束后恢复）
-    private var savedSelection: PDFSelection?
-    /// 手势起始缩放倍率
-    private var pinchStartScale: CGFloat = 1
-    /// 手势累计放大倍率
-    private var pinchTotalMagnification: CGFloat = 1
-    /// 捏合落定看门狗（阶段事件偶发缺 `.ended`：最后一次推进后超时也落定）
-    private let pinchCommitDebouncer = Debouncer(interval: 0.2)
-    /// 缩放锚点：视图中心对应的文档点（保持缩放围绕中心而非角落）
-    private var anchorPage: PDFPage?
-    private var anchorDocPoint: CGPoint?
     /// 已请求加载的文档 URL（加载途中重复 updateNSView 不重复解析）
     private(set) var requestedURL: URL?
     /// 文档解析代际号：快速连续切换时丢弃过期结果
@@ -348,6 +330,8 @@ struct PDFReaderView: NSViewRepresentable {
     private var isObservingScroll = false
     /// 滚动实时监听记录的当前页（0 起；-1 = 未知）
     private var lastLivePageIndex = -1
+    /// 捏合落点取证监视器（随 coordinator 释放）
+    var magnifyMonitor: Any?
 
     init(_ parent: PDFReaderView) {
       self.parent = parent
@@ -500,7 +484,10 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     @objc func scaleChanged(_ note: Notification) {
-      guard let pdfView, !isPinching else { return }
+      guard let pdfView else { return }
+      // 拆卸/清文档（document=nil）时 scaleFactor 回落 1.0：不回写 Store，
+      // 否则切标签把好端端的缩放存档冲成 100%
+      guard pdfView.document != nil else { return }
       parent.pdfStore.scale = pdfView.scaleFactor
       schedulePositionSave()
     }
@@ -518,9 +505,8 @@ struct PDFReaderView: NSViewRepresentable {
 
     /// 恢复上次阅读位置（页码 + 缩放）；无存档则保持自适应宽度
     func restorePosition(url: URL) {
-      guard let pdfView, let doc = pdfView.document,
-        let saved = parent.positionStore.position(for: url)
-      else { return }
+      guard let pdfView, let doc = pdfView.document else { return }
+      guard let saved = parent.positionStore.position(for: url) else { return }
       let scale = PDFReaderStore.clamped(CGFloat(saved.scale))
       pdfView.autoScales = false
       pdfView.scaleFactor = scale
@@ -532,14 +518,21 @@ struct PDFReaderView: NSViewRepresentable {
       syncPageState()
     }
 
-    /// 防抖记录当前页码与缩放
+    /// 防抖记录当前页码与缩放。页码取视口中心页（PDFKit currentPage 滚动中滞后、
+    /// 拆卸/离屏时为 nil——nil 会落成页1 把好存档覆盖掉，实测切标签即丢位置）；
+    /// 取值推迟到防抖落盘那一刻，且视图不在窗口上时整次跳过（teardown 不误存）
     private func schedulePositionSave() {
-      guard let pdfView, let doc = pdfView.document else { return }
-      let page = pdfView.currentPage.map { doc.index(for: $0) + 1 } ?? 1
-      let scale = Double(pdfView.scaleFactor)
+      guard let pdfView, pdfView.document != nil else { return }
       let url = parent.url
-      positionDebouncer.schedule { [weak self] in
-        self?.parent.positionStore.save(.init(page: page, scale: scale), for: url)
+      positionDebouncer.schedule { [weak self, weak pdfView] in
+        guard let self, let pdfView, pdfView.window != nil,
+          let doc = pdfView.document, let center = self.visibleCenterPage()
+        else { return }
+        // 防抖窗口内已切走（视图被同类标签复用）：过期存档不落地
+        guard self.requestedURL == url else { return }
+        let page = doc.index(for: center) + 1
+        let scale = Double(pdfView.scaleFactor)
+        self.parent.positionStore.save(.init(page: page, scale: scale), for: url)
       }
     }
 
@@ -548,88 +541,18 @@ struct PDFReaderView: NSViewRepresentable {
       positionDebouncer.fire()
     }
 
-    /// 捏合缩放（响应链 magnify 通道）：
-    /// 手势期间只做 GPU 图层缩放（流畅、无重排）；结束时一次性应用真实缩放并重排。
-    /// 落定路径有三条（阶段事件偶发缺 `.ended`，只靠它会让图层变换悬着——
-    /// 视觉已缩小但真实倍率与右下角比例都没变，随后任何重排都把变换丢弃「弹回」）：
-    /// ① `.ended`/`.cancelled`；② 未知阶段（空 phase）；③ 见 commitPinch 的看门狗与滚动兜底
-    func handleMagnify(phase: NSEvent.Phase, magnification: CGFloat) {
-      guard let pdfView else { return }
-      switch phase {
-      case .began:
-        isPinching = true
-        pinchCommitDebouncer.cancel()
-        pinchStartScale = pdfView.scaleFactor
-        pinchTotalMagnification = 1
-        pdfView.wantsLayer = true
-        // 记录缩放锚点：视图中心对应的文档点
-        anchorPage = pdfView.currentPage
-        anchorDocPoint = anchorPage.map {
-          pdfView.convert(CGPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY), to: $0)
-        }
-        // 手势期间临时收起文本选区：PDFView 会围绕选区反复滚动（乱跳根因）
-        savedSelection = pdfView.currentSelection
-        if savedSelection != nil {
-          pdfView.setCurrentSelection(nil, animate: false)
-        }
-      case .changed:
-        guard isPinching, pinchStartScale > 0 else { return }
-        pinchTotalMagnification *= (1 + magnification)
-        let target = PDFReaderStore.clamped(pinchStartScale * pinchTotalMagnification)
-        let ratio = target / pinchStartScale
-        guard ratio.isFinite else { return }  // 起始倍率异常时不写 NaN 变换（会污染视图几何）
-        // 围绕视图中心的图层变换（平移-缩放-平移），不会从角落扩张
-        let bounds = pdfView.bounds
-        var transform = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)
-        transform = CATransform3DScale(transform, ratio, ratio, 1)
-        transform = CATransform3DTranslate(transform, -bounds.midX, -bounds.midY, 0)
-        pdfView.layer?.transform = transform
-        // 看门狗：手指离开后若阶段事件没送到，超时也把结果落定
-        pinchCommitDebouncer.schedule { [weak self] in
-          self?.commitPinch()
-        }
-      default:
-        // .ended / .cancelled 与未知阶段（空 phase）统一落定
-        guard Self.shouldCommitPinch(phase: phase, isPinching: isPinching) else { return }
-        commitPinch()
-      }
-    }
-
-    /// 是否应落定挂起的捏合（纯函数可单测）：手势进行中且阶段不是开始/推进即落定
-    nonisolated static func shouldCommitPinch(phase: NSEvent.Phase, isPinching: Bool) -> Bool {
-      guard isPinching else { return false }
-      return !phase.contains(.began) && !phase.contains(.changed) && !phase.contains(.mayBegin)
-    }
-
-    /// 落定捏合结果：清图层变换 → 应用真实缩放 → 回到锚点 → 回写 Store。
-    /// 幂等（未在捏合中为 no-op）；由阶段事件、看门狗、滚动兜底三处调用
-    func commitPinch() {
-      guard isPinching, let pdfView else { return }
-      isPinching = false
-      pinchCommitDebouncer.cancel()
-      let target = PDFReaderStore.clamped(pinchStartScale * pinchTotalMagnification)
-      // 同一 runloop 内先清图层变换再应用真实缩放，一次性重排，避免双重缩放帧
-      pdfView.layer?.transform = CATransform3DIdentity
+    /// 捏合缩放（窗口级接管，FR-3.2）：落点在本视图内 → 就地改 scaleFactor 并吞掉事件
+    ///（PDFKit 的瞬态预览不再重复执行）。逐事件直改而非图层变换：PDFView 图层变换
+    /// 会只显示一小块区域（实测严重缺陷），宁可每帧重排也要正确
+    /// scaleFactor 变化触发 PDFViewScaleChanged → Store 同步与位置存档走既有通道
+    func handleWindowMagnify(_ event: NSEvent) -> NSEvent? {
+      guard let pdfView, pdfView.window === event.window else { return event }
+      let point = pdfView.convert(event.locationInWindow, from: nil)
+      guard pdfView.bounds.contains(point) else { return event }
+      // 捏合即脱离自适应宽度（缩放才不被下一次布局打回）
       if pdfView.autoScales { pdfView.autoScales = false }
-      pdfView.scaleFactor = target
-      // 重新居中到锚点：目标点置于视图顶部 = 锚点 - 半视口（文档坐标，y 向上）
-      if let page = anchorPage, let anchor = anchorDocPoint {
-        let halfWidth = pdfView.bounds.width / 2 / target
-        let halfHeight = pdfView.bounds.height / 2 / target
-        pdfView.go(to: PDFDestination(
-          page: page,
-          at: CGPoint(x: anchor.x - halfWidth, y: anchor.y + halfHeight)
-        ))
-      }
-      anchorPage = nil
-      anchorDocPoint = nil
-      if let selection = savedSelection {
-        pdfView.setCurrentSelection(selection, animate: false)
-        savedSelection = nil
-      }
-      // 手势结束才回写 Store（卡顿根因：逐帧 @Published 触发 SwiftUI 重渲染）
-      parent.pdfStore.scale = target
-      schedulePositionSave()
+      pdfView.scaleFactor = PDFReaderStore.clamped(pdfView.scaleFactor * (1 + event.magnification))
+      return nil
     }
 
     @objc func claimFocus(_ sender: Any) {
