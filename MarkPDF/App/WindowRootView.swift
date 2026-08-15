@@ -52,22 +52,20 @@ struct WindowRootView: View {
       .environmentObject(session.stateStore)
       .environmentObject(session.aiChatStore)
       .background(
-        WindowAccessor { window in
+        WindowAccessor { window, accessor in
           guard session.window !== window else { return }
+          // 换挂到别的窗口前先摘旧 observer（旧窗关闭不得对本 session 再 flush/unregister）
+          accessor.removeCloseObserver()
           session.window = window
           // 关闭系统窗口恢复：现场恢复由应用自身的快照体系负责（restoreWorkspaceWindows），
           // 系统恢复会在启动时额外重建上次的窗口（冷启动双击文件会凭空多出空窗口）
           window.isRestorable = false
-          // 关窗即落盘本窗现场并注销（红钮关窗后 ⌘Q 时视图已销毁，无人接收）
-          NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: .main
-          ) { _ in
-            MainActor.assumeIsolated {
-              session.flush()
-              coordinator.unregister(session)
-            }
+          // 关窗即落盘本窗现场并注销（红钮关窗后 ⌘Q 时视图已销毁，无人接收）。
+          // 闭包强捕获 session 是有意的：保证 willClose 那一刻 session 必存活可 flush；
+          // 令牌在触发时/换挂时/Coordinator deinit 三条路径都会摘除，不构成泄漏
+          accessor.observeClose(window: window) { [session, coordinator] in
+            session.flush()
+            coordinator.unregister(session)
           }
         }
       )
@@ -126,22 +124,61 @@ struct WindowRootView: View {
 
 /// 解析本视图所属的 NSWindow（SwiftUI 无窗口句柄 API；聚焦/列宽/关窗 flush 需要）
 private struct WindowAccessor: NSViewRepresentable {
-  let onResolve: (NSWindow) -> Void
+  let onResolve: (NSWindow, Coordinator) -> Void
+
+  /// 持有关窗 observer 令牌：块观察者被 NotificationCenter 强持有，不摘除就连同
+  /// 闭包捕获的整棵 WindowSession 对象图一起驻留（每关一窗泄漏一份，实测审查发现）
+  @MainActor
+  final class Coordinator {
+    private var closeObserverToken: (any NSObjectProtocol)?
+
+    func observeClose(window: NSWindow, handler: @escaping () -> Void) {
+      removeCloseObserver()
+      closeObserverToken = NotificationCenter.default.addObserver(
+        forName: NSWindow.willCloseNotification,
+        object: window,
+        queue: .main
+      ) { [weak self] _ in
+        MainActor.assumeIsolated {
+          handler()
+          // 关窗通知一次性：触发即摘除，释放闭包捕获的 session
+          self?.removeCloseObserver()
+        }
+      }
+    }
+
+    func removeCloseObserver() {
+      if let token = closeObserverToken {
+        NotificationCenter.default.removeObserver(token)
+        closeObserverToken = nil
+      }
+    }
+
+    deinit {
+      if let token = closeObserverToken {
+        NotificationCenter.default.removeObserver(token)
+      }
+    }
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
 
   func makeNSView(context: Context) -> NSView {
     let view = NSView()
-    DispatchQueue.main.async {
-      if let window = view.window {
-        onResolve(window)
+    let coordinator = context.coordinator
+    DispatchQueue.main.async { [weak view] in
+      if let window = view?.window {
+        onResolve(window, coordinator)
       }
     }
     return view
   }
 
   func updateNSView(_ nsView: NSView, context: Context) {
-    DispatchQueue.main.async {
-      if let window = nsView.window {
-        onResolve(window)
+    let coordinator = context.coordinator
+    DispatchQueue.main.async { [weak nsView] in
+      if let window = nsView?.window {
+        onResolve(window, coordinator)
       }
     }
   }

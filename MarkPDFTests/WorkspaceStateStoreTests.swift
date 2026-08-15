@@ -530,4 +530,31 @@ final class WorkspaceStateStoreTests: XCTestCase {
     // 旧全局标签已归入该工作区槽位并可恢复
     XCTAssertEqual(tabStore.groups[0].tabs.map(\.url), [file1])
   }
+  /// 恢复编排期保护：restoreWorkspace 后 root 尚未异步就绪，折叠态/AI 显隐赋值的
+  /// 路过事件（root=nil）不得把 currentRootPath 瞬态打回 nil（路由失真窗口）
+  @MainActor
+  func testRestoreKeepsRootPathDuringPassThroughEvents() throws {
+    let parent = FileManager.default.temporaryDirectory
+      .appendingPathComponent("RestoreGuard.\(UUID().uuidString)")
+    let wsDir = parent.appendingPathComponent("ws")
+    try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: parent) }
+    let rootPath = wsDir.resolvingSymlinksInPath().path
+    let bookmark = try wsDir.bookmarkData(
+      options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+    var snapshot = WorkspaceSnapshotStore.Snapshot()
+    snapshot.bookmarks[rootPath] = bookmark
+    snapshot.lastRootPath = rootPath
+    defaults.set(try JSONEncoder().encode(snapshot), forKey: "workspaceSnapshot.v1")
+
+    let stateStore = WorkspaceStateStore(defaults: defaults)
+    let workspaceStore = WorkspaceStore()
+    stateStore.restoreWorkspace(into: workspaceStore, rootPath: rootPath)
+    XCTAssertEqual(stateStore.currentRootPath, rootPath, "恢复即设当前根")
+
+    // 模拟 collapsedFolders/isAIAssistantPresented 赋值触发的路过 onStateChange（root 仍 nil）
+    stateStore.workspaceDidChange(root: nil, collapsedFolders: [])
+    XCTAssertEqual(stateStore.currentRootPath, rootPath, "恢复窗口期的 nil 路过不得打回当前根")
+  }
+
 }

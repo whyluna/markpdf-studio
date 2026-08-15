@@ -22,8 +22,6 @@ final class ExternalOpenCoordinator: ObservableObject {
   private(set) var isReady = false
   /// 冷启动是否由外部打开唤起（onAppear 据此跳过工作区现场恢复，功能不降级）
   var hasPendingExternalOpen: Bool { !pendingURLs.isEmpty }
-  /// 待路由外部文件数（日志用）
-  var pendingExternalOpenCount: Int { pendingURLs.count }
   /// 会话级「仅打开文件」记忆：同一文件夹不重复弹询问
   private var declinedFolders: Set<String> = []
   /// ask 流程串行化（FR-7.4 审查修复）：runModal 是同步阻塞且会跑嵌套事件循环，
@@ -228,13 +226,16 @@ final class ExternalOpenCoordinator: ObservableObject {
 extension URL {
   /// 是否等于工作区根或位于其内（按路径组件边界比较：/a/b 不命中 /a/b2；
   /// 思路同 TabGroup.swift 的 isDescendant，那是 fileprivate 无法直接复用）。
-  /// rootPath 须为已标准化的槽位 key（同 WorkspaceStateStore.slotKey）。
+  /// 两侧均标准化 + 符号链接归一：用户自建 symlink 作工作区根时，
+  /// 经解析形态投递的 URL 不应绕过判定（开裸窗/不入槽/图片护栏失守）。
+  /// rootPath 为槽位 key（同 WorkspaceStateStore.slotKey，函数内再归一，两种形态都安全）。
   /// 三处共用（FR-7.4 降级链路，改动须同步）：
   /// ExternalOpenCoordinator.decide（同根判定）、MarkdownEditorView.saveImage（图片落盘护栏）、
   /// WorkspaceStateStore.tabsDidChange（异根标签过滤）
   func isWithinWorkspace(rootPath: String) -> Bool {
-    let selfPath = standardizedFileURL.path
-    return selfPath == rootPath || selfPath.hasPrefix(rootPath + "/")
+    let selfPath = standardizedFileURL.resolvingSymlinksInPath().path
+    let normalizedRoot = URL(fileURLWithPath: rootPath).standardizedFileURL.resolvingSymlinksInPath().path
+    return selfPath == normalizedRoot || selfPath.hasPrefix(normalizedRoot + "/")
   }
 
   /// root 为 URL 的便捷重载（先标准化，/tmp→/private/tmp 等符号链接归一）

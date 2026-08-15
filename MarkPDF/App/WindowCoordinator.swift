@@ -48,12 +48,12 @@ final class WindowCoordinator: ObservableObject {
 
   // MARK: - 注册
 
-  /// 登记窗口 session（幂等）；返回是否首个窗口（首窗负责启动恢复与外部打开接线）
+  /// 登记窗口 session（幂等）；返回是否首个窗口（首窗负责启动恢复与外部打开接线）。
+  /// 已登记过的 session 一律返回 false——onAppear 可能多次触发，返回 true 会让
+  /// 首窗启动编排重放（restoreWorkspaceWindows 再跑一遍，重复开出一批工作区窗口）
   @discardableResult
   func register(_ session: WindowSession) -> Bool {
-    if let index = sessions.firstIndex(where: { $0 === session }) {
-      return index == 0
-    }
+    guard !sessions.contains(where: { $0 === session }) else { return false }
     sessions.append(session)
     Logger.workspace.info("窗口登记: 共 \(self.sessions.count) 个")
     return sessions.count == 1
@@ -65,6 +65,12 @@ final class WindowCoordinator: ObservableObject {
     // 读的是磁盘清单——只在退出时采集会让它停在上一次退出的旧状态，
     // 把早已关掉的工作区又开回来，实测）
     publishOpenWindowRoots()
+    // 最后一个窗口关闭：清掉待领任务与 openWindow 动作——动作指向已销毁的 scene，
+    // 滞留任务会被日后无关的新窗（如 ⌘N 空白窗）领走，开出用户没点过的工作区
+    if sessions.isEmpty {
+      requests.removeAll()
+      openNewWindow = nil
+    }
   }
 
   /// 工作区根清单落盘（退出流程中不动，见 isTerminating）
@@ -115,7 +121,11 @@ final class WindowCoordinator: ObservableObject {
   /// 新窗口可能还在队列里（未出现）也可能已领取任务出现——两种时序都要覆盖
   func upgradeExternalFileWindow(to root: URL, file: URL) {
     let path = Self.normalize(file)
-    if let index = requests.firstIndex(where: { $0 == .file(file) }) {
+    // 队列匹配与 sessions 分支同走 normalize（入队与受理的 URL 形态可能不同）
+    if let index = requests.firstIndex(where: { request in
+      if case .file(let queued) = request { return Self.normalize(queued) == path }
+      return false
+    }) {
       requests[index] = .workspaceWithFile(root: root, file: file)
       return
     }

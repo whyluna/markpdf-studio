@@ -18,6 +18,10 @@ final class WorkspaceStateStore: ObservableObject {
   /// 切换工作区的目标路径（切换编排期间，watcher 仍以旧 root 触发 workspaceDidChange，
   /// 必须忽略——否则槽位指针被拉回旧工作区，随后的 replaceAll 把空白草稿写进旧槽、清掉真实标签）
   private var pendingSwitchPath: String?
+  /// 启动恢复的目标路径（恢复编排期间 root 尚未异步就绪，collapsedFolders/AI 显隐赋值的
+  /// 路过事件会以 nil root 触发 workspaceDidChange，必须把 currentRootPath 保住房瞬态打回
+  /// nil——否则该窗口期内外部打开路由误判异根，开多余裸窗/弹「设为工作区」）
+  private var pendingRestorePath: String?
   /// 恢复时取得的安全作用域资源（保持访问至进程结束，否则工作区授权失效）
   private var accessedRootURL: URL?
 
@@ -65,10 +69,15 @@ final class WorkspaceStateStore: ObservableObject {
 
   /// 工作区变化（打开新文件夹 / 折叠态变化 / AI 助手显隐）：根目录存 security-scoped bookmark
   func workspaceDidChange(root: URL?, collapsedFolders: Set<URL>, aiAssistantVisible: Bool = false) {
-    // 切换编排期间：watcher 上报的还是旧 root（异步扫描未完成）或折叠态赋值的路过事件，一律忽略
+    // 切换/恢复编排期间：watcher 上报的还是旧 root（异步扫描未完成）或折叠态赋值的
+    // 路过事件，一律忽略——否则槽位指针被拉回旧工作区/瞬态打回 nil
     if let pending = pendingSwitchPath {
       guard let root, slotKey(for: root) == pending else { return }
       pendingSwitchPath = nil  // 新 root 到达，切换落定，走正常流程
+      pendingRestorePath = nil  // 切换目标已变，恢复期的守卫一并失效
+    } else if let pending = pendingRestorePath {
+      guard let root, slotKey(for: root) == pending else { return }
+      pendingRestorePath = nil  // 恢复的 root 到达，落定
     }
     if let root {
       let key = slotKey(for: root)
@@ -148,6 +157,9 @@ final class WorkspaceStateStore: ObservableObject {
     }
     currentRootPath = key
     store.state.lastRootPath = key
+    // 恢复编排保护：openFolder 是异步扫描，随后的 collapsedFolders/AI 显隐赋值会以
+    // nil root 路过 workspaceDidChange——在此登记目标，root 到达前的路过事件一律忽略
+    pendingRestorePath = key
     // 格式收敛：v1 单书签解析出真实路径后归入多书签表
     if store.state.bookmarks[key] == nil {
       store.state.bookmarks[key] = bookmark
