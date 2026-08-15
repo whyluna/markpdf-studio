@@ -80,13 +80,21 @@ enum SidecarAnnotationStorage {
   /// 那会让用户标注无声消失（违反 NFR-5），调用方需据此提示并保护原文件
   static func annotations(from data: Data) throws -> [(page: Int, annotation: PDFAnnotation)] {
     let file = try JSONDecoder().decode(SidecarFile.self, from: data)
+    // 更新版本的文件按本版格式强解可能静默错位——拒绝并让调用方走「损坏」保护
+    //（禁写回防覆盖），留给新版 App 读取
+    guard file.version <= currentVersion else {
+      throw DecodingError.dataCorrupted(
+        .init(codingPath: [], debugDescription: "不支持的 sidecar 版本 \(file.version)（当前 \(currentVersion)）")
+      )
+    }
     return annotations(from: file.annotations)
   }
 
   /// entries → 标注（sidecar 恢复与 PDF 写回共用）
   static func annotations(from entries: [Entry]) -> [(page: Int, annotation: PDFAnnotation)] {
     entries.compactMap { entry in
-      guard entry.bounds.count == 4,
+      // 负宽高的畸形 CGRect 直接进 PDFAnnotation 行为未定义（手改/损坏文件防御）
+      guard entry.bounds.count == 4, entry.bounds[2] >= 0, entry.bounds[3] >= 0,
         let subtype = PDFAnnotationSubtype(rawValue: "/\(entry.type)") as PDFAnnotationSubtype?
       else { return nil }
       let bounds = CGRect(
@@ -103,7 +111,8 @@ enum SidecarAnnotationStorage {
       if annotation.isCommentMarker {
         annotation.iconType = .comment
       }
-      if let quad = entry.quad, quad.count >= 8, quad.count % 2 == 0 {
+      // 四边形点应为 8 的倍数（每四边形 4 点 × 2 坐标）；非 4 倍数点列行为未定义
+      if let quad = entry.quad, quad.count >= 8, quad.count % 8 == 0 {
         annotation.quadrilateralPoints = stride(from: 0, to: quad.count, by: 2).map {
           NSValue(point: NSPoint(x: quad[$0], y: quad[$0 + 1]))
         }
@@ -142,7 +151,9 @@ final class SidecarAnnotationWriter: AnnotationWriter, @unchecked Sendable {
   }
 
   func snapshot(document: PDFDocument) throws -> [SidecarAnnotationStorage.Entry] {
-    SidecarAnnotationStorage.entries(for: document)
+    // 只收本应用管理的标注：PDF 自带的超链接/表单域若收进 sidecar，恢复时会叠加在
+    // 本体之上（重建副本动作与外观流丢失），且每轮「打开+写回」线性增长、App 内不可见不可删
+    SidecarAnnotationStorage.entries(for: document) { $0.isAppManaged }
   }
 
   func commit(_ entries: [SidecarAnnotationStorage.Entry], to url: URL) throws {

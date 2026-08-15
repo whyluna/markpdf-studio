@@ -127,12 +127,22 @@ struct AnnotationListView: View {
     if renamingID == item.id {
       renamingID = nil
     }
+    // 先取页面（remove 后 annotation.page 可能已失效）
+    let pages = item.annotations.compactMap(\.page)
     for annotation in item.annotations {
       if let page = annotation.page {
         store.remove(annotation, from: page)
       }
     }
+    // 失效通知打在 documentView 上：页面画在 PDFView 内层文档视图里，
+    // 只标脏 PDFView 不重画标注层（删除残留要等下一次滚动/缩放才消失）
     if let pdfView = pdfStore.pdfView {
+      for page in pages {
+        pdfView.annotationsChanged(on: page)
+      }
+      if let documentView = pdfView.documentView {
+        documentView.setNeedsDisplay(documentView.bounds)
+      }
       pdfView.setNeedsDisplay(pdfView.bounds)
     }
   }

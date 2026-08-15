@@ -171,7 +171,7 @@ final class SidecarAnnotationTests: XCTestCase {
     store.add(
       PDFAnnotation(bounds: CGRect(x: 1, y: 1, width: 10, height: 10), forType: .highlight, withProperties: nil),
       to: try XCTUnwrap(doc.page(at: 0)))
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
     XCTAssertEqual(try Data(contentsOf: sidecarURL), corrupt, "加载失败后不得写回覆盖原 sidecar")
   }
 
@@ -209,7 +209,36 @@ final class SidecarAnnotationTests: XCTestCase {
     store.add(
       PDFAnnotation(bounds: CGRect(x: 1, y: 1, width: 10, height: 10), forType: .highlight, withProperties: nil),
       to: try XCTUnwrap(fixedDoc.page(at: 0)))
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
     XCTAssertFalse(store.hasUnsavedChanges, "修复后写回必须恢复")
   }
+  /// sidecar 快照只收本应用管理的标注：PDF 自带的 Link/表单域收进去会在恢复时
+  /// 叠加在本体之上，每轮「打开+写回」线性增长且 App 内不可见不可删
+  @MainActor
+  func testSidecarSnapshotExcludesNonAppManagedAnnotations() throws {
+    let (url, document) = try makePDFFile()
+    let page = try XCTUnwrap(document.page(at: 0))
+    let link = PDFAnnotation(bounds: CGRect(x: 0, y: 0, width: 50, height: 10), forType: .link, withProperties: nil)
+    page.addAnnotation(link)
+    let highlight = PDFAnnotation(bounds: CGRect(x: 10, y: 20, width: 100, height: 12), forType: .highlight, withProperties: nil)
+    page.addAnnotation(highlight)
+
+    let entries = try SidecarAnnotationWriter(pdfURL: url).snapshot(document: document)
+    XCTAssertEqual(entries.count, 1, "只收本应用管理的标注")
+    XCTAssertEqual(entries.first?.type, "Highlight", "PDF 自带 Link 不得进 sidecar")
+  }
+
+  /// 比当前版本新的 sidecar 拒绝按本版格式强解（走「损坏」保护：禁写回防覆盖）
+  @MainActor
+  func testNewerVersionSidecarRejected() throws {
+    let file = SidecarAnnotationStorage.SidecarFile(
+      version: SidecarAnnotationStorage.currentVersion + 1, annotations: [])
+    let data = try JSONEncoder().encode(file)
+    XCTAssertThrowsError(try SidecarAnnotationStorage.annotations(from: data)) { error in
+      guard case DecodingError.dataCorrupted = error else {
+        return XCTFail("期望 dataCorrupted，实际 \(error)")
+      }
+    }
+  }
+
 }

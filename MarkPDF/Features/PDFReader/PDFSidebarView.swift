@@ -372,6 +372,8 @@ private struct ThumbnailCell: View {
     .contentShape(Rectangle())
     .onTapGesture(perform: onTap)
     .task(id: taskKey) {
+      // 换文档后同页码单元先清旧图（残影）：新图回来前显示占位而非上一文档的页面
+      image = nil
       image = await loadImage()
     }
   }
@@ -401,8 +403,11 @@ private final class ThumbnailCache: ObservableObject {
     let image = await Task.detached(priority: .utility) {
       page.thumbnail(of: NSSize(width: 232, height: 320), for: .cropBox)
     }.value
+    // 等待期间换了文档：旧文档位图不进新文档的缓存（也不占 FIFO 名额）
+    guard docKey == currentDocKey else { return image }
+    // 同 key 并发双渲染都去重：只在首次插入时占 FIFO 名额，否则旧键会被重复计数误逐出新图
+    if images[key] == nil { order.append(key) }
     images[key] = image
-    order.append(key)
     if order.count > limit, let evicted = order.first {
       order.removeFirst()
       images.removeValue(forKey: evicted)

@@ -45,6 +45,12 @@ enum SelectionColumnTrimmer {
       let selection = pdfView.currentSelection,
       let document = pdfView.document
     else { return }
+    // 跨页拖拽不裁剪：起止点不同页时，换算到中间页的坐标只比 x 不看 y，
+    // 落在栏内被误判「同栏拖拽」会裁掉另一栏的行——跨页选区保持原样
+    guard let startPage = pdfView.page(for: dragStart, nearest: false),
+      let endPage = pdfView.page(for: dragEnd, nearest: false),
+      startPage == endPage
+    else { return }
     let trimmed = PDFSelection(document: document)
     var changed = false
     for page in selection.pages {

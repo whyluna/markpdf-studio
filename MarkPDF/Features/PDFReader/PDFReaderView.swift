@@ -302,6 +302,12 @@ struct PDFReaderView: NSViewRepresentable {
 
   static func dismantleNSView(_ pdfView: PDFView, coordinator: Coordinator) {
     NotificationCenter.default.removeObserver(coordinator)
+    // local monitor 由系统事件通道持有，与 coordinator 生命周期无关——
+    // 不摘除则每次开 PDF 标签泄漏一个全局监控器（随标签开闭线性增长）
+    if let monitor = coordinator.magnifyMonitor {
+      NSEvent.removeMonitor(monitor)
+      coordinator.magnifyMonitor = nil
+    }
     coordinator.flushPositionSave()
     // 关窗/关标签前同样落盘挂起的标注写回（Bug C1）：此处 document 仍在，
     // 不 flush 则防抖窗口内的改动随视图拆除静默丢失
@@ -335,6 +341,13 @@ struct PDFReaderView: NSViewRepresentable {
 
     init(_ parent: PDFReaderView) {
       self.parent = parent
+    }
+
+    deinit {
+      // 兜底：dismantle 已摘除；万一视图未经 dismantle 释放也绝不驻留系统事件通道
+      if let monitor = magnifyMonitor {
+        NSEvent.removeMonitor(monitor)
+      }
     }
 
     /// 异步解析 PDF 文档（NFR-1）：后台线程构造 PDFDocument，完成后回主线程挂载并做

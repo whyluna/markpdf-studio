@@ -35,9 +35,26 @@ final class PDFAnnotationStore: ObservableObject {
   private var writer: AnnotationWriter
   private let defaults: UserDefaults
   private let debouncer = Debouncer(interval: 0.5)
-  /// 交互进行中查询（批注编辑框 / 点选编辑条是否打开）：由 AnnotationToolbarController 接线。
-  /// 期间的标注变更只标脏不落盘，交互结束统一写（见 markDirty）
-  var isInteracting: (() -> Bool)?
+  /// 交互进行中查询（批注编辑框 / 点选编辑条是否打开）：由 AnnotationToolbarController 注册。
+  /// 期间的标注变更只标脏不落盘，交互结束统一写（见 markDirty）。
+  /// 用注册表而非单闭包：分栏双 PDF 各有一个控制器，单闭包会被后建者覆盖——
+  /// A 窗交互中 store 查到的是 B 窗状态（false），写回正好砸在 A 打字中途
+  private var interactionChecks: [UUID: () -> Bool] = [:]
+
+  /// 注册交互源；返回令牌供注销（控制器 deinit 时调用）
+  func registerInteractionCheck(_ check: @escaping () -> Bool) -> UUID {
+    let id = UUID()
+    interactionChecks[id] = check
+    return id
+  }
+
+  func unregisterInteractionCheck(_ id: UUID) {
+    interactionChecks[id] = nil
+  }
+
+  private var anyInteracting: Bool {
+    interactionChecks.values.contains { $0() }
+  }
   /// 交互期间攒下的变更（结束时排一次重扫 + 写回）
   private var hasDeferredWrites = false
   /// revision 刷新防抖：批注输入每键都 markDirty，全文档重扫（含逐标注文本提取）
@@ -138,6 +155,19 @@ final class PDFAnnotationStore: ObservableObject {
     annotation.type != nil
   }
 
+  /// 页面上是否已存在同款标注（类型 + 位置，0.5pt 容差）——恢复 sidecar 去重用。
+  /// 不按颜色判：只读模式下改色只写 sidecar，PDF 本体里残留的是旧色，若按颜色判
+  /// 会把改色后的条目当成「不存在」再叠一份
+  nonisolated static func hasTwin(of annotation: PDFAnnotation, on page: PDFPage) -> Bool {
+    page.annotations.contains { existing in
+      existing.type == annotation.type
+        && abs(existing.bounds.origin.x - annotation.bounds.origin.x) < 0.5
+        && abs(existing.bounds.origin.y - annotation.bounds.origin.y) < 0.5
+        && abs(existing.bounds.width - annotation.bounds.width) < 0.5
+        && abs(existing.bounds.height - annotation.bounds.height) < 0.5
+    }
+  }
+
   // MARK: - 只读模式（FR-4.7）
 
   /// 当前文件是否只读标注模式（标注存同名 sidecar JSON，不改 PDF 本体）
@@ -179,6 +209,10 @@ final class PDFAnnotationStore: ObservableObject {
       let data = try Data(contentsOf: sidecarURL)
       for (pageIndex, annotation) in try SidecarAnnotationStorage.annotations(from: data) {
         guard let page = document.page(at: pageIndex) else { continue }
+        // 去重：分栏焦点来回会重跑 attach（恢复再次执行）；开启只读模式前已写进
+        // PDF 本体的标注也在页面上——不去重则副本层层叠加，下一次快照再把叠加
+        // 写进 sidecar 永久化（实测高亮越叠越深、列表出现重复条目）
+        guard !Self.hasTwin(of: annotation, on: page) else { continue }
         page.addAnnotation(annotation)
       }
       hasReportedSidecarLoadFailure = false
@@ -314,7 +348,7 @@ final class PDFAnnotationStore: ObservableObject {
     // 全文档重扫（含逐标注文本提取）与写回前的序列化都得在主线程跑，落在打字/点色
     // 那一瞬会卡住 UI（实测新建批注要等约 1 秒才能输入、点色不跟手）。
     // 交互结束由 resumeDeferredWrites() 统一排一次；flushPendingWrites 仍照常兜底
-    guard !(isInteracting?() ?? false) else {
+    guard !anyInteracting else {
       hasDeferredWrites = true
       return
     }
@@ -346,16 +380,28 @@ final class PDFAnnotationStore: ObservableObject {
     }
   }
 
-  /// 立即写回挂起的改动（切换文件 / 关窗 / 退出前）：同步等落盘完成——
-  /// 这些路径过后 document 即被替换或释放，落盘不能留给后台
-  func flushPendingWrites() {
+  /// 立即写回挂起的改动（切换文件 / 关窗 / 退出前）。
+  /// 快照已定格为纯数据、目的地随任务携带，提交不依赖 document 存活——
+  /// 因此默认不阻塞主线程（后台串行队列 FIFO 保证多次写入有序）；
+  /// 仅退出进程等「过后再也没有机会写」的路径传 blocking: true，
+  /// 否则 sync 等在途长任务（dataRepresentation 0.4~1.5s）会把后台耗时搬回主线程
+  func flushPendingWrites(blocking: Bool = false) {
     debouncer.cancel()
     hasDeferredWrites = false
     guard let job = prepareWriteJob() else { return }
-    let result = Self.commitQueue.sync {
-      Result { try job.writer.commit(job.entries, to: job.url) }
+    if blocking {
+      let result = Self.commitQueue.sync {
+        Result { try job.writer.commit(job.entries, to: job.url) }
+      }
+      finish(result, url: job.url)
+    } else {
+      Self.commitQueue.async { [weak self] in
+        let result = Result { try job.writer.commit(job.entries, to: job.url) }
+        Task { @MainActor in
+          self?.finish(result, url: job.url)
+        }
+      }
     }
-    finish(result, url: job.url)
   }
 
   /// 防抖到点的写回：主线程只把标注收成纯数据，重绘与落盘全在后台副本上做——

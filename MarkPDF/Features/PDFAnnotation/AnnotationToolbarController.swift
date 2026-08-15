@@ -19,6 +19,8 @@ final class AnnotationToolbarController: NSObject {
   private var keyMonitor: Any?
   private var toolCancellable: AnyCancellable?
   private var translationCancellable: AnyCancellable?
+  /// 交互源注册令牌（分栏双控制器互不覆盖；deinit 注销）
+  private var interactionCheckID: UUID?
 
   init(pdfView: PDFView, store: PDFAnnotationStore, aiSettings: AISettingsStore, aiKeys: AIKeyStore) {
     self.pdfView = pdfView
@@ -44,9 +46,12 @@ final class AnnotationToolbarController: NSObject {
       name: .PDFViewSelectionChanged,
       object: pdfView
     )
-    // 鼠标松开才弹出（划词途中不打扰）
+    // 鼠标松开才弹出（划词途中不打扰）；只响应本窗事件——
+    // 别窗/侧栏的点击不应触发本视图的重排与面板复活
     mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-      self?.revealIfSelection(at: event)
+      if event.window === self?.pdfView?.window {
+        self?.revealIfSelection(at: event)
+      }
       return event
     }
     // 点击既有标注 → 点选删除：走 pdfView 的 mouseDown 钩子而非手势识别器
@@ -57,14 +62,16 @@ final class AnnotationToolbarController: NSObject {
       }
     }
     // 交互期间（批注编辑框 / 点选编辑条打开）暂缓落盘：重扫与 PDF 全量写回都在主线程，
-    // 落在打字/点色那一瞬会卡住 UI；交互结束统一写（store.resumeDeferredWrites）
-    store.isInteracting = { [weak self] in
+    // 落在打字/点色那一瞬会卡住 UI；交互结束统一写（store.resumeDeferredWrites）。
+    // 按实例注册（store 为窗口级单例，分栏双控制器互不覆盖）
+    interactionCheckID = store.registerInteractionCheck { [weak self] in
       guard let self else { return false }
       return self.commentPopover != nil || self.deleteHosting?.isHidden == false
     }
-    // Esc 退出激活的标注工具（FR-4.4）；不吞事件，查找栏等照常响应
+    // Esc 退出激活的标注工具（FR-4.4）；不吞事件，查找栏等照常响应。
+    // 只响应本窗按键——别窗按 Esc 不应退出本窗工具
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      if event.keyCode == 53, self?.store.activeTool != nil {
+      if event.keyCode == 53, event.window === self?.pdfView?.window, self?.store.activeTool != nil {
         self?.store.activeTool = nil
       }
       return event
@@ -101,6 +108,13 @@ final class AnnotationToolbarController: NSObject {
     }
     if let keyMonitor {
       NSEvent.removeMonitor(keyMonitor)
+    }
+    if let interactionCheckID {
+      // deinit 非隔离：注销派发到主线程执行（store 为 @MainActor）
+      let store = store
+      Task { @MainActor in
+        store.unregisterInteractionCheck(interactionCheckID)
+      }
     }
     toolCancellable?.cancel()
     translationCancellable?.cancel()
@@ -428,13 +442,20 @@ final class AnnotationToolbarController: NSObject {
 
   /// 把命中组改成指定色（FR-4.4）：逐个写回 + 重绘；编辑条留在原位以便连续试色
   private func recolorHits(to color: AnnotationColor) {
-    guard let pdfView else { return }
     let targets = recolorableHits
     guard !targets.isEmpty else { return }
     for annotation in targets {
       store.update(annotation) { $0.color = color.nsColor }
     }
-    pdfView.setNeedsDisplay(pdfView.bounds)
+    // 重绘必须走 documentView 通道（同 deleteHit）：只标脏 PDFView 自己不会重画标注层，
+    // 改色后旧颜色会残留到下一次滚动/缩放刷新
+    var touched: [PDFPage] = []
+    for annotation in targets {
+      if let page = annotation.page, !touched.contains(where: { $0 === page }) {
+        touched.append(page)
+      }
+    }
+    redraw(pages: touched)
     // 当前色标记随之更新（rootView 重建，位置不动）
     showEditBar(at: editBarPoint)
   }
@@ -814,8 +835,11 @@ extension AnnotationToolbarController: NSPopoverDelegate {
     commentDraft = nil
     commentPopover = nil
     if let marker, let draft {
-      // 打字全程只进草稿，关闭时一次性写回标注（每键直改 PDFAnnotation 是卡顿根因）
-      store.update(marker) { $0.contents = draft.text }
+      // 打字全程只进草稿，关闭时一次性写回标注（每键直改 PDFAnnotation 是卡顿根因）。
+      // 无编辑不触发写回：只是点开看一眼就关掉，不值得一次全量快照 + 落盘
+      if draft.text != (marker.contents ?? "") {
+        store.update(marker) { $0.contents = draft.text }
+      }
       discardCommentIfEmpty(marker)
     }
     // 编辑框关闭 = 交互结束：把创建/输入期间攒下的重扫与写回排上

@@ -141,7 +141,8 @@ final class AnnotationListTests: XCTestCase {
     let (doc, url) = makeDocument()
     store.attach(document: doc, url: url)
     var interacting = true
-    store.isInteracting = { interacting }
+    let checkID = store.registerInteractionCheck { interacting }
+    defer { store.unregisterInteractionCheck(checkID) }
     let baseline = store.revision
     let page = doc.page(at: 0)!
 

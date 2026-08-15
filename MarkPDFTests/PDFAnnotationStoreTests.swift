@@ -94,24 +94,24 @@ final class PDFAnnotationStoreTests: XCTestCase {
     // 原文件消失 → 首次写回创建 .bak 失败 → 上报
     try FileManager.default.removeItem(at: url)
     store.markDirty()
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
     XCTAssertNotNil(store.lastError, "写回失败必须上报")
 
     // 持续失败不重复上报（每次标注变更都会重试，防弹窗轰炸）
     store.lastError = nil
     store.markDirty()
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
     XCTAssertNil(store.lastError, "持续失败只提示一次")
 
     // 写回恢复成功后复位；再次失败会再次上报
     XCTAssertTrue(doc.write(to: url))
     store.markDirty()
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
     XCTAssertFalse(store.hasUnsavedChanges, "恢复后应写回成功")
     try FileManager.default.removeItem(at: url)
     try FileManager.default.removeItem(at: url.appendingPathExtension("bak"))
     store.markDirty()
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
     XCTAssertNotNil(store.lastError, "恢复后再失败应再次上报")
   }
 
@@ -151,7 +151,7 @@ final class PDFAnnotationStoreTests: XCTestCase {
     let store = makeStore()
     store.attach(document: doc, url: url)
     store.markDirty()
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
 
     let error = try XCTUnwrap(store.lastError, "写回失败必须上报")
     XCTAssertTrue(error.contains("设为工作区"), "权限不足须附补救引导，实际: \(error)")
@@ -166,7 +166,7 @@ final class PDFAnnotationStoreTests: XCTestCase {
     let store = makeStore()
     store.attach(document: doc, url: url)
     store.markDirty()
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
 
     let error = try XCTUnwrap(store.lastError, "写回失败必须上报")
     XCTAssertFalse(error.contains("设为工作区"), "非权限错误不应附工作区引导，实际: \(error)")
@@ -202,7 +202,7 @@ final class PDFAnnotationStoreTests: XCTestCase {
     store.add(makeHighlight(), to: doc.page(at: 0)!)
     XCTAssertTrue(store.hasUnsavedChanges, "变更后应处于待写回状态（防抖窗口内）")
 
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
     XCTAssertFalse(store.hasUnsavedChanges, "flush 后不应有未写回改动")
     XCTAssertNil(store.lastError)
     XCTAssertTrue(
@@ -248,16 +248,24 @@ final class PDFAnnotationStoreTests: XCTestCase {
     store.add(makeHighlight(), to: docA.page(at: 0)!)
     XCTAssertTrue(store.hasUnsavedChanges, "变更后应处于待写回状态（防抖窗口内）")
 
-    // 焦点切到 B：attach 替换目标前 flush A
+    // 焦点切到 B：attach 替换目标前 flush A（非阻塞，后台串行队列有序提交）
     store.attach(document: docB, url: urlB)
     XCTAssertEqual(store.currentFileURL, urlB)
     XCTAssertFalse(store.hasUnsavedChanges, "attach 替换目标前必须落盘旧文档的挂起改动")
-    XCTAssertEqual(
-      PDFDocument(url: urlA)?.page(at: 0)?.annotations.count, 1,
-      "A 的挂起标注必须写回 A 的文件")
+    XCTAssertTrue(waitForAnnotations(on: urlA, count: 1), "A 的挂起标注必须写回 A 的文件")
     XCTAssertFalse(
       FileManager.default.fileExists(atPath: urlB.appendingPathExtension("bak").path),
       "B 无任何改动，不应被写回")
+  }
+
+  /// 轮询等待后台写回落地（attach 内嵌 flush 为非阻塞，commit 在后台串行队列执行）
+  private func waitForAnnotations(on url: URL, count: Int, timeout: TimeInterval = 3) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if PDFDocument(url: url)?.page(at: 0)?.annotations.count == count { return true }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    return false
   }
 
   /// 重复 attach 同一文档是 no-op：分栏焦点认领每次点击都会调用 attach，
@@ -333,7 +341,7 @@ final class PDFAnnotationStoreTests: XCTestCase {
       "目的地必须按文档自带 URL 纠正")
 
     store.add(makeHighlight(), to: docA.page(at: 0)!)
-    store.flushPendingWrites()
+    store.flushPendingWrites(blocking: true)
 
     XCTAssertEqual(PDFDocument(url: urlA)?.page(at: 0)?.annotations.count, 1, "标注应写进 A")
     XCTAssertEqual(try Data(contentsOf: urlB), bytesB, "B 文件必须一个字节都没动")
@@ -357,4 +365,20 @@ final class PDFAnnotationStoreTests: XCTestCase {
     XCTAssertTrue(PDFAnnotationStore.isSameFile(real, dir.appendingPathComponent("./real.pdf")))
     XCTAssertFalse(PDFAnnotationStore.isSameFile(real, dir.appendingPathComponent("other.pdf")))
   }
+  /// sidecar 恢复去重（分栏焦点来回重跑 attach / 开启只读模式前已写进本体的标注）：
+  /// 页面已有同款（类型+位置）标注时不得再叠加副本
+  func testHasTwinDetectsDuplicateOnPage() {
+    let doc = makePDFDocument()
+    let page = doc.page(at: 0)!
+    let existing = PDFAnnotation(bounds: CGRect(x: 10, y: 20, width: 100, height: 12), forType: .highlight, withProperties: nil)
+    page.addAnnotation(existing)
+
+    let same = PDFAnnotation(bounds: CGRect(x: 10, y: 20, width: 100, height: 12), forType: .highlight, withProperties: nil)
+    XCTAssertTrue(PDFAnnotationStore.hasTwin(of: same, on: page), "同类型同位置为孪生")
+    let differentType = PDFAnnotation(bounds: CGRect(x: 10, y: 20, width: 100, height: 12), forType: .underline, withProperties: nil)
+    XCTAssertFalse(PDFAnnotationStore.hasTwin(of: differentType, on: page), "类型不同不算孪生")
+    let moved = PDFAnnotation(bounds: CGRect(x: 40, y: 20, width: 100, height: 12), forType: .highlight, withProperties: nil)
+    XCTAssertFalse(PDFAnnotationStore.hasTwin(of: moved, on: page), "位置不同不算孪生")
+  }
+
 }

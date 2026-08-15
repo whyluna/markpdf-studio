@@ -65,11 +65,15 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
     pdfView?.go(to: destination)
   }
 
-  /// 消费指向 url 的待跳转页：仅目标文档所在视图可消费（URL 标准化比较），
+  /// 消费指向 url 的待跳转页：仅目标文档所在视图可消费（URL 标准化 + 符号链接归一比较，
+  /// 与标注写回的 isSameFile 口径一致——符号链接工作区下回链跳转不应失配卡死），
   /// 匹配时连同闪烁标记一并取出；不匹配则原样保留，等目标视图来取
   func consumePendingJump(for url: URL) -> (page: Int, flash: Bool)? {
+    func normalized(_ u: URL) -> URL {
+      u.standardizedFileURL.resolvingSymlinksInPath()
+    }
     guard let jump = pendingJump,
-      jump.url.standardizedFileURL == url.standardizedFileURL
+      normalized(jump.url) == normalized(url)
     else { return nil }
     pendingJump = nil
     let flash = pendingFlash
@@ -87,6 +91,10 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
   func resetForDocumentSwitch() {
     closeFindBar()
     scale = 1.0
+    // 页码一并归零：新文档异步解析的窗口期内若停留旧文档页码，
+    // 「书签当前页」会把旧页码写进新文件的书签表（isBookmarkablePage 只挡 page < 1）
+    currentPage = 0
+    pageCount = 0
   }
 
   /// 上报文档解析失败（Bug 修复 3）：重试/再次加载成功前由视图层占位展示
@@ -154,8 +162,9 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
 
   func closeFindBar() {
     isFindBarVisible = false
-    findDebouncer.cancel()
     findQuery = ""
+    // 赋值经 didSet 会重排一次防抖（空查询空跑）——先赋值再取消才挡得住
+    findDebouncer.cancel()
     findMatches = []
     currentMatchIndex = 0
     pdfView?.highlightedSelections = nil
