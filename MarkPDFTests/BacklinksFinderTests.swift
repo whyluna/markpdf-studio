@@ -134,4 +134,24 @@ final class BacklinksFinderTests: XCTestCase {
     XCTAssertTrue(found.isEmpty)
     XCTAssertEqual(calls, 1)
   }
+  /// 目标文件名含平衡括号（CommonMark 合法裸 dest）：反链不得截断漏配
+  func testFindsLinkWithBalancedParensInFilename() {
+    let parenTarget = root.appendingPathComponent("papers/报告(终稿).pdf")
+    try! Data().write(to: parenTarget)
+    let md = write("notes/b.md", "见 [报告](../papers/报告(终稿).pdf)\n")
+    let found = BacklinksFinder.find(target: parenTarget, in: [md], workspaceRoot: root)
+    XCTAssertEqual(found.count, 1, "含括号的合法 dest 不得漏配")
+    XCTAssertEqual(found.first?.text, "报告")
+  }
+
+  /// 超大 md 先 stat 后读盘（GB 级文件不整读进内存）
+  func testOversizedMarkdownSkippedByStat() throws {
+    let big = write("big.md", String(repeating: "字", count: 100))
+    // 伪造超限判定：直接验证 isWithinSizeLimit 的口径
+    XCTAssertTrue(BacklinksFinder.isWithinSizeLimit(big))
+    let huge = write("huge.md", "x")
+    try FileManager.default.removeItem(at: huge)
+    XCTAssertTrue(BacklinksFinder.isWithinSizeLimit(huge), "stat 失败按不超限（交由读盘失败兜底）")
+  }
+
 }

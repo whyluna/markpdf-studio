@@ -102,8 +102,10 @@ struct QuickOpenView: View {
       results = Self.computeResults(query: query, files: files)
     }
     .onChange(of: files) { newFiles in
-      // 面板打开期间工作区文件变化（文件监听）时重算
+      // 面板打开期间工作区文件变化（文件监听）时重算；结果集收缩后钳制选中下标，
+      // 否则越界态无选中行、Enter 无效
       results = Self.computeResults(query: query, files: newFiles)
+      selectedIndex = min(selectedIndex, max(results.count - 1, 0))
     }
   }
 

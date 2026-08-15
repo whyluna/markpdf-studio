@@ -15,14 +15,6 @@ final class SearchStore: ObservableObject {
   private let debouncer = Debouncer(interval: 0.3)
   private var searchTask: Task<Void, Never>?
 
-  /// 打开面板时重置（保留上次结果之外的状态）
-  func reset() {
-    searchTask?.cancel()
-    query = ""
-    results = []
-    isSearching = false
-  }
-
   private func scheduleSearch() {
     debouncer.schedule { [weak self] in
       self?.run()
@@ -43,8 +35,11 @@ final class SearchStore: ObservableObject {
       let results = FullTextSearch.search(query: needle, files: files) { Task.isCancelled }
       guard !Task.isCancelled else { return }
       await MainActor.run {
-        self?.results = results
-        self?.isSearching = false
+        // 取消窗口期防护：任务取消前已通过检查并入了主线程队列的旧块不得落地——
+        // 比对发起时的查询快照，过期结果与 isSearching 翻转都丢弃
+        guard let self, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == needle else { return }
+        self.results = results
+        self.isSearching = false
       }
     }
   }

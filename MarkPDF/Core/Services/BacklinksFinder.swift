@@ -14,6 +14,12 @@ enum BacklinksFinder {
   /// 跳过的超大文件（与全文搜索一致）
   static let maxFileBytes = 2 * 1024 * 1024
 
+  /// 先 stat 再读盘（与全文搜索 PDF 路径口径一致）：超限文件不整读进内存
+  static func isWithinSizeLimit(_ file: URL) -> Bool {
+    let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+    return size <= maxFileBytes
+  }
+
   /// 逐文件检查 isCancelled，返回 true 即中止并返回已收集结果（取消后调用方本就丢弃，
   /// 提前退出只是不再把剩余 md 全部读完——保存风暴下取消的旧任务立即释放 IO）。
   static func find(
@@ -22,17 +28,19 @@ enum BacklinksFinder {
     workspaceRoot: URL?,
     isCancelled: () -> Bool = { false }
   ) -> [Backlink] {
-    // dest 二选一：CommonMark 角标形式 `<...>`（允许含空格）或无角标形式（遇空白/`)` 停止）
-    let pattern = #"\[([^\]]*)\]\(\s*(<[^>]+>|[^)\s>]+)"#
+    // dest 二选一：CommonMark 角标形式 `<...>`（允许含空格）或无角标形式
+    //（遇空白停止；括号须平衡——`报告(终稿).pdf` 是合法 dest，简单 `[^)]+` 会截断漏配）
+    let pattern = #"\[([^\]]*)\]\(\s*(<[^>]+>|(?:[^()\s>]|\([^()\s>]*\))+)"#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     let normalizedTarget = target.standardizedFileURL
     let targetName = target.lastPathComponent
     var result: [Backlink] = []
     for file in mdFiles {
       if isCancelled() { break }
-      // 排除自引用
+      // 先判大小再读盘：超限文件（GB 级日志混入工作区）不应整读进内存后才丢弃
       guard file.standardizedFileURL != normalizedTarget,
-        let data = try? Data(contentsOf: file), data.count <= maxFileBytes,
+        Self.isWithinSizeLimit(file),
+        let data = try? Data(contentsOf: file),
         let content = String(data: data, encoding: .utf8)
       else { continue }
       // 预筛：不含目标文件名的直接跳过（大工作区下避免全文正则 + 逐链接 resolve 的 syscall 开销）。

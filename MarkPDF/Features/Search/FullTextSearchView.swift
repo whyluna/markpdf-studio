@@ -17,7 +17,8 @@ struct FullTextSearchView: View {
           text: $store.query,
           placeholder: String(localized: "全文搜索（至少 2 个字符）…"),
           onMoveUp: { selectedIndex = max(0, selectedIndex - 1) },
-          onMoveDown: { selectedIndex = min(store.results.count - 1, selectedIndex + 1) },
+          // 空结果集 min(-1, x) 会得 -1（无选中态）；钳到 0 起
+          onMoveDown: { selectedIndex = max(0, min(store.results.count - 1, selectedIndex + 1)) },
           onSubmit: openSelected,
           onCancel: onDismiss
         )

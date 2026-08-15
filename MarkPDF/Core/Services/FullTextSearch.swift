@@ -59,8 +59,16 @@ enum FullTextSearch {
 
   // MARK: - Markdown
 
+  /// md 文件大小是否在搜索上限内（先 stat 后读盘：超限文件不整读进内存，
+  /// 与 PDF 路径的 isPDFWithinSizeLimit 口径一致）。读取失败按不超限处理（交由读盘失败兜底）
+  static func isMarkdownWithinSizeLimit(_ url: URL) -> Bool {
+    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+    return (size ?? 0) <= maxFileBytes
+  }
+
   static func searchMarkdown(url: URL, needle: String) -> FullTextSearchResult? {
-    guard let data = try? Data(contentsOf: url), data.count <= maxFileBytes,
+    guard isMarkdownWithinSizeLimit(url),
+      let data = try? Data(contentsOf: url),
       let text = String(data: data, encoding: .utf8)
     else { return nil }
     var hits = 0
@@ -138,7 +146,7 @@ enum FullTextSearch {
   static func extractText(url: URL) -> String? {
     switch FileNode.kind(for: url, isDirectory: false) {
     case .markdown:
-      guard let data = try? Data(contentsOf: url), data.count <= maxFileBytes else { return nil }
+      guard isMarkdownWithinSizeLimit(url), let data = try? Data(contentsOf: url) else { return nil }
       return String(data: data, encoding: .utf8)
     case .pdf:
       guard isPDFWithinSizeLimit(url), let document = PDFDocument(url: url) else { return nil }

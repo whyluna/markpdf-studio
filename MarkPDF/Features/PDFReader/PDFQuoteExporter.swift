@@ -7,10 +7,11 @@ import os
 enum PDFQuoteExporter {
   /// 纯函数：文本 → 引用块 + 页码回链
   static func quoteText(text: String, pdfURL: URL, page: Int, workspaceRoot: URL?) -> String {
-    // 相对工作区根目录的路径（任何 md 都能经根目录回退解析）；无工作区退化为文件名
+    // 相对工作区根目录的路径（任何 md 都能经根目录回退解析）；无工作区退化为文件名。
+    // 链接目标统一安全编码：空格/括号不编码会让回链按 CommonMark 裸 dest 规则断掉
     let relPath = workspaceRoot.map {
       MarkdownImageLinkRewriter.relativePath(from: $0, to: pdfURL)
-    } ?? pdfURL.lastPathComponent
+    } ?? MarkdownImageLinkRewriter.percentEncodedForLink(pdfURL.lastPathComponent)
     let quoted = text.components(separatedBy: .newlines)
       .map { $0.isEmpty ? ">" : "> \($0)" }
       .joined(separator: "\n")

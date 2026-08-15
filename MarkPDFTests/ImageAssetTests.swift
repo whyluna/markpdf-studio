@@ -61,6 +61,31 @@ final class MarkdownImageLinkRewriterTests: XCTestCase {
     )
     XCTAssertEqual(rewritten, md)
   }
+
+  /// 角标形式含空格 dest（CommonMark 合法）：移动后整段替换，不得截断腐蚀
+  func testRewriteAngleBracketDestinationWithSpaces() {
+    let md = "![图](<my pic.png>)"
+    let oldDir = root.appendingPathComponent("old")
+    let newDir = root.appendingPathComponent("new")
+    let rewritten = MarkdownImageLinkRewriter.rewrite(markdown: md, fromOldDir: oldDir, toNewDir: newDir)
+    XCTAssertEqual(rewritten, "![图](<../old/my%20pic.png>)", "角标保留、dest 整体重写")
+  }
+
+  /// 文件名含平衡括号：重写不被截断；产出的链接编码括号（防不平衡括号破坏解析）
+  func testRewriteBalancedParensDestination() {
+    let md = "![图](img(1).png)"
+    let oldDir = root.appendingPathComponent("old")
+    let newDir = root.appendingPathComponent("new")
+    let rewritten = MarkdownImageLinkRewriter.rewrite(markdown: md, fromOldDir: oldDir, toNewDir: newDir)
+    XCTAssertEqual(rewritten, "![图](../old/img%281%29.png)")
+  }
+
+  /// 编码助手：空格与括号
+  func testPercentEncodedForLink() {
+    XCTAssertEqual(
+      MarkdownImageLinkRewriter.percentEncodedForLink("报告 (终稿).pdf"),
+      "报告%20%28终稿%29.pdf")
+  }
 }
 
 /// 图片资产存储（FR-2.5）：写 assets/、唯一命名、相对路径返回

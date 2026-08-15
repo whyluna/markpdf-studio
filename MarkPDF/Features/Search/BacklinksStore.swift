@@ -20,7 +20,11 @@ final class BacklinksStore: ObservableObject {
 
   /// 跟踪目标变化（切换标签/文件）
   func track(_ target: URL?) {
+    guard target != self.target else { return }
     self.target = target
+    // 换目标即清旧结果：新扫描落地前面板若仍显示上一目标的反链，
+    // 分栏对照时会把 A 的引用短暂挂在 B 名下
+    items = []
     scheduleScan()
   }
 
@@ -50,8 +54,10 @@ final class BacklinksStore: ObservableObject {
       }
       guard !Task.isCancelled else { return }
       await MainActor.run {
-        self?.items = found
-        self?.isScanning = false
+        // 取消窗口期防护：已过取消检查并入主线程队列的旧块不得覆盖新目标的结果
+        guard let self, self.target == target else { return }
+        self.items = found
+        self.isScanning = false
       }
     }
   }
