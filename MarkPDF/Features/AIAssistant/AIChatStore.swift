@@ -94,6 +94,9 @@ final class AIChatStore: ObservableObject {
   private var flushScheduled = false
   /// 后台压缩任务（历史超预算时旧轮次并入滚动摘要；不阻塞当轮）
   private var compactionTask: Task<Void, Never>?
+  /// 压缩任务身份令牌：旧任务的 defer 只在仍是当前任务时才清手柄，
+  /// 防「取消旧任务 → 新任务已启动 → 旧 defer 误清新手柄」
+  private var activeCompactionID: UUID?
   /// 压缩失败后间隔一轮再试
   private var skipCompactionOnce = false
 
@@ -122,10 +125,16 @@ final class AIChatStore: ObservableObject {
   func workspaceDidChange(root: URL?) {
     let newRoot = root?.standardizedFileURL
     guard newRoot?.path != workspaceRoot?.path else { return }
+    // 在途流式必须走完整收尾（finalizeStreaming + phase 复位）：直接 streamTask.cancel()
+    // 的话，任务在 runAgentLoop 里早退不碰 phase，绑定文档时这里又不重置——
+    // 面板永久卡「回答中」，send 的 phase != .streaming 守卫从此拦截一切发送（实测）
+    if phase == .streaming { cancel() }
+    compactionTask?.cancel()
+    compactionTask = nil
+    activeCompactionID = nil
     flush()
     streamTask?.cancel()
     streamTask = nil
-    compactionTask?.cancel()
     workspaceRoot = newRoot
     if let newRoot, let repository {
       repository.migrateWorkspaceStoreIfNeeded(root: newRoot)
@@ -173,14 +182,55 @@ final class AIChatStore: ObservableObject {
       newKey + key.dropFirst(oldKey.count)
     }
     for key in threads.keys.filter({ $0 == oldKey || $0.hasPrefix(oldKey + "/") }) {
-      let thread = threads.removeValue(forKey: key)
-      threads[shifted(key)] = thread
+      guard let thread = threads.removeValue(forKey: key) else { continue }
+      let target = shifted(key)
+      // 目标键已有会话（改名撞上一个有过会话的文件）：必须合并而非覆盖——
+      // 否则下一次 persistNow 的盲写会把仓库里刚 merge 好的结果用单侧副本整体覆盖，
+      // 目标文件的原有会话从磁盘消失。三处来源都要并入：内存缓存、仓库（本窗未缓存）
+      if let existing = threads[target] {
+        threads[target] = Self.merged(existing, thread)
+      } else if let stored = repository?.session(for: target), !stored.messages.isEmpty {
+        let existing = Thread(
+          messages: stored.messages.map(ChatMessage.init(stored:)),
+          rollingSummary: stored.rollingSummary,
+          summarizedCount: stored.summarizedCount ?? 0,
+          updatedAt: stored.updatedAt
+        )
+        threads[target] = Self.merged(existing, thread)
+      } else {
+        threads[target] = thread
+      }
     }
     if activeDocKey == oldKey || activeDocKey.hasPrefix(oldKey + "/") {
       activeDocKey = shifted(activeDocKey)
       activeDocName = URL(fileURLWithPath: activeDocKey).lastPathComponent
+      // 激活线程发生合并时同步可见消息：否则下一轮 storeActiveThreadMessages 会用
+      // 面板里的单侧消息把内存里的合并结果再覆盖回去
+      if let merged = threads[activeDocKey], merged.messages != messages {
+        messages = merged.messages
+      }
     }
     repository?.rekey(from: oldKey, to: newKey)
+  }
+
+  /// 内存线程合并（与 AISessionRepository.merge 同规则）：较旧者消息在前；
+  /// 摘要沿用较新一方（下标按旧者消息数平移），较新方无摘要则保留旧摘要
+  private static func merged(_ lhs: Thread, _ rhs: Thread) -> Thread {
+    let (older, newer) = lhs.updatedAt <= rhs.updatedAt ? (lhs, rhs) : (rhs, lhs)
+    var result = Thread(
+      messages: older.messages + newer.messages,
+      rollingSummary: nil,
+      summarizedCount: 0,
+      updatedAt: newer.updatedAt
+    )
+    if let summary = newer.rollingSummary {
+      result.rollingSummary = summary
+      result.summarizedCount = min(newer.summarizedCount + older.messages.count, result.messages.count)
+    } else {
+      result.rollingSummary = older.rollingSummary
+      result.summarizedCount = older.summarizedCount
+    }
+    return result
   }
 
   /// 退出/关窗前立即落盘
@@ -293,6 +343,10 @@ final class AIChatStore: ObservableObject {
   func newSession() {
     streamTask?.cancel()
     streamTask = nil
+    // 在途压缩一并取消：它的完成回调会把旧滚动摘要写进刚清空的新线程（摘要复活）
+    compactionTask?.cancel()
+    compactionTask = nil
+    activeCompactionID = nil
     messages = []
     streamBuffer = ""
     phase = .idle
@@ -336,9 +390,16 @@ final class AIChatStore: ObservableObject {
     let existing = thread.rollingSummary
     let inputChars = toCompact.reduce(0) { $0 + $1.content.count } + (existing?.count ?? 0)
     let docKey = activeDocKey
+    let compactionID = UUID()
+    activeCompactionID = compactionID
     compactionTask = Task { [weak self] in
       guard let self else { return }
-      defer { self.compactionTask = nil }
+      defer {
+        if self.activeCompactionID == compactionID {
+          self.compactionTask = nil
+          self.activeCompactionID = nil
+        }
+      }
       do {
         let summary = try await self.service.complete(
           kind: resolved.kind,
@@ -475,6 +536,9 @@ final class AIChatStore: ObservableObject {
 
     do {
       while true {
+        // 循环顶部先查取消：上一轮最后一个工具返回后才被取消的场景，
+        // 不得再发起新一轮 HTTP 请求（取消语义即时，也不白耗配额）
+        guard !Task.isCancelled else { return }
         let useTools = toolsEnabled && turns < Self.maxToolTurns
         var received: [AIToolCall] = []
         streamBuffer = ""
@@ -525,6 +589,9 @@ final class AIChatStore: ObservableObject {
             result = await Task.detached(priority: .userInitiated) {
               AIWorkspaceTools.execute(call: call, workspaceRoot: root, files: files)
             }.value
+            // detached 不受父任务取消传播，await 返回后必须补查：
+            // 取消后若继续 completeActivity/syncActiveThread 会在收尾之后再次写回并落盘
+            guard !Task.isCancelled else { return }
             executedResults[dedupeKey] = result
           }
           var clipped = String(result.prefix(max(turnBudget, 500)))

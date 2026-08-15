@@ -144,7 +144,8 @@ enum DocumentSectioner {
       }
     }
     walk(root, depth: 0)
-    // 按页码排序去重（书签乱序/重复页防御）
-    return result.sorted { $0.1 < $1.1 }
+    // 按页码排序去重（书签乱序/重复页防御）：同页重复书签会产出空节与重复正文
+    var seenPages: Set<Int> = []
+    return result.sorted { $0.1 < $1.1 }.filter { seenPages.insert($0.1).inserted }
   }
 }

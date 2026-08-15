@@ -11,11 +11,20 @@ final class InMemoryAIKeyStorage: AIKeyStorage {
 
   func exists(for account: String) -> Bool { map[account] != nil }
 
-  func set(_ value: String?, for account: String) {
+  @discardableResult
+  func set(_ value: String?, for account: String) -> Bool {
     guard let value, !value.isEmpty else {
       map.removeValue(forKey: account)
-      return
+      return true
     }
     map[account] = value
+    return true
   }
+}
+
+/// 写入恒失败的 Key 存储（回归：Keychain 拒绝时不得把 account 标成「已配置」）
+final class FailingAIKeyStorage: AIKeyStorage {
+  func string(for account: String) -> String? { nil }
+  func exists(for account: String) -> Bool { false }
+  func set(_ value: String?, for account: String) -> Bool { false }
 }

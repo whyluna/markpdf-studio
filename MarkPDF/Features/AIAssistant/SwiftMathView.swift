@@ -8,8 +8,20 @@ import SwiftMath
 /// 行内：渲染为 2x 位图内联进 Text 流（随文字换行，参与原生选区）。
 @MainActor
 enum SwiftMathRenderer {
-  /// 行内位图缓存（key = 字号|latex）
+  /// 行内位图缓存（key = 字号|latex）；FIFO 上限——key 含完整 LaTeX 串，
+  /// 长会话不同公式持续累积 2x RGBA 位图，无逐出会单调增长
   private static var imageCache: [String: (image: NSImage, size: CGSize)] = [:]
+  private static var imageCacheOrder: [String] = []
+  private static let imageCacheCap = 200
+
+  private static func cacheImage(_ entry: (image: NSImage, size: CGSize), for key: String) {
+    if imageCache[key] == nil { imageCacheOrder.append(key) }
+    imageCache[key] = entry
+    while imageCacheOrder.count > imageCacheCap, let oldest = imageCacheOrder.first {
+      imageCacheOrder.removeFirst()
+      imageCache[oldest] = nil
+    }
+  }
 
   /// 同步量取排版尺寸（无 JS、无异步——滚动稳定的关键）。
   /// 用 sizeThatFits 无限宽度量取自然尺寸：MTMathUILabel 会按当前帧宽自动换行，
@@ -60,7 +72,7 @@ enum SwiftMathRenderer {
     NSGraphicsContext.restoreGraphicsState()
     let image = NSImage(size: size)
     image.addRepresentation(rep)
-    imageCache[key] = (image, size)
+    cacheImage((image, size), for: key)
     return (image, size)
   }
 

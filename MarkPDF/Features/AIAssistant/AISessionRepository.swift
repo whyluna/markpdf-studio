@@ -138,6 +138,11 @@ final class AISessionRepository: ObservableObject {
       let key = Self.migratedKey(for: session.docPath, root: root)
       guard !key.isEmpty else { continue }
       if let existing = sessions[key] {
+        // 幂等：归档失败时进程内已合并过，下次启动会对同一旧文件再迁移一遍——
+        // 内容完全相同的线程跳过合并，否则 merge 直接拼接导致消息逐次翻倍
+        if existing.messages == session.messages, existing.updatedAt == session.updatedAt {
+          continue
+        }
         sessions[key] = Self.merge(existing, session, key: key)
       } else {
         var stored = session
@@ -155,7 +160,9 @@ final class AISessionRepository: ObservableObject {
       Logger.ai.error("旧会话文件归档失败: \(String(describing: error), privacy: .public)")
     }
     Logger.ai.info("AI 会话迁移完成: \(legacy.count) 条线程并入全局存储")
-    schedulePersist()
+    // 立即落盘而非防抖：归档成功后若进程在防抖窗口内崩溃，
+    // 旧文件已改名永不再读、全局文件又没写入——这些线程会从 UI 无声消失
+    persist()
   }
 
   /// 旧键（相对工作区根 / nil 通用线程）→ 新键（绝对路径 / 工作区根路径）

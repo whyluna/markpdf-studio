@@ -1,3 +1,4 @@
+import PDFKit
 import XCTest
 @testable import MarkPDF
 
@@ -125,6 +126,29 @@ final class DocumentSectionerTests: XCTestCase {
     XCTAssertFalse(cache.isCached(note))
     XCTAssertEqual(cache.sections(for: note, compute: compute)?.first?.title, "乙")
     XCTAssertEqual(computeCount, 2)
+  }
+
+  /// 同页重复书签去重：重复页不再产出空节/重复正文
+  func testPDFDuplicatePageBookmarksDeduped() {
+    let document = PDFDocument()
+    for _ in 0..<3 { document.insert(PDFPage(), at: document.pageCount) }
+    let root = PDFOutline()
+    let first = PDFOutline()
+    first.label = "第一章"
+    first.destination = PDFDestination(page: document.page(at: 0)!, at: NSPoint.zero)
+    let dup = PDFOutline()
+    dup.label = "第一章（重复）"
+    dup.destination = PDFDestination(page: document.page(at: 0)!, at: NSPoint.zero)
+    let second = PDFOutline()
+    second.label = "第二章"
+    second.destination = PDFDestination(page: document.page(at: 1)!, at: NSPoint.zero)
+    root.insertChild(first, at: 0)
+    root.insertChild(dup, at: 1)
+    root.insertChild(second, at: 2)
+    document.outlineRoot = root
+
+    let sections = DocumentSectioner.fromPDF(document)
+    XCTAssertEqual(sections.map(\.title), ["第一章", "第二章"], "同页书签去重")
   }
 
 }

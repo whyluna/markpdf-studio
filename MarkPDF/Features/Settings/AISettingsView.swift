@@ -70,6 +70,19 @@ struct AISettingsView: View {
     .padding()
     // 点击表单空白处退出文本框焦点（macOS 默认不主动 resign，光标会一直闪）
     .onTapGesture { focusedModelField = nil }
+    // 钥匙串写入失败（NFR-5：失败须用户可感知）
+    .alert("钥匙串", isPresented: keyErrorPresented) {
+      Button("好") { aiKeys.lastError = nil }
+    } message: {
+      Text(aiKeys.lastError ?? "")
+    }
+  }
+
+  private var keyErrorPresented: Binding<Bool> {
+    Binding(
+      get: { aiKeys.lastError != nil },
+      set: { if !$0 { aiKeys.lastError = nil } }
+    )
   }
 
   // MARK: - Provider 行
@@ -87,8 +100,10 @@ struct AISettingsView: View {
         Button("保存") {
           let key = keyDrafts[kind.rawValue] ?? ""
           guard !key.isEmpty else { return }
-          aiKeys.save(key, for: kind.rawValue)
-          keyDrafts[kind.rawValue] = ""
+          // 写入失败（锁屏等）保留草稿不清空，错误经 aiKeys.lastError 弹窗
+          if aiKeys.save(key, for: kind.rawValue) {
+            keyDrafts[kind.rawValue] = ""
+          }
         }
         .disabled((keyDrafts[kind.rawValue] ?? "").isEmpty)
         if aiKeys.configuredAccounts.contains(kind.rawValue) {
@@ -253,9 +268,11 @@ struct AISettingsView: View {
       set: { newValue in
         aiSettings.updateConfig(kind) { config in
           guard let index = config.modelSpecs.firstIndex(where: { $0.id == specID }) else { return }
+          let wasEmptyName = config.modelSpecs[index].name.isEmpty
           config.modelSpecs[index][keyPath: keyPath] = newValue
-          // 名称首次填写时按模型名预填建议窗口（用户可再改）
-          if keyPath == \.name, config.modelSpecs[index].contextTokens == AIModelContext.conservativeTokens {
+          // 仅首次填写名称时按模型名预填建议窗口：「等于保守值」区分不了
+          // 用户刻意手填的 32000，改名不得悄悄改写用户设过的窗口
+          if keyPath == \.name, wasEmptyName, config.modelSpecs[index].contextTokens == AIModelContext.conservativeTokens {
             config.modelSpecs[index].contextTokens = AIModelContext.suggestedTokens(forModel: newValue)
           }
         }

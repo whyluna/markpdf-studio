@@ -992,4 +992,115 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertTrue(store.messages.isEmpty)
     XCTAssertEqual(store.phase, .idle)
   }
+
+  /// 流式途中切换工作区：必须走完整收尾（finalize + phase 复位），
+  /// 否则面板永久卡「回答中」、send 被 phase 守卫永远拦截
+  func testWorkspaceChangeDuringStreamingResetsPhase() async {
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("部分"))
+        // 不 finish：模拟长回复途中
+      }
+    })
+    let store = makeStore(transport: transport)
+    store.send("长问题")
+    _ = await waitUntil { store.messages.last?.content.isEmpty == false }
+
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("WSChange-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    store.workspaceDidChange(root: root)
+
+    XCTAssertEqual(store.phase, .idle, "切换工作区后不得停留在 streaming")
+    XCTAssertTrue(
+      store.messages.allSatisfy { !$0.isStreaming },
+      "任何消息都不得停在流式态（新线程为空也满足）")
+
+    // 发送不被拦截（守卫 phase != .streaming 已解开）：新线程出现该问题的 user 消息
+    store.send("新问题")
+    let sent = await waitUntil { store.messages.contains { $0.role == .user && $0.promptQuestion == "新问题" } }
+    XCTAssertTrue(sent, "切换后应能继续发送")
+  }
+
+  /// 工具执行期间取消：不得再发起新一轮 HTTP 请求（detached 工具不受取消传播，
+  /// 返回后必须补查，否则取消语义不即时还白耗一次配额）
+  func testCancelDuringToolExecutionSendsNoExtraRequest() async throws {
+    let workspace = try makeWorkspace()
+    defer { try? FileManager.default.removeItem(at: workspace.root) }
+
+    var requestCount = 0
+    // mock 每轮都回工具调用：取消闸缺失时循环会不停发新请求（计数持续增长）
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      requestCount += 1
+      return AsyncThrowingStream { continuation in
+        for chunk in self.sseToolCallTurn { continuation.yield(chunk) }
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport) { settings in
+      settings.update { $0.contextIncludeWorkspace = true }
+    }
+    store.contextSources.workspaceFiles = { (root: workspace.root, files: workspace.files) }
+
+    store.send("工作区里有哪些笔记")
+    // 等循环跑起来（已发过多轮请求）后取消：detached 工具返回后必须停，不得再发请求
+    let cycling = await waitUntil { requestCount >= 2 }
+    XCTAssertTrue(cycling)
+    store.cancel()
+    let frozen = requestCount
+    try? await Task.sleep(nanoseconds: 400_000_000)
+    XCTAssertEqual(requestCount, frozen, "取消后不得再发起新一轮请求")
+    XCTAssertEqual(store.phase, .idle)
+  }
+
+  /// 改名撞上已有会话的文件：内存线程表与仓库合并结果不被 persistNow 盲写覆盖
+  func testRekeyMergesWithRepositoryOnlySession() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("RekeyMerge-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fileA = root.appendingPathComponent("a.md")
+    let fileB = root.appendingPathComponent("b.md")
+    try "a".write(to: fileA, atomically: true, encoding: .utf8)
+    try "b".write(to: fileB, atomically: true, encoding: .utf8)
+
+    let repository = makeRepository()
+    // b.md 在仓库里有旧会话（本窗内存未缓存）
+    let older = AISessionStore.StoredSession(
+      docPath: AIChatStore.threadKey(for: fileB),
+      messages: [
+        AISessionStore.StoredMessage(
+          role: "user", content: "b 的旧问题", contextSummary: nil, promptQuestion: "b 的旧问题", wasCancelled: nil
+        )
+      ],
+      updatedAt: Date(timeIntervalSince1970: 1000)
+    )
+    repository.update(older, for: AIChatStore.threadKey(for: fileB))
+    repository.flush()
+
+    // 当前线程绑定 a.md 并产生一条消息
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport, repository: repository)
+    store.workspaceDidChange(root: root)
+    store.bindDocument(fileA)
+    store.send("a 的问题")
+    _ = await waitUntil { store.messages.count == 2 && store.phase == .idle }
+
+    // 应用内改名 a.md → b.md（撞上已有会话的文件）
+    store.rekeySessions(from: fileA, to: fileB)
+    store.flush()
+
+    // 仓库里 b.md 的会话必须是合并结果（b 旧消息在前），而非被 a 的单侧副本覆盖
+    let merged = repository.session(for: AIChatStore.threadKey(for: fileB))
+    XCTAssertEqual(
+      merged?.messages.map(\.content),
+      ["b 的旧问题", "a 的问题", "答"],
+      "改名冲突：目标文件的原有会话不得丢失")
+  }
 }

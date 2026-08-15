@@ -97,4 +97,34 @@ final class AISessionRekeyTests: XCTestCase {
       "旧键已不存在：第二次调用 no-op（多窗口重复触发无副作用）"
     )
   }
+  /// 迁移幂等：归档失败导致下次启动对同一旧文件再迁移时，
+  /// 内容完全相同的线程不得重复合并（否则消息逐次翻倍）
+  @MainActor
+  func testMigrationIsIdempotentWhenArchiveFailed() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("MigrateIdem-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    // 旧格式工作区存储（相对键）
+    try AISessionStore.save([seed("a.md", texts: ["旧问题"], updatedAt: Date(timeIntervalSince1970: 1000))], workspaceRoot: root)
+
+    let first = makeRepository()
+    first.migrateWorkspaceStoreIfNeeded(root: root)
+    let key = root.standardizedFileURL.resolvingSymlinksInPath()
+      .appendingPathComponent("a.md").path
+    XCTAssertEqual(first.session(for: key)?.messages.count, 1)
+
+    // 模拟归档失败后的下次启动：旧文件仍在（重新造一份），全局存储已有迁移结果
+    try AISessionStore.save([seed("a.md", texts: ["旧问题"], updatedAt: Date(timeIntervalSince1970: 1000))], workspaceRoot: root)
+    let second = makeRepository()
+    second.migrateWorkspaceStoreIfNeeded(root: root)
+    XCTAssertEqual(
+      second.session(for: key)?.messages.count, 1,
+      "重复迁移同内容线程不得翻倍")
+
+    // 归档成功即落盘（防抖窗口崩溃不丢）：全局文件当下就含迁移线程
+    let onDisk = try AISessionStore.loadGlobal()
+    XCTAssertTrue(onDisk.contains { $0.docPath == key }, "迁移后应立即落盘")
+  }
+
 }

@@ -87,7 +87,8 @@ final class AIProviderTests: XCTestCase {
     // v1.3：assistant 编码为内容块数组（text 块），user 仍为字符串
     let assistantBlocks = messages?[1]["content"] as? [[String: Any]]
     XCTAssertEqual(assistantBlocks?.first?["text"] as? String, "译文")
-    XCTAssertEqual(messages?.first?["content"] as? String, "第一段")
+    let userBlocks = messages?.first?["content"] as? [[String: Any]]
+    XCTAssertEqual(userBlocks?.first?["text"] as? String, "第一段", "user 编码为内容块数组（连续同角色合并的统一形态）")
   }
 
   /// 无 system 消息时 body 不携带 system 字段
@@ -97,6 +98,38 @@ final class AIProviderTests: XCTestCase {
     )
     let body = try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any]
     XCTAssertNil(body?["system"])
+  }
+
+  /// Anthropic 严格角色交替：连续 user 消息必须合并为一轮，否则 400
+  ///（历史压缩/摘要注入/会话恢复任何一处都可能产生连续 user）
+  func testAnthropicMergesConsecutiveUserTurns() throws {
+    let request = try AIRequestBuilder.chatRequest(
+      family: .anthropic,
+      config: anthropicConfig,
+      apiKey: "k",
+      model: "m",
+      messages: [
+        .user("第一条"),
+        .user("第二条"),
+        .assistant("答"),
+        .user("第三条"),
+        .toolResult(id: "call_1", content: "结果"),
+        .assistant("终答"),
+      ],
+      stream: false
+    )
+    let body = try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any]
+    let messages = try XCTUnwrap(body?["messages"] as? [[String: Any]])
+    let roles = messages.compactMap { $0["role"] as? String }
+    XCTAssertEqual(roles, ["user", "assistant", "user", "assistant"], "连续同角色轮已合并")
+    // 合并后的首轮含两段文本块
+    let firstBlocks = try XCTUnwrap(messages[0]["content"] as? [[String: Any]])
+    XCTAssertEqual(firstBlocks.count, 2)
+    XCTAssertEqual(firstBlocks[0]["text"] as? String, "第一条")
+    XCTAssertEqual(firstBlocks[1]["text"] as? String, "第二条")
+    // tool_result 并入上一个 user 轮尾部
+    let thirdBlocks = try XCTUnwrap(messages[2]["content"] as? [[String: Any]])
+    XCTAssertEqual(thirdBlocks.last?["type"] as? String, "tool_result")
   }
 
   func testInvalidBaseURLThrows() {

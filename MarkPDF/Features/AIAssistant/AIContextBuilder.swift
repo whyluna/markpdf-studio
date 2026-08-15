@@ -136,7 +136,13 @@ enum AIContextBuilder {
     charBudget: Int
   ) -> [AIChatMessage] {
     let recent = trimHistory(messages)
-    let kept = splitForPreservation(recent, preserveChars: charBudget).preserved
+    // 保留区口径与压缩侧一致（preserveRecentChars = 预算 70%）：若按全额预算保留再叠 30%
+    // 摘要，历史区总量会到预算的 130%——有摘要时保留区只能用 70%，无摘要才用全额
+    let hasSummary = rollingSummary?.isEmpty == false
+    let preserveBudget = hasSummary
+      ? charBudget * 7 / 10
+      : charBudget
+    let kept = splitForPreservation(recent, preserveChars: preserveBudget).preserved
     guard let rollingSummary, !rollingSummary.isEmpty else { return kept }
     let summaryCap = charBudget * summaryInjectionRatio.numerator / summaryInjectionRatio.denominator
     let clipped = rollingSummary.count > summaryCap

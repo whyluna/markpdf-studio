@@ -67,4 +67,14 @@ final class AIKeyStoreTests: XCTestCase {
     let store = AIKeyStore(storage: storage)
     XCTAssertTrue(store.configuredAccounts.contains(AIProviderKind.qwen.rawValue))
   }
+
+  /// 钥匙串写入失败（锁屏等）：不得把 account 标成「已配置」，且须上报错误（NFR-5）
+  @MainActor
+  func testFailedSaveNotMarkedConfigured() {
+    let store = AIKeyStore(storage: FailingAIKeyStorage())
+    let ok = store.save("sk-1", for: "deepseek")
+    XCTAssertFalse(ok)
+    XCTAssertFalse(store.configuredAccounts.contains("deepseek"), "写入失败不得显示已配置")
+    XCTAssertNotNil(store.lastError, "失败须用户可感知")
+  }
 }

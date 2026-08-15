@@ -38,6 +38,14 @@ final class TranslationStore: ObservableObject {
   private var systemSession: TranslationSession?
   /// systemSession 对应的语言对（对不上才重新走 Configuration 通道）
   private var systemSessionPair: (source: AITargetLanguage, target: AITargetLanguage)?
+  /// 最近一次经 Configuration 通道请求的语言对（Locale 级）。
+  /// 语言对切换后旧配置的 `.translationTask` 回调可能迟到——视图把触发时的
+  /// Configuration 一并回传，对不上即忽略（否则旧语言对 session 被挂到新语言对
+  /// 名下缓存，此后同语言对全走复用，译文语言持续错误）
+  private var expectedConfigurationPair: (Locale.Language, Locale.Language)?
+  /// 在途翻译的去重键（引擎|源|目标）：同文本同参数重复触发才拦，
+  /// 用户改了目标语言/引擎后对同一段文本重试必须放行
+  private var inflightTranslationKey: String?
   /// 兜底看门狗：系统预检静默失败时（回调永不到达）不让气泡永转
   private var watchdog: Task<Void, Never>?
   private let settings: AISettingsStore
@@ -69,6 +77,7 @@ final class TranslationStore: ObservableObject {
   func presentFailure(_ message: String, for text: String) {
     sourceText = text
     engineTitle = ""
+    wasTruncated = false
     phase = .failure(message)
   }
 
@@ -76,22 +85,27 @@ final class TranslationStore: ObservableObject {
     // PDF 物理行整理成整句（断词相连、换行并空格）：译文质量与排版都受益
     let trimmed = TranslationTextNormalizer.normalize(text)
     guard !trimmed.isEmpty else { return }
-    // 同文本翻译途中不重复触发
-    if case .translating = phase, sourceText == trimmed { return }
-    sourceText = trimmed
-    phase = .translating
-    armWatchdog(for: trimmed)
     let source = TranslationLanguageResolver.detectSource(trimmed)
+    let engine = settings.settings.translationEngine
     guard let target = TranslationLanguageResolver.resolveTarget(
       source: source,
       setting: settings.settings.targetLanguage
     ) else {
       // 原文已是目标语言
+      sourceText = trimmed
+      wasTruncated = false
       phase = .success(trimmed)
       engineTitle = String(localized: "无需翻译")
       return
     }
-    switch settings.settings.translationEngine {
+    // 同文本同参数翻译途中不重复触发；改了目标语言/引擎后的同文本重试放行
+    let translationKey = "\(engine)|\(source)|\(target)"
+    if case .translating = phase, sourceText == trimmed, inflightTranslationKey == translationKey { return }
+    inflightTranslationKey = translationKey
+    sourceText = trimmed
+    phase = .translating
+    armWatchdog(for: trimmed)
+    switch engine {
     case .system:
       // 系统翻译端侧处理，无需截断
       wasTruncated = false
@@ -129,6 +143,7 @@ final class TranslationStore: ObservableObject {
     // 首次或语言对变化：弃旧 session，走 Configuration 通道取新 session
     systemSession = nil
     systemSessionPair = pair
+    expectedConfigurationPair = (source.localeLanguage, target.localeLanguage)
     let configuration = TranslationSession.Configuration(
       source: source.localeLanguage,
       target: target.localeLanguage
@@ -148,7 +163,25 @@ final class TranslationStore: ObservableObject {
     }
   }
 
-  /// `.translationTask` 回调（或同语言对复用）里调用：执行系统翻译并写回状态
+  /// `.translationTask` 回调入口（不可信来源）：仅接受与当前请求语言对一致的会话——
+  /// 语言对切换后旧配置的回调可能迟到，不校验会把旧语言对 session 挂到新语言对名下
+  func performSystemTranslation(using session: TranslationSession, configuration: TranslationSession.Configuration?) async {
+    guard let expected = expectedConfigurationPair else {
+      Logger.ai.debug("[TR\(self.instanceID)] 非请求期到达的系统会话回调，忽略")
+      return
+    }
+    guard let configuration,
+      configuration.source == expected.0,
+      configuration.target == expected.1
+    else {
+      Logger.ai.debug("[TR\(self.instanceID)] 语言对错配的系统会话回调（旧配置迟到），忽略")
+      return
+    }
+    expectedConfigurationPair = nil
+    await performSystemTranslation(using: session)
+  }
+
+  /// 同语言对复用（可信来源：session 出自本 Store 缓存）与回调校验后共用：执行系统翻译并写回状态
   func performSystemTranslation(using session: TranslationSession) async {
     // 捕获 session 供同语言对的后续翻译直接复用（pair 在 startSystemTranslation 已记录）
     systemSession = session

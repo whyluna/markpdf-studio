@@ -14,8 +14,6 @@ enum AIToolCallAccumulator {
     private var slots: [Int: Slot] = [:]
     private var lastIndex = 0
 
-    var isEmpty: Bool { slots.isEmpty }
-
     mutating func ingest(_ deltas: [AIChunkDecoder.OpenAIToolCallDelta]) {
       for delta in deltas {
         let index = delta.index ?? lastIndex
@@ -50,8 +48,6 @@ enum AIToolCallAccumulator {
       var partialJSON: String = ""
     }
     private var slots: [Int: Slot] = [:]
-
-    var isEmpty: Bool { slots.isEmpty }
 
     mutating func blockStart(index: Int, id: String, name: String) {
       slots[index] = Slot(id: id, name: name)

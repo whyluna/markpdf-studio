@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Security
 
 /// API Key 存储抽象（FR-AI.4）：生产走系统钥匙串，测试走内存
@@ -6,8 +7,8 @@ protocol AIKeyStorage {
   func string(for account: String) -> String?
   /// 是否已存有该条（不读明文——启动检查用，见 KeychainAIKeyStorage.exists）
   func exists(for account: String) -> Bool
-  /// value 为 nil 或空串时删除该条
-  func set(_ value: String?, for account: String)
+  /// value 为 nil 或空串时删除该条；返回是否写入成功（锁屏等场景 Keychain 会拒绝）
+  @discardableResult func set(_ value: String?, for account: String) -> Bool
 }
 
 /// Keychain 实现：generic password，service 固定、account = Provider rawValue。
@@ -43,7 +44,8 @@ struct KeychainAIKeyStorage: AIKeyStorage {
     return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
   }
 
-  func set(_ value: String?, for account: String) {
+  @discardableResult
+  func set(_ value: String?, for account: String) -> Bool {
     let base: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
@@ -51,15 +53,27 @@ struct KeychainAIKeyStorage: AIKeyStorage {
     ]
     guard let value, !value.isEmpty else {
       SecItemDelete(base as CFDictionary)
-      return
+      return true
     }
     let data = Data(value.utf8)
     let status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
     if status == errSecItemNotFound {
       var item = base
       item[kSecValueData as String] = data
-      SecItemAdd(item as CFDictionary, nil)
+      let addStatus = SecItemAdd(item as CFDictionary, nil)
+      guard addStatus == errSecSuccess else {
+        Logger.ai.error("API Key 写入钥匙串失败（add）: \(addStatus)")
+        return false
+      }
+      return true
     }
+    // notFound 以外的错误（锁屏 errSecInteractionNotAllowed 等）不得静默吞：
+    // 否则上层把 account 标成「已配置」，请求时取不出 Key，用户看到矛盾的「未配置」
+    guard status == errSecSuccess else {
+      Logger.ai.error("API Key 写入钥匙串失败（update）: \(status)")
+      return false
+    }
+    return true
   }
 }
 
@@ -83,17 +97,25 @@ final class AIKeyStore: ObservableObject {
     storage.string(for: account)
   }
 
-  func save(_ key: String, for account: String) {
+  /// 钥匙串写入失败提示（设置页据此弹 alert；NFR-5：失败须用户可感知）
+  @Published var lastError: String?
+
+  @discardableResult
+  func save(_ key: String, for account: String) -> Bool {
     // 粘贴自网页/密码管理器的 key 常带换行或空格：CFNetwork 会静默丢弃含 \n 的
     // 头值（请求不带鉴权发出、全线 401 且极难排查），保存前清洗
     let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-    storage.set(trimmed, for: account)
+    guard storage.set(trimmed, for: account) else {
+      lastError = String(localized: "API Key 未能写入系统钥匙串（可能处于锁屏状态），请解锁后重试。")
+      return false
+    }
     // 空串在存储层视为删除，状态集合同步口径
     if trimmed.isEmpty {
       configuredAccounts.remove(account)
     } else {
       configuredAccounts.insert(account)
     }
+    return true
   }
 
   func remove(for account: String) {

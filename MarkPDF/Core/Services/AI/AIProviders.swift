@@ -127,6 +127,18 @@ enum AIRequestBuilder {
     // system 为顶层字段而非消息；多段 system 合并
     let system = messages.filter { $0.role == .system }.map(\.content).joined(separator: "\n\n")
     var turns: [[String: Any]] = []
+    // Anthropic 严格角色交替校验：连续同角色轮必须合并，否则 400。
+    //（历史压缩/摘要注入/会话恢复任何一处产生连续 user/assistant 都可能踩中）
+    func appendTurn(role: String, blocks: [[String: Any]]) {
+      if var last = turns.last, last["role"] as? String == role,
+        var content = last["content"] as? [[String: Any]] {
+        content.append(contentsOf: blocks)
+        last["content"] = content
+        turns[turns.count - 1] = last
+      } else {
+        turns.append(["role": role, "content": blocks])
+      }
+    }
     for message in messages where message.role != .system {
       switch message.role {
       case .assistant:
@@ -137,7 +149,7 @@ enum AIRequestBuilder {
         for call in message.toolCalls ?? [] {
           blocks.append(["type": "tool_use", "id": call.id, "name": call.name, "input": argumentsObject(call.arguments)])
         }
-        turns.append(["role": "assistant", "content": blocks.isEmpty ? [["type": "text", "text": ""]] : blocks])
+        appendTurn(role: "assistant", blocks: blocks.isEmpty ? [["type": "text", "text": ""]] : blocks)
       case .tool:
         // 工具结果进 user 消息的 tool_result 块；连续多个结果合并进同一 user 消息（交替校验）
         let block: [String: Any] = [
@@ -152,10 +164,10 @@ enum AIRequestBuilder {
           last["content"] = content
           turns[turns.count - 1] = last
         } else {
-          turns.append(["role": "user", "content": [block]])
+          appendTurn(role: "user", blocks: [block])
         }
       default:
-        turns.append(["role": "user", "content": message.content])
+        appendTurn(role: "user", blocks: [["type": "text", "text": message.content]])
       }
     }
     var payload: [String: Any] = [
@@ -283,7 +295,12 @@ enum AIChunkDecoder {
     if let error = try? JSONDecoder().decode(OpenAIErrorPayload.self, from: data) {
       throw AIServiceError.provider(error.error.message)
     }
-    let chunk = try JSONDecoder().decode(OpenAIChunk.self, from: data)
+    let chunk: OpenAIChunk
+    do {
+      chunk = try JSONDecoder().decode(OpenAIChunk.self, from: data)
+    } catch {
+      throw AIServiceError.invalidResponse
+    }
     guard let choice = chunk.choices.first else { return OpenAIOutcome() }
     var outcome = OpenAIOutcome()
     outcome.text = choice.delta?.content
@@ -309,7 +326,13 @@ enum AIChunkDecoder {
       else { return .ignored }
       return .toolUseStart(index: parsed.index ?? 0, id: id, name: name)
     case "content_block_delta":
-      let parsed = try JSONDecoder().decode(AnthropicContentBlockDelta.self, from: data)
+      // 与非流式路径同口径：解码失败统一映射 invalidResponse（不把英文 DecodingError 详情抛给 UI）
+      let parsed: AnthropicContentBlockDelta
+      do {
+        parsed = try JSONDecoder().decode(AnthropicContentBlockDelta.self, from: data)
+      } catch {
+        throw AIServiceError.invalidResponse
+      }
       if parsed.delta.type == "input_json_delta" {
         return .inputJSONDelta(index: parsed.index ?? 0, partial: parsed.delta.partial_json ?? "")
       }

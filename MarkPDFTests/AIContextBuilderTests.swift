@@ -285,4 +285,24 @@ final class AIContextBuilderTests: XCTestCase {
   func testConsecutiveEmptyFence() {
     XCTAssertEqual(MarkdownBlockSegmenter.segments("```\n```"), [.code(language: nil, code: "")])
   }
+  /// 有摘要时保留区按 70% 预算（压缩侧同口径）：全额保留 + 30% 摘要会把历史区撑到 130%
+  func testHistoryMessagesPreserveBudgetAccountsForSummary() {
+    // 5 轮各 50 字（user+assistant 各 25）
+    var messages: [AIChatMessage] = []
+    for _ in 0..<5 {
+      messages.append(.user(String(repeating: "问", count: 25)))
+      messages.append(.assistant(String(repeating: "答", count: 25)))
+    }
+    let budget = 200
+    let withSummary = AIContextBuilder.historyMessages(messages, rollingSummary: "摘要", charBudget: budget)
+    // 保留区上限 = 200 × 70% = 140 → 容得下两轮（100 字），三轮 150 字超 140
+    let preservedChars = withSummary.dropFirst(2).reduce(0) { $0 + $1.content.count }
+    XCTAssertLessThanOrEqual(preservedChars, 140, "有摘要时保留区不得超预算 70%")
+    XCTAssertEqual(withSummary.first?.role, .user, "摘要注入在首条")
+    let withoutSummary = AIContextBuilder.historyMessages(messages, rollingSummary: nil, charBudget: budget)
+    let keptChars = withoutSummary.reduce(0) { $0 + $1.content.count }
+    XCTAssertLessThanOrEqual(keptChars, budget, "无摘要按全额预算")
+    XCTAssertGreaterThan(keptChars, preservedChars, "无摘要保留区应大于有摘要场景")
+  }
+
 }

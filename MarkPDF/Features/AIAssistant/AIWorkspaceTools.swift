@@ -140,7 +140,7 @@ enum AIWorkspaceTools {
       let relative = path.hasPrefix(rootPath + "/") ? String(path.dropFirst(rootPath.count + 1)) : url.lastPathComponent
       let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
       let kind = FileNode.kind(for: url, isDirectory: false) == .pdf ? "pdf" : "md"
-      return "\(relative) (\(kind), \((size ?? 0) / 1024) KB)"
+      return "\(relative) (\(kind), \(size / 1024) KB)"
     }
     let more = files.count > listCap ? "\n…and \(files.count - listCap) more" : ""
     return lines.isEmpty ? "The workspace has no Markdown/PDF documents." : lines.joined(separator: "\n") + more
