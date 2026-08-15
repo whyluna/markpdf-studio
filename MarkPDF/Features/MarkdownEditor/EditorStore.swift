@@ -40,12 +40,64 @@ final class EditorStore: ObservableObject {
   @Published private(set) var pendingKernelRequests: [KernelRequest] = []
 
   func enqueue(_ request: KernelRequest) {
-    pendingKernelRequests.append(request)
+    // 回调型请求包一次性外壳：视图派发、拆除兜底等多路径可能并发触发同一回调
+    switch request {
+    case .insertAtCursor:
+      pendingKernelRequests.append(request)
+    case .replaceSelection(let text, let completion):
+      let box = OneShotCallback(completion)
+      pendingKernelRequests.append(.replaceSelection(text, box.fire))
+    case .fetchSelection(let completion):
+      let box = OneShotCallback(completion)
+      pendingKernelRequests.append(.fetchSelection(box.fire))
+    }
+  }
+
+  /// 一次性回调外壳（主线程约定：入队/派发/兜底全在主线程串行，无需锁）
+  private final class OneShotCallback<T> {
+    private var fired = false
+    private let body: (T) -> Void
+    init(_ body: @escaping (T) -> Void) { self.body = body }
+    func fire(_ value: T) {
+      guard !fired else { return }
+      fired = true
+      body(value)
+    }
+  }
+
+  /// 活体内核视图是否在消费命令队列（无活体时回调型请求若照常入队永不被消费，
+  /// 调用方（AI 上下文采集/替换选区）会永久悬挂——据此前端兜底立即失败回调）
+  private(set) var kernelConsumerAlive = false
+
+  /// 内核视图挂载/拆除上报（MarkdownEditorView make/dismantle 经视图回调传到这里）
+  func setKernelConsumerAlive(_ alive: Bool) {
+    kernelConsumerAlive = alive
+    guard !alive else { return }
+    // 异步清队列：dismantle 紧邻 SwiftUI 更新事务，避免在敏感窗口期写 @Published
+    DispatchQueue.main.async { [weak self] in
+      guard let self, !self.pendingKernelRequests.isEmpty else { return }
+      let pending = self.pendingKernelRequests
+      self.pendingKernelRequests = []
+      for request in pending {
+        switch request {
+        case .fetchSelection(let completion): completion(nil)
+        case .replaceSelection(_, let completion): completion(false)
+        case .insertAtCursor: break
+        }
+      }
+    }
   }
 
   /// 取当前选区（AI 助手上下文采集用）
   func fetchSelection(_ completion: @escaping (String?) -> Void) {
+    guard kernelConsumerAlive else { return completion(nil) }
     enqueue(.fetchSelection(completion))
+  }
+
+  /// 替换选区（AI 助手回复动作；空选区内核显式拒绝，回调 false）
+  func replaceSelection(_ text: String, completion: @escaping (Bool) -> Void) {
+    guard kernelConsumerAlive else { return completion(false) }
+    enqueue(.replaceSelection(text, completion))
   }
 
   /// MarkdownEditorView 消费队列后调用（异步清空，避免视图更新途中改 @Published）
@@ -140,6 +192,10 @@ final class EditorStore: ObservableObject {
     currentFileURL = newURL
     loadToken += 1
     let token = loadToken
+    // 挂起的自动保存立即取消：磁盘移动已完成，0.5s 防抖若在后台重读落地前触发，
+    // 会对已消失的旧路径误走「文件消失→转草稿」守卫
+    pendingSave?.cancel()
+    pendingSave = nil
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       guard let disk = try? String(contentsOf: newURL, encoding: .utf8) else { return }
       DispatchQueue.main.async { [weak self] in
@@ -149,6 +205,18 @@ final class EditorStore: ObservableObject {
         else { return }
         self.pendingSave?.cancel()
         self.pendingSave = nil
+        if self.hasUnsavedChanges {
+          // 用户有未落盘编辑（0.5s 防抖窗口内移动了文件）：内存为准，绝不用磁盘覆盖。
+          // 磁盘比上次落盘新是因为移动触发的相对图片链接修正（FR-2.5）——把同一修正
+          // 应用到内存文本（用户输入与链接修正都保住），随即落盘到新路径
+          self.text = MarkdownImageLinkRewriter.rewrite(
+            markdown: self.text,
+            fromOldDir: oldURL.deletingLastPathComponent(),
+            toNewDir: newURL.deletingLastPathComponent()
+          )
+          self.saveNowIfNeeded()
+          return
+        }
         self.lastPersistedText = disk
         self.text = disk
         self.hasUnsavedChanges = false
@@ -215,6 +283,14 @@ final class EditorStore: ObservableObject {
     guard hasUnsavedChanges, let url = currentFileURL else { return }
     let snapshot = text
     EditorStore.writeQueue.async { [weak self] in
+      // 落盘前目标已在磁盘上消失（废纸篓/外部改名移动/撤销新建）：
+      // 绝不在原路径复活文件——按废纸篓语义转草稿态，内容保留在编辑器
+      guard FileManager.default.fileExists(atPath: url.path) else {
+        DispatchQueue.main.async { [weak self] in
+          self?.fileWasTrashed(url)
+        }
+        return
+      }
       do {
         try snapshot.write(to: url, atomically: true, encoding: .utf8)
       } catch {

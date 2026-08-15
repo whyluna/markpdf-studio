@@ -39,10 +39,12 @@ final class WindowSession: ObservableObject, Identifiable {
     )
   }
 
-  /// 本窗口全部现场立即落盘（关窗/退出前）
+  /// 本窗口全部现场立即落盘（关窗/退出前）。
+  /// 标注写回仅在退出进程时阻塞等待（过后再无机会写）；普通关窗进程仍存活，
+  /// 后台串行队列会把提交跑完，sync 等在途长任务只会把卡顿搬回主线程
   func flush() {
     tabStore.flushAll()
-    annotationStore.flushPendingWrites()
+    annotationStore.flushPendingWrites(blocking: coordinator?.isTerminating ?? false)
     stateStore.flush()
     aiChatStore.flush()
   }
@@ -94,6 +96,11 @@ final class WindowSession: ObservableObject, Identifiable {
       let newPath = newURL.standardizedFileURL.path
       recentsStore?.rekey(from: oldPath, to: newPath)
       favoritesStore?.rekey(from: oldPath, to: newPath)
+    }
+    // Store 内路径的入废纸篓（撤销「新建」）：标签转草稿（含文件夹后代），
+    // 否则标签仍指向废纸篓路径，自动保存会在原路径把文件复活
+    workspaceStore.onFileTrashed = { [weak self] url in
+      self?.tabStore.fileWasTrashed(url)
     }
     // 工作区根被外部改名/移动（restoreWorkspace 书签解析发现）：外部存储一起平移
     stateStore.onWorkspaceRootMoved = { [weak self, weak recentsStore, weak favoritesStore] oldPath, newPath in

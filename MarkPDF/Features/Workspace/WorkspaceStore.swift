@@ -46,6 +46,9 @@ final class WorkspaceStore: ObservableObject {
   /// 在 WorkspaceStore 成功路径统一触发（含撤销/重做链），
   /// 避免撤销绕过视图层导致标签仍指向旧路径、自动保存重建出分叉文件。
   var onFileMoved: ((URL, URL) -> Void)?
+  /// 文件/文件夹被移入废纸篓回调（撤销「新建」等 Store 内路径触发；含文件夹后代）。
+  /// 视图层的删除菜单自行联动 TabStore.fileWasTrashed，不经过此钩（防重复通知）
+  var onFileTrashed: ((URL) -> Void)?
 
   /// 点击文件夹行：切换展开/收起
   func toggleFolderCollapsed(_ url: URL) {
@@ -265,14 +268,18 @@ final class WorkspaceStore: ObservableObject {
     }
   }
 
-  /// 移入系统废纸篓（可从废纸篓恢复；不注册 Cmd+Z，对齐 PRD 验收口径）
-  func trash(_ node: FileNode) {
+  /// 移入系统废纸篓（可从废纸篓恢复；不注册 Cmd+Z，对齐 PRD 验收口径）。
+  /// 返回是否成功——调用方据此决定标签联动（失败时文件仍在磁盘上，转草稿会丢未落盘编辑）
+  @discardableResult
+  func trash(_ node: FileNode) -> Bool {
     do {
       try ops.trash(at: node.id)
       if selection == node { selection = nil }
       refresh()
+      return true
     } catch {
       lastError = error.localizedDescription
+      return false
     }
   }
 
@@ -289,6 +296,9 @@ final class WorkspaceStore: ObservableObject {
   /// 「新建」的撤销 = 入废纸篓；并注册重做
   private func trashCreated(_ url: URL, isFolder: Bool, undo: UndoManager?) {
     try? ops.trash(at: url)
+    // 联动标签转草稿（含文件夹后代）：否则标签仍指向废纸篓路径，
+    // 下一次击键的自动保存会在原路径重建文件，撤销被静默抵销
+    onFileTrashed?(url)
     refresh()
     undo?.registerUndo(withTarget: self) { target in
       target.recreate(url, isFolder: isFolder, undo: undo)

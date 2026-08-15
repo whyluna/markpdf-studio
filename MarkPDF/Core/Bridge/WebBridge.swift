@@ -14,11 +14,13 @@ final class WebBridge: NSObject {
   enum BridgeError: LocalizedError {
     case timeout(String)
     case invalidBody
+    case detached
 
     var errorDescription: String? {
       switch self {
       case .timeout(let type): "桥接请求超时（3s）：\(type)"
       case .invalidBody: "桥接消息体格式非法"
+      case .detached: "桥接通道已拆除"
       }
     }
   }
@@ -30,6 +32,10 @@ final class WebBridge: NSObject {
 
   /// 绑定到指定 WKWebView，并注册脚本消息处理器
   func attach(to webView: WKWebView) {
+    // 重复 attach 到另一个 webView 时先从旧的摘除：否则旧 webView 的消息仍灌进本桥
+    if let old = self.webView, old !== webView {
+      old.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
+    }
     self.webView = webView
     webView.configuration.userContentController.add(self, name: Self.handlerName)
   }
@@ -37,6 +43,26 @@ final class WebBridge: NSObject {
   func detach() {
     webView?.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
     webView = nil
+    failAllPending()
+  }
+
+  deinit {
+    // 兜底清扫：bridge 先释放时超时器的 weak self 会失效，pending 的 completion
+    // 永不回调（调用方如 AI 选区采集表现为静默卡死）——拆除/释放必须统一失败回调
+    failAllPending()
+  }
+
+  /// 取消全部超时器并给挂起的请求统一失败回调（拆除/释放路径）
+  private func failAllPending() {
+    let timeouts = pendingTimeouts
+    pendingTimeouts.removeAll()
+    timeouts.values.forEach { $0.cancel() }
+    let callbacks = pending
+    pending.removeAll()
+    for (id, completion) in callbacks {
+      Logger.editor.debug("桥接拆除，挂起请求按失败回调: \(id, privacy: .public)")
+      completion(.failure(BridgeError.detached))
+    }
   }
 
   /// 注册 web → native 的消息处理器

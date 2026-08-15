@@ -378,9 +378,9 @@ struct AIAssistantPanelView: View {
       tabStore?.activeEditorStore?.enqueue(.insertAtCursor(text))
     }
     actions.replaceSelection = { [weak tabStore] text in
-      tabStore?.activeEditorStore?.enqueue(.replaceSelection(text) { replaced in
+      tabStore?.activeEditorStore?.replaceSelection(text) { replaced in
         if !replaced { showToast(String(localized: "编辑器中没有选中内容")) }
-      })
+      }
     }
     actions.canSaveNote = { [weak workspaceStore] in workspaceStore?.root != nil }
     actions.saveAsNote = { [weak workspaceStore, weak tabStore] text in

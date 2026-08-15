@@ -190,8 +190,7 @@ struct ContentView: View {
       }
   }
 
-  /// 右侧 detail 列的统一最小宽（缩略图/大纲/AI 助手同宽，切换不跳变）
-  static let detailPanelMinWidth: CGFloat = 300
+  /// 右侧 detail 列宽度约束见 inspectorColumnWidth（240/300/360，系统检查器托管）
 
   /// 右侧面板：AI 助手可见时整栏替代（FR-AI.2 替代式单栏）；
   /// 否则 pdf 标签 = 缩略图/书签/标注/引用（FR-3.3/5.4），其余 = 大纲（FR-2.6）+ 反向链接（FR-5.4）
@@ -240,7 +239,7 @@ struct ContentView: View {
   /// 导出当前 md 为 PDF / HTML（FR-2.9）
   private func exportMarkdown(_ format: MarkdownExportFlow.Format) {
     guard let store = tabStore.activeEditorStore else { return }
-    MarkdownExportFlow.run(format, store: store)
+    MarkdownExportFlow.run(format, store: store, workspaceRoot: workspaceStore.root?.id)
   }
 
   // MARK: - 命令面板（FR-6.3）

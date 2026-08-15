@@ -10,6 +10,7 @@ import os
 final class MarkdownExportSession {
   private let webView: WKWebView
   private let bridge = WebBridge()
+  private let schemeHandler = LocalFileSchemeHandler()
   private var readyAction: (() -> Void)?
 
   /// 存活池：会话完成后必须 release（bridge handler 闭包自引用，需显式断链）
@@ -19,7 +20,7 @@ final class MarkdownExportSession {
     let configuration = WKWebViewConfiguration()
     // 内核为本地静态资源，非持久数据存储（与主编辑器一致）
     configuration.websiteDataStore = .nonPersistent()
-    configuration.setURLSchemeHandler(LocalFileSchemeHandler(), forURLScheme: LocalFileSchemeHandler.scheme)
+    configuration.setURLSchemeHandler(schemeHandler, forURLScheme: LocalFileSchemeHandler.scheme)
     webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700), configuration: configuration)
     bridge.attach(to: webView)
   }
@@ -36,6 +37,8 @@ final class MarkdownExportSession {
     }
     guard let pageURL = Bundle.main.url(forResource: "index", withExtension: "html") else {
       Logger.editor.fault("缺少内核页面 index.html")
+      // 快速失败：否则 ready 永不发出，只能靠看门狗 5s 后兜底
+      finish(html: nil, title: nil)
       return
     }
     var appPage = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)
@@ -50,8 +53,21 @@ final class MarkdownExportSession {
   ///   - text: Markdown 全文（EditorStore 已同步）
   ///   - baseURL: 文档所在目录（图片相对路径解析）
   ///   - completion: (html, title)；失败为 (nil, nil)
-  func exportHTML(text: String, baseURL: URL?, completion: @escaping (String?, String?) -> Void) {
+  func exportHTML(text: String, baseURL: URL?, workspaceRoot: URL? = nil, completion: @escaping (String?, String?) -> Void) {
     Self.retain(self)
+    completionHandler = completion
+    // 与主编辑器同口径的路径围栏（工作区根 / 文档目录内可读）
+    schemeHandler.allowedRoots = {
+      [workspaceRoot, baseURL].compactMap { $0 }
+    }
+    // 就绪看门狗：内核页面缺失/加载失败/JS 异常导致 ready 永不发出时，
+    // completion 永不被调且会话永久滞留存活池（连同 webView 一并泄漏）——
+    // 5s 兜底按失败完成并释放（bridge 的 3s 超时只保护 ready 之后的阶段）
+    let watchdog = DispatchWorkItem { [weak self] in
+      self?.finish(html: nil, title: nil)
+    }
+    readyWatchdog = watchdog
+    DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: watchdog)
     start { [weak self] in
       guard let self else { return }
       var payload: [String: Any] = ["text": text]
@@ -65,11 +81,10 @@ final class MarkdownExportSession {
         guard let self else { return }
         bridge.request(.exportHTML) { [weak self] result in
           guard let self else { return }
-          defer { Self.release(self) }
           if case .success(let payload) = result, let html = payload["html"] as? String, !html.isEmpty {
-            completion(html, payload["title"] as? String)
+            self.finish(html: html, title: payload["title"] as? String)
           } else {
-            completion(nil, nil)
+            self.finish(html: nil, title: nil)
           }
         }
       }
@@ -77,6 +92,21 @@ final class MarkdownExportSession {
   }
 
   // MARK: - 存活池
+
+  /// 一次性完成通道：取消看门狗、回调、释放存活池（多路径并发也只完成一次）
+  private func finish(html: String?, title: String?) {
+    guard !didFinish else { return }
+    didFinish = true
+    readyWatchdog?.cancel()
+    readyWatchdog = nil
+    completionHandler?(html, title)
+    completionHandler = nil
+    Self.release(self)
+  }
+
+  private var completionHandler: ((String?, String?) -> Void)?
+  private var readyWatchdog: DispatchWorkItem?
+  private var didFinish = false
 
   private static func retain(_ session: MarkdownExportSession) {
     active[ObjectIdentifier(session)] = session

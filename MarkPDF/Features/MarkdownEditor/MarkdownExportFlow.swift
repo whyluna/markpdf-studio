@@ -25,12 +25,13 @@ enum MarkdownExportFlow {
     }
   }
 
-  static func run(_ format: Format, store: EditorStore) {
+  static func run(_ format: Format, store: EditorStore, workspaceRoot: URL? = nil) {
     // 独立离屏导出会话（与活体内核解耦）；文本/基准目录直接取自已同步的 EditorStore
     let session = MarkdownExportSession()
     session.exportHTML(
       text: store.text,
-      baseURL: store.currentFileURL?.deletingLastPathComponent()
+      baseURL: store.currentFileURL?.deletingLastPathComponent(),
+      workspaceRoot: workspaceRoot
     ) { html, title in
       guard let html, !html.isEmpty else {
         alert(title: String(localized: "导出失败"), message: String(localized: "渲染结果为空或内核超时，请稍后再试。"))
@@ -144,19 +145,16 @@ final class MarkdownPDFGenerator: NSObject, WKNavigationDelegate {
       let operation = webView.printOperation(with: printInfo)
       operation.showsPrintPanel = false
       operation.showsProgressPanel = false
-      // run() 阻塞，放后台；完成后回主线程校验与清理
-      DispatchQueue.global().async { [weak self] in
-        guard let self else { return }
-        let succeeded = operation.run()
-        DispatchQueue.main.async {
-          if succeeded, FileManager.default.fileExists(atPath: outputURL.path) {
-            Logger.editor.info("已导出 PDF: \(outputURL.lastPathComponent, privacy: .public)")
-          } else {
-            MarkdownExportFlow.alert(title: String(localized: "导出失败"), message: String(localized: "PDF 打印任务未完成。"))
-          }
-          self.cleanup()
-        }
+      // AppKit 打印体系约定主线程使用：run() 内部是嵌套 runloop 模态执行，期间 UI 事件
+      // 照常派发；后台线程跑依赖主线程 IPC 的 WebKit 打印是未定义行为区（不同系统/WebKit
+      // 版本有空白页/死锁报告），宁可主线程模态也不赌后台
+      let succeeded = operation.run()
+      if succeeded, FileManager.default.fileExists(atPath: outputURL.path) {
+        Logger.editor.info("已导出 PDF: \(outputURL.lastPathComponent, privacy: .public)")
+      } else {
+        MarkdownExportFlow.alert(title: String(localized: "导出失败"), message: String(localized: "PDF 打印任务未完成。"))
       }
+      self.cleanup()
     }
   }
 

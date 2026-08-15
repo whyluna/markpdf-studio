@@ -56,6 +56,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   var onScrollHandled: (() -> Void)?
   /// 内核命令队列已消费回调
   var onKernelRequestsHandled: (() -> Void)?
+  /// 活体内核视图挂载/拆除回调（AI 动作的无活体兜底，防回调型请求悬挂）
+  var onKernelConsumerChanged: ((Bool) -> Void)?
   /// 光标行变化回调（FR-1.6；内核 500ms 防抖上报）
   var onCursorMoved: ((Int) -> Void)?
   /// 文件回链打开回调（FR-5.3；参数为解析后的文件 URL 与可选页码）
@@ -79,6 +81,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     onOutlineChanged: (([Heading]) -> Void)? = nil,
     onScrollHandled: (() -> Void)? = nil,
     onKernelRequestsHandled: (() -> Void)? = nil,
+    onKernelConsumerChanged: ((Bool) -> Void)? = nil,
     onCursorMoved: ((Int) -> Void)? = nil,
     onOpenFileLink: ((URL, Int?) -> Void)? = nil
   ) {
@@ -99,6 +102,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.onOutlineChanged = onOutlineChanged
     self.onScrollHandled = onScrollHandled
     self.onKernelRequestsHandled = onKernelRequestsHandled
+    self.onKernelConsumerChanged = onKernelConsumerChanged
     self.onCursorMoved = onCursorMoved
     self.onOpenFileLink = onOpenFileLink
   }
@@ -108,10 +112,20 @@ struct MarkdownEditorView: NSViewRepresentable {
   }
 
   func makeNSView(context: Context) -> WKWebView {
+    // 活体消费者就位（dismantle 时对称置 false）
+    onKernelConsumerChanged?(true)
     let configuration = WKWebViewConfiguration()
     // 内核为本地静态资源，无需持久化缓存；非持久数据存储避免旧 bundle 缓存干扰开发迭代
     configuration.websiteDataStore = .nonPersistent()
-    // 图片内联显示（FR-2.3）：markpdf-file:// 协议由 native 读盘供给工作区图片
+    // 图片内联显示（FR-2.3）：markpdf-file:// 协议由 native 读盘供给工作区图片。
+    // 路径围栏：仅工作区根与当前文档目录内可读（parent 每轮跟随，根随宿主更新）
+    context.coordinator.schemeHandler.allowedRoots = { [weak coordinator = context.coordinator] in
+      guard let parent = coordinator?.parent else { return [] }
+      var roots: [URL] = []
+      if let root = parent.workspaceRoot { roots.append(root) }
+      if let dir = parent.documentID?.deletingLastPathComponent() { roots.append(dir) }
+      return roots
+    }
     configuration.setURLSchemeHandler(context.coordinator.schemeHandler, forURLScheme: LocalFileSchemeHandler.scheme)
     let webView = WKWebView(frame: .zero, configuration: configuration)
     // 背景交给内核 CSS（明暗主题），避免白闪
@@ -195,6 +209,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   }
 
   static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+    // 先告知宿主「无活体消费者」：队列里未消费的回调型请求立即失败回调，不悬挂调用方
+    coordinator.parent.onKernelConsumerChanged?(false)
     // 销毁前兜底取回内核全文（FR-2.7）：内核 300ms 防抖窗口内未上报的尾巴，
     // 取回后与宿主文本比对，不同则以内核为准走正常 contentDidChange（含自动保存）
     coordinator.fetchContentBeforeDismantle(retaining: nsView)
@@ -225,6 +241,8 @@ extension MarkdownEditorView {
     private var lastPushedTypography: Typography?
     /// 内核就绪前排队的滚动行（scrollTo 在就绪前调用不再丢弃，FR-6.2 跳转依赖）
     private var pendingKernelScrollLine: Int?
+    /// 内核就绪前排队的插入文本（insertAtCursor 无回调，就绪前丢弃会让 AI 插入动作无声消失）
+    private var pendingInserts: [String] = []
     /// 图片资产存储（FR-2.5；可注入 mock 测试）
     let imageAssetService: ImageAssetService = LiveImageAssetService()
     /// 已载入内核的外部文档标识（去重，避免每次宿主刷新都重置内容）
@@ -247,6 +265,13 @@ extension MarkdownEditorView {
       if let line = pendingKernelScrollLine {
         pendingKernelScrollLine = nil
         bridge.notify(.scrollToLine, payload: ["line": line])
+      }
+      // 就绪前排队的插入请求补发（须在 setContent 之后，插进新内容）
+      if !pendingInserts.isEmpty {
+        for text in pendingInserts {
+          bridge.notify(.insertAtCursor, payload: ["text": text])
+        }
+        pendingInserts = []
       }
     }
 
@@ -324,7 +349,10 @@ extension MarkdownEditorView {
     func perform(_ request: EditorStore.KernelRequest) {
       switch request {
       case .insertAtCursor(let text):
-        guard isReady else { return }
+        guard isReady else {
+          pendingInserts.append(text)
+          return
+        }
         bridge.notify(.insertAtCursor, payload: ["text": text])
       case .replaceSelection(let text, let completion):
         guard isReady else { return completion(false) }

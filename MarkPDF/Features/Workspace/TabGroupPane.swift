@@ -106,6 +106,9 @@ struct MarkdownTabView: View {
       onKernelRequestsHandled: {
         store.didHandleKernelRequests()
       },
+      onKernelConsumerChanged: { alive in
+        store.setKernelConsumerAlive(alive)
+      },
       onCursorMoved: { line in
         store.cursorDidMove(to: line)
       },

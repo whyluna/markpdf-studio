@@ -46,8 +46,10 @@ final class EditorStoreTests: XCTestCase {
     XCTAssertTrue(waitUntil { store.currentFileURL == url }, "后台读盘应完成")
     XCTAssertNil(store.lastError)
 
-    // 目录消失 → 原子写盘必失败 → 首次失败上报
-    try FileManager.default.removeItem(at: dir)
+    // 同名目录占位（文件仍在磁盘上、路径被目录顶替）→ 写盘必失败 → 首次失败上报。
+    //（沙盒宿主里 POSIX 目录权限挡不住写盘，这是能稳定制造「文件在但写不进」的方式）
+    try FileManager.default.removeItem(at: url)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     store.contentDidChange("改动 1")
     store.flushPendingSave()
     XCTAssertTrue(waitUntil { store.lastError != nil }, "保存失败必须上报")
@@ -59,15 +61,79 @@ final class EditorStoreTests: XCTestCase {
     pump(0.3) // 等失败回调落地
     XCTAssertNil(store.lastError, "持续失败只提示一次")
 
-    // 写盘恢复成功后复位；再次失败会再次上报
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    // 写回恢复成功后复位；再次失败会再次上报
+    try FileManager.default.removeItem(at: url)
+    try "初始".write(to: url, atomically: true, encoding: .utf8)
     store.contentDidChange("改动 3")
     store.flushPendingSave()
     XCTAssertTrue(waitUntil { !store.hasUnsavedChanges }, "恢复后应写盘成功")
-    try FileManager.default.removeItem(at: dir)
+    try FileManager.default.removeItem(at: url)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     store.contentDidChange("改动 4")
     store.flushPendingSave()
     XCTAssertTrue(waitUntil { store.lastError != nil }, "恢复后再失败应再次上报")
+    try FileManager.default.removeItem(at: url)
+  }
+
+  /// 文件已在磁盘上消失（废纸篓/外部改名/撤销新建）：保存绝不在原路径复活文件，
+  /// 按废纸篓语义转草稿态（内容保留在编辑器）
+  func testSaveDoesNotResurrectMissingFile() throws {
+    let url = dir.appendingPathComponent("gone.md")
+    try "初始".write(to: url, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(url)
+    XCTAssertTrue(waitUntil { store.currentFileURL == url })
+
+    store.contentDidChange("未落盘编辑")
+    try FileManager.default.removeItem(at: url)  // 外部把文件删了
+    store.flushPendingSave()
+    pump(0.3) // 等写队列与主线程收口
+    XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "不得在旧路径复活文件")
+    XCTAssertNil(store.currentFileURL, "文件消失应转草稿态")
+    XCTAssertEqual(store.trashedFileURL, url)
+    XCTAssertEqual(store.text, "未落盘编辑", "内容保留在编辑器")
+  }
+
+  /// fileDidMove：移动触发磁盘链接修正 + 用户有未落盘编辑——内存为准，
+  /// 链接修正应用到内存文本并落盘新路径（两边都不丢）
+  func testFileDidMoveWithUnsavedEditsMergesLinkRewrite() throws {
+    let url = dir.appendingPathComponent("note.md")
+    try "原文 ![](assets/pic.png)".write(to: url, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(url)
+    XCTAssertTrue(waitUntil { store.currentFileURL == url })
+
+    // 用户在 0.5s 防抖窗口内输入（未落盘）
+    store.contentDidChange("原文 ![](assets/pic.png) + 未落盘编辑")
+    // 模拟 WorkspaceStore.move：磁盘移动 + 链接重写（磁盘是旧内容，不含用户编辑）
+    let sub = dir.appendingPathComponent("sub")
+    try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+    let newURL = sub.appendingPathComponent("note.md")
+    try "原文 ![](../assets/pic.png)".write(to: newURL, atomically: true, encoding: .utf8)
+    try FileManager.default.removeItem(at: url)
+
+    store.fileDidMove(from: url, to: newURL)
+    // 内存文本：用户编辑保留 + 链接修正应用（assets → ../assets）
+    XCTAssertTrue(
+      waitUntil { store.text.contains("未落盘编辑") && store.text.contains("../assets/pic.png") },
+      "用户编辑与链接修正都要保住")
+    // 随即落盘到新路径：磁盘内容与内存一致
+    XCTAssertTrue(
+      waitUntil {
+        (try? String(contentsOf: newURL, encoding: .utf8)) == store.text
+      },
+      "合并结果应落盘到新路径")
+    XCTAssertFalse(store.hasUnsavedChanges)
+  }
+
+  /// 无活体内核视图时取选区：立即回 nil，不悬挂调用方（AI 上下文采集）
+  func testFetchSelectionWithoutLiveKernelReturnsNilImmediately() {
+    let store = EditorStore()
+    var delivered: String??
+    store.fetchSelection { delivered = $0 }
+    XCTAssertTrue(delivered != nil, "无活体视图应立即回调")
+    XCTAssertNil(delivered ?? "非nil哨兵")
+    XCTAssertTrue(store.pendingKernelRequests.isEmpty, "无活体视图不入队")
   }
 }
 
@@ -394,6 +460,7 @@ final class EditorStoreAsyncIOTests: XCTestCase {
   /// 内核命令队列（FR-AI.2）：enqueue 入队发布、消费后清空
   func testKernelRequestQueue() {
     let store = EditorStore()
+    store.setKernelConsumerAlive(true)  // 模拟活体视图（无活体时回调型请求直接失败不入队）
     XCTAssertTrue(store.pendingKernelRequests.isEmpty)
 
     store.enqueue(.insertAtCursor("文本"))

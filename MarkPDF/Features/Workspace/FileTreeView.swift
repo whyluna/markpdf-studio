@@ -294,8 +294,11 @@ struct FileTreeView: View {
   }
 
   private func trash(_ node: FileNode) {
-    store.trash(node)
-    tabStore.fileWasTrashed(node.id)
+    // 删除失败（沙盒拒绝等）文件仍在磁盘上：不得联动标签转草稿——
+    // 那会停掉内存未落盘编辑的自动保存，且重新激活时会以磁盘为准回载覆盖内存
+    if store.trash(node) {
+      tabStore.fileWasTrashed(node.id)
+    }
   }
 
   private func handleDrop(toFolder folder: FileNode) -> Bool {
