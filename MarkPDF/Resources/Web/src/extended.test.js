@@ -242,4 +242,20 @@ describe("标题锚点匹配（目录跳转）", () => {
     expect(slugifyHeading("KIVI：非对称均匀量化")).toBe("kivi非对称均匀量化");
     expect(slugifyHeading("实验模型选择（A40 40GB）")).toBe("实验模型选择a40-40gb");
   });
+  it("slugifyHeading 与 GitHub 一致：逐空格转连字符（不折叠）", async () => {
+    const { slugifyHeading } = await import("./extended.js");
+    expect(slugifyHeading("a  b")).toBe("a--b");
+  });
+  it("重复标题的 -1/-2 后缀锚点（GitHub 口径）", async () => {
+    const { matchHeadingLine } = await import("./extended.js");
+    const dup = [
+      { level: 2, text: "概述", line: 10 },
+      { level: 2, text: "方法", line: 20 },
+      { level: 2, text: "概述", line: 30 },
+      { level: 2, text: "概述", line: 40 },
+    ];
+    expect(matchHeadingLine("概述", dup)).toBe(10, "首个无后缀");
+    expect(matchHeadingLine("概述-1", dup)).toBe(30, "第二个重复标题带 -1");
+    expect(matchHeadingLine("概述-2", dup)).toBe(40, "第三个重复标题带 -2");
+  });
 });

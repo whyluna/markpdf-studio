@@ -65,7 +65,9 @@ function receive(envelope) {
   }
   const handler = handlers.get(envelope.type);
   if (handler) handler(envelope.payload ?? {}, envelope.id);
-  else console.warn("[bridge] 未注册的消息类型:", envelope.type);
+  else if (envelope.type === "bridge.response") {
+    // 请求 3s 超时后迟到的应答：预期竞态，静默丢弃（不污染诊断日志）
+  } else console.warn("[bridge] 未注册的消息类型:", envelope.type);
 }
 
 window.bridge = { receive, notify, request };

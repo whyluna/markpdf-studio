@@ -228,7 +228,7 @@ document.addEventListener("visibilitychange", () => {
 /* ---------- 光标行上报（防抖 150ms，FR-1.6 编辑位置记忆 + 大纲当前节跟随） ----------
    曾为落盘记忆设 500ms，大纲跟随上线后体感延迟明显；落盘侧自有防抖，缩短无负担 */
 
-let cursorTimerDelay = 150;
+const cursorTimerDelay = 150;
 let cursorTimer = null;
 function scheduleCursorNotify() {
   clearTimeout(cursorTimer);
@@ -248,7 +248,10 @@ function collectOutline() {
       if (!m) return;
       const level = m[1] ? Number(m[1]) : Number(m[2]);
       const line = view.state.doc.lineAt(node.from);
-      const text = line.text.replace(/^#{1,6}\s*/, "").trim();
+      let text = line.text.replace(/^#{1,6}\s*/, "");
+      // ATX 闭合序列不属标题文本（CommonMark：闭合 # 串前须空白）；Setext 无此规则
+      if (m[1]) text = text.replace(/\s+#+\s*$/, "");
+      text = text.trim();
       if (text) items.push({ level, text, line: line.number });
       return false;
     },

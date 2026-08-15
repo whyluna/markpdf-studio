@@ -124,12 +124,14 @@ function fenceCodeText(view, badgeEl) {
   const fenceRe = /^(\s*)(`{3,}|~{3,})/;
   const open = fenceRe.exec(firstLine.text);
   if (!open) return null;
+  // 关闭 fence 后只允许空白（CommonMark）：代码块内的 ``` 注释行不得提前截断
+  const closeRe = /^\s*(`{3,}|~{3,})\s*$/;
   const lines = [];
   for (let n = firstLine.number + 1; n <= doc.lines; n++) {
     const ln = doc.line(n);
-    const close = fenceRe.exec(ln.text);
+    const close = closeRe.exec(ln.text);
     // 结束 fence：同种围栏字符且长度不短于起始
-    if (close && close[2][0] === open[2][0] && close[2].length >= open[2].length) break;
+    if (close && close[1][0] === open[2][0] && close[1].length >= open[2].length) break;
     lines.push(ln.text);
   }
   return lines.join("\n");

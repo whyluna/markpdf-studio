@@ -153,8 +153,12 @@ export function renderExportContent(docText, extensions, baseURL) {
       state: EditorState.create({ doc: docText, extensions }),
     });
     // 强制同步解析全文：lezer 按时间预算增量解析，新建视图的语法树是残缺的
-    // （装饰只覆盖已解析前缀，导出后半段变源码——离屏 webview 无 rAF 等不到后台解析）
-    forceParsing(view, view.state.doc.length);
+    // （装饰只覆盖已解析前缀，导出后半段变源码——离屏 webview 无 rAF 等不到后台解析）。
+    // 单次调用默认预算仅 100ms，大文档尾部可能解析不完——循环推进直至完备（封顶 3s）
+    const parseDeadline = Date.now() + 3000;
+    while (!forceParsing(view, view.state.doc.length, 500)) {
+      if (Date.now() >= parseDeadline) break;
+    }
 
     let settled = false;
     const finish = () => {
