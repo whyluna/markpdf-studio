@@ -121,6 +121,8 @@ final class TabGroup: ObservableObject, Identifiable {
 
   /// 组内重排：把标签移到目标标签之前（target 为 nil 移到末尾）
   func moveTab(_ tab: EditorTab, before target: EditorTab?) {
+    // 拖放到自身：remove 后找不到 target 会落到末尾分支，标签被莫名移到最后
+    guard tab.id != target?.id else { return }
     guard let from = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
     let moving = tabs.remove(at: from)
     if let target, let to = tabs.firstIndex(where: { $0.id == target.id }) {
@@ -145,6 +147,11 @@ final class TabGroup: ObservableObject, Identifiable {
       editorStores[tab.id] = store
     } else {
       prepareStore(for: tab)
+    }
+    // 跨组搬运的 store 其光标上报闭包仍弱指源组——源组释放（合栏）后上报静默失效，
+    // 重接到本组（FR-1.6 编辑位置记忆不断线）
+    editorStores[tab.id]?.onCursorLineChange = { [weak self] url, line in
+      self?.onEditorCursorLine?(url, line)
     }
     tabs.append(tab)
     activeTabID = tab.id

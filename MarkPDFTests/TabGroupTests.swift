@@ -156,4 +156,37 @@ final class TabGroupTests: XCTestCase {
     XCTAssertEqual(tab.kind, .markdown)
     XCTAssertNotNil(group.editorStores[tab.id], "重命名为 md 后应补建编辑状态")
   }
+  /// 组内拖放到自身：不得被移到末尾
+  func testMoveTabOntoItselfIsNoOp() throws {
+    let group = TabGroup()
+    let a = try makeFile("a.md", text: "a")
+    let b = try makeFile("b.md", text: "b")
+    group.open(FileNode(id: a, name: "a.md", kind: .markdown))
+    group.open(FileNode(id: b, name: "b.md", kind: .markdown))
+    let tabA = try XCTUnwrap(group.tabs.first { $0.url == a })
+
+    group.moveTab(tabA, before: tabA)
+
+    XCTAssertEqual(group.tabs.map(\.url), [a, b], "拖放到自身不得改变顺序")
+  }
+
+  /// 跨组搬运的 store 重接光标上报：源组释放后 FR-1.6 位置记忆不断线
+  func testAttachRewiresCursorLineCallback() throws {
+    let source = TabGroup()
+    let url = try makeFile("c.md", text: "c")
+    source.open(FileNode(id: url, name: "c.md", kind: .markdown))
+    let tab = try XCTUnwrap(source.tabs.first)
+    let store = source.editorStore(for: tab)
+
+    let target = TabGroup()
+    var reported: (URL, Int)?
+    target.onEditorCursorLine = { reported = ($0, $1) }
+    let detached = source.detach(tab)
+    target.attach(tab, store: detached)
+
+    XCTAssertTrue(waitUntil { store.currentFileURL == url }, "后台载入完成（cursorDidMove 需当前文件）")
+    store.cursorDidMove(to: 42)
+    XCTAssertEqual(reported?.1, 42, "搬运后光标上报应走新组的接线")
+  }
+
 }
