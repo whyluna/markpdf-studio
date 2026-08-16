@@ -2,6 +2,13 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式。
 
+## [0.1.8] - 2026-08-17
+
+### 修复
+
+- **A 类文本（题行版式）点击弹蓝框、划词/选词被劫持**：macOS 26 PDFKit 文档分析把题干+ABCD 选项的行列版式判为表单候选，交互触发"智能选区"（带手柄蓝框）并在内部子视图层消费鼠标事件——关闭 `documentAnalysisEnabled`（私有 API，键缺失时静默退回现状），A/B 文本统一回归原生选择管线；单击无蓝框、双击选词正常、拖拽逐行贴合
+- **AI 助手输入区上下拖动**：改为系统 NSSplitView 原生分栏（同左右边栏手感）；hosting `sizingOptions=[]` 防内容高度顶回布局、两栏 holdingPriority 相等防拖动时外框被改（整体移动/松手回位根因）、不对外报告固有尺寸
+- **AI 助手输入区占位符与光标不对齐**：实测 TextEditor 光标行顶格 y=0 高 17pt、lineFragmentPadding=5，占位符去掉顶部 padding、只补 leading 5，与光标同行同列
 ## [0.1.7] - 2026-08-15
 
 ### 新增
