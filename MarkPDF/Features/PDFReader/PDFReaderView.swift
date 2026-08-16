@@ -37,6 +37,25 @@ final class ZoomablePDFView: PDFView {
   /// 最近一次 mouseDown 位置（视图坐标）：划词选区分栏裁剪（SelectionColumnTrimmer）的拖拽起点
   private(set) var lastMouseDownPoint: NSPoint?
 
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    disableDocumentAnalysis()
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    disableDocumentAnalysis()
+  }
+
+  /// macOS 26 文档分析会把对齐排版的题行（题干+ABCD 选项）识别成表单候选，
+  /// 交互时触发"智能选区"：点击弹出带手柄的蓝框并劫持原生文本选择（A 类文本蓝框根因，
+  /// 事件在 PDFKit 内部子视图层就被消费，mouseDown 重写收不到）。关闭后 A/B 文本统一走
+  /// 原生选择管线。私有 API：键不存在时静默跳过，系统更新后自动退回现状
+  private func disableDocumentAnalysis() {
+    guard responds(to: NSSelectorFromString("setDocumentAnalysisEnabled:")) else { return }
+    setValue(false, forKey: "documentAnalysisEnabled")
+  }
+
   override func keyDown(with event: NSEvent) {
     if event.keyCode == 53, onEscape?() == true { return }  // 53 = Esc
     super.keyDown(with: event)
