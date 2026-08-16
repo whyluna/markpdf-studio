@@ -21,23 +21,33 @@ struct AIAssistantPanelView: View {
     VStack(spacing: 0) {
       header
       Divider()
-      if chat.messages.isEmpty, chat.phase == .idle {
-        emptyState
-      } else {
-        messageList
-      }
-      if case .failed(let message) = chat.phase {
-        failureRow(message)
-      }
-      if let toast {
-        Text(toast)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .padding(.vertical, 2)
-      }
-      Divider()
-      composerDragDivider
-      composer
+      // 上下两栏走系统 NSSplitView：分隔条原生连续拖动（同左右边栏手感），
+      // 此前 DragGesture 逐帧写 @State 导致整棵 body 重算（抽搐根因）
+      ComposerSplitView(
+        top: {
+          VStack(spacing: 0) {
+            if chat.messages.isEmpty, chat.phase == .idle {
+              emptyState
+            } else {
+              messageList
+            }
+            if case .failed(let message) = chat.phase {
+              failureRow(message)
+            }
+            if let toast {
+              Text(toast)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 2)
+            }
+          }
+        },
+        bottom: {
+          // 分栏撑高时内容顶部对齐（默认会居中悬浮）
+          composer.frame(maxHeight: .infinity, alignment: .top)
+        }
+      )
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .background(.background)
     .onAppear {
@@ -212,51 +222,7 @@ struct AIAssistantPanelView: View {
     .padding(.vertical, 6)
   }
 
-  /// 输入区手动高度（nil = 自动 56–120pt 自适应；拖动分界线后进入手动）
-  @State private var composerHeight: CGFloat?
-  /// 拖动中的幽灵线偏移（仅预览不触发布局——逐帧重排消息列表是抖动根因）
-  @State private var composerDragOffset: CGFloat = 0
-  /// 输入区实测高度（自动模式下的拖动起点）
-  @State private var measuredComposerHeight: CGFloat = 88
-
   // MARK: - 输入区
-
-  /// 输入区高度拖拽分界线（悬停变上下箭头；拖动只显幽灵线，松手一次性应用，56–400pt）
-  private var composerDragDivider: some View {
-    Rectangle()
-      .fill(Color.secondary.opacity(0.2))
-      .frame(height: 1)
-      .padding(.vertical, 4)  // 命中带 ~9pt，视觉仍是细线
-      .contentShape(Rectangle())
-      .overlay {
-        if composerDragOffset != 0 {
-          // 幽灵线：新分界位置预览（不触发任何重排）
-          Rectangle()
-            .fill(Color.accentColor.opacity(0.5))
-            .frame(height: 2)
-            .offset(y: composerDragOffset)
-        }
-      }
-      .onHover { hovering in
-        if hovering {
-          NSCursor.resizeUpDown.push()
-        } else {
-          NSCursor.pop()
-        }
-      }
-      .gesture(
-        DragGesture(minimumDistance: 0)
-          .onChanged { value in
-            composerDragOffset = value.translation.height
-          }
-          .onEnded { value in
-            let startHeight = composerHeight ?? measuredComposerHeight
-            composerHeight = min(max(startHeight - value.translation.height, 56), 400)
-            composerDragOffset = 0
-          }
-      )
-      .help("拖拽调整输入区高度")
-  }
 
   private var composer: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -268,25 +234,17 @@ struct AIAssistantPanelView: View {
           TextEditor(text: $draft)
             .font(.system(size: 14))
             .scrollContentBackground(.hidden)
-            .frame(
-              minHeight: composerHeight ?? 56,
-              maxHeight: composerHeight ?? 120
-            )
+            // 高度交给外层分栏的下栏（ NSSplitView 逐帧驱动）
+            .frame(minHeight: 56, maxHeight: .infinity)
             .focused($inputFocused)
-            .background(
-              GeometryReader { geometry in
-                Color.clear.onAppear {
-                  measuredComposerHeight = geometry.size.height
-                }
-              }
-            )
           if draft.isEmpty {
             Text("向 AI 提问…（⌘↵ 发送）")
               .font(.system(size: 14))
               .foregroundStyle(.tertiary)
-              // TextEditor 文本起点 = 容器 6 + 内建 inset 5，占位符同构对齐
-              .padding(.horizontal, 5)
-              .padding(.vertical, 6)
+              // 实测对齐（textprobe）：TextEditor 内部 textContainerInset=(0,0)、
+              // lineFragmentPadding=5，空文本光标行顶格 y=0 高 17pt——
+              // 占位符同为 17pt 行，仅补 leading 5 即与光标同行同列
+              .padding(.leading, 5)
               .allowsHitTesting(false)
           }
         }
@@ -415,6 +373,89 @@ struct AIAssistantPanelView: View {
     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
       if toast == message { toast = nil }
     }
+  }
+}
+
+/// 输入区上下分栏容器：系统 NSSplitView 原生分隔条（与左右边栏同一套连续拖动）。
+/// DragGesture 逐帧写 @State 会整棵重算消息列表（拖动抽搐根因）；
+/// NSSplitView 原生跟踪只改几何不进 SwiftUI 状态
+private enum ComposerSplitMetrics {
+  /// 下栏（输入区整体）高度限值：输入框 56–400 + chips 行与内外边距约 64
+  static let minBottom: CGFloat = 120
+  static let maxBottom: CGFloat = 470
+  /// 首次布局的默认下栏高度（≈ 自动模式的观感）
+  static let defaultBottom: CGFloat = 150
+}
+
+private struct ComposerSplitView<Top: View, Bottom: View>: NSViewRepresentable {
+  @ViewBuilder let top: () -> Top
+  @ViewBuilder let bottom: () -> Bottom
+
+  func makeNSView(context: Context) -> NSSplitView {
+    let split = ComposerSplitNSSplitView()
+    split.isVertical = false
+    split.dividerStyle = .thin
+    let topHost = NSHostingView(rootView: top())
+    let bottomHost = NSHostingView(rootView: bottom())
+    // sizingOptions=[]（macOS 13+）：hosting 不再向外报 SwiftUI 内容的固有尺寸，
+    // 否则消息列表的内容高度变成硬约束，上栏缩不动，拖动时与分栏布局打架
+    //（输入框变不大/面板被顶歪/松手回位的根因）
+    topHost.sizingOptions = []
+    bottomHost.sizingOptions = []
+    split.addArrangedSubview(topHost)
+    split.addArrangedSubview(bottomHost)
+    // holdingPriority 保持两栏相等（默认 250）：若下栏更高（曾设 260），
+    // 拖动分隔条时 NSSplitView 会保下栏高度而直接改自身外框尺寸
+    //（实测日志：外框随分隔条位移逐帧等量塌缩 → 整体移动、松手回位）
+    split.delegate = context.coordinator
+    return split
+  }
+
+  func updateNSView(_ split: NSSplitView, context: Context) {
+    guard split.arrangedSubviews.count == 2,
+      let topHost = split.arrangedSubviews[0] as? NSHostingView<Top>,
+      let bottomHost = split.arrangedSubviews[1] as? NSHostingView<Bottom>
+    else { return }
+    topHost.rootView = top()
+    bottomHost.rootView = bottom()
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
+
+  final class Coordinator: NSObject, NSSplitViewDelegate {
+    func splitView(
+      _ splitView: NSSplitView,
+      constrainSplitPosition proposedPosition: CGFloat,
+      ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+      let total = splitView.bounds.height - splitView.dividerThickness
+      guard total > 0 else { return proposedPosition }
+      let lowerBound = min(ComposerSplitMetrics.minBottom, total * 0.7)
+      let bottom = min(max(total - proposedPosition, lowerBound), ComposerSplitMetrics.maxBottom)
+      return total - bottom
+    }
+  }
+}
+
+/// 首次布局时把分隔条落到默认输入区高度（NSSplitView 默认均分，会各占一半）
+final class ComposerSplitNSSplitView: NSSplitView {
+  private var didInitialLayout = false
+
+  // 防御：分栏拖动/窗口变化会失效 intrinsic 尺寸，SwiftUI 可能据此重议外框。
+  // 对外不报告固有尺寸且不再发失效通知，外框完全由 SwiftUI 布局决定
+  override var intrinsicContentSize: NSSize {
+    NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+  }
+
+  override func invalidateIntrinsicContentSize() {}
+
+  override func layout() {
+    super.layout()
+    guard !didInitialLayout, bounds.height > 80 else { return }
+    didInitialLayout = true
+    let total = bounds.height - dividerThickness
+    let bottom = min(max(ComposerSplitMetrics.defaultBottom, ComposerSplitMetrics.minBottom), total * 0.75)
+    setPosition(total - bottom, ofDividerAt: 0)
   }
 }
 
