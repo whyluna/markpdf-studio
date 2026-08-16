@@ -306,4 +306,42 @@ final class AnnotationListTests: XCTestCase {
       "列表快照按新颜色呈现（同组合并为一条）"
     )
   }
+/// 批注图标避让（内容串台回归）：新图标绝不与既有图标重叠——
+/// 重叠让点选命中歧义，点新图标实际编辑旧标注
+final class CommentCollisionTests: XCTestCase {
+  private let size: CGFloat = 22
+
+  func testNoCollisionKeepsInitialY() {
+    let y = AnnotationToolbarController.avoidIconCollision(
+      initialY: 400, size: size,
+      existingRects: [CGRect(x: 0, y: 100, width: size, height: size)])
+    XCTAssertEqual(y, 400, "无重叠不动")
+  }
+
+  func testCollisionMovesAboveWithGap() {
+    let existing = CGRect(x: 0, y: 300, width: size, height: size)
+    let y = AnnotationToolbarController.avoidIconCollision(
+      initialY: 310, size: size, existingRects: [existing])
+    XCTAssertEqual(y, existing.minY - size - 4, "重叠时挪到碰撞图标上方 4pt")
+    XCTAssertFalse(
+      CGRect(x: 0, y: y, width: size, height: size).intersects(existing),
+      "不得重叠")
+  }
+
+  func testDenseStackNeverOverlaps() {
+    // 21 个图标叠成一串：20 轮耗尽后必须落到全部图标下方且不重叠
+    var rects: [CGRect] = []
+    for index in 0..<21 {
+      rects.append(CGRect(x: 0, y: CGFloat(100 + index * 10), width: size, height: size))
+    }
+    let y = AnnotationToolbarController.avoidIconCollision(
+      initialY: 105, size: size, existingRects: rects)
+    let finalRect = CGRect(x: 0, y: y, width: size, height: size)
+    XCTAssertTrue(
+      rects.allSatisfy { !$0.intersects(finalRect) },
+      "密集堆叠兜底后不得与任何既有图标重叠（y=\(y)）")
+    XCTAssertLessThanOrEqual(y, rects.map(\.minY).min()! - size - 4, "应落在全部图标下方")
+  }
+}
+
 }

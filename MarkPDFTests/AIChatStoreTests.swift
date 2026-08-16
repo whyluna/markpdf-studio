@@ -1030,7 +1030,7 @@ final class AIChatStoreTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: workspace.root) }
 
     var requestCount = 0
-    // mock 每轮都回工具调用：取消闸缺失时循环会不停发新请求（计数持续增长）
+    // mock 每轮都回工具调用：取消闸缺失时循环会继续挂新工具活动/发新请求
     let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
       requestCount += 1
       return AsyncThrowingStream { continuation in
@@ -1044,13 +1044,20 @@ final class AIChatStoreTests: XCTestCase {
     store.contextSources.workspaceFiles = { (root: workspace.root, files: workspace.files) }
 
     store.send("工作区里有哪些笔记")
-    // 等循环跑起来（已发过多轮请求）后取消：detached 工具返回后必须停，不得再发请求
-    let cycling = await waitUntil { requestCount >= 2 }
-    XCTAssertTrue(cycling)
+    // 等首个工具活动 chip 出现（工具即将/正在执行），此刻取消
+    let chip = await waitUntil { store.messages.last?.toolActivities.isEmpty == false }
+    XCTAssertTrue(chip)
     store.cancel()
-    let frozen = requestCount
+    // chip 计数在循环内同步递增（无滞后）：取消后必须冻结，否则说明循环仍在继续
+    let frozenChips = store.messages.last?.toolActivities.count ?? 0
+    // 请求计数滞后一拍（独立请求任务）：先给在途任务落定窗口再取冻结值
+    try? await Task.sleep(nanoseconds: 200_000_000)
+    let frozenRequests = requestCount
     try? await Task.sleep(nanoseconds: 400_000_000)
-    XCTAssertEqual(requestCount, frozen, "取消后不得再发起新一轮请求")
+    XCTAssertEqual(
+      store.messages.last?.toolActivities.count ?? 0, frozenChips,
+      "取消后循环不得再挂新的工具活动（无取消闸时每轮都挂）")
+    XCTAssertEqual(requestCount, frozenRequests, "取消后不得再发起新一轮请求")
     XCTAssertEqual(store.phase, .idle)
   }
 

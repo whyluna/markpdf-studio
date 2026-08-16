@@ -599,7 +599,11 @@ final class AnnotationToolbarController: NSObject {
     let size = Self.commentIconSize
     let x = isLeft ? pageBounds.minX + Self.commentInset : pageBounds.maxX - Self.commentInset - size
     var y = anchor.midY - size / 2
-    y = avoidCommentCollision(x: x, y: y, size: size, on: page)
+    y = Self.avoidIconCollision(
+      initialY: y,
+      size: size,
+      existingRects: page.annotations.filter { $0.isCommentMarker }.map(\.bounds)
+    )
     y = min(max(y, pageBounds.minY + 4), pageBounds.maxY - size - 4)
 
     let groupID = UUID().uuidString
@@ -687,16 +691,22 @@ final class AnnotationToolbarController: NSObject {
     }
   }
 
-  /// 与同页既有批注图标纵向避让（往下挪，最多 20 轮防极端堆叠死循环）
-  private func avoidCommentCollision(x: CGFloat, y: CGFloat, size: CGFloat, on page: PDFPage) -> CGFloat {
-    var rect = NSRect(x: x, y: y, width: size, height: size)
+  /// 与同页既有批注图标纵向避让（往下挪，最多 20 轮防极端堆叠死循环）。
+  /// 20 轮耗尽（密集堆叠）时兜底放到全部既有图标下方——绝不重叠：
+  /// 重叠让点选命中歧义，点新图标实际编辑旧标注（内容串台，实测）
+  nonisolated static func avoidIconCollision(
+    initialY: CGFloat, size: CGFloat, existingRects: [CGRect]
+  ) -> CGFloat {
+    var y = initialY
+    var rect = NSRect(x: 0, y: y, width: size, height: size)
     for _ in 0..<20 {
-      guard let collision = page.annotations.first(where: {
-        $0.isCommentMarker && $0.bounds.intersects(rect)
-      }) else { return rect.minY }
-      rect.origin.y = collision.bounds.minY - size - 4
+      guard let collision = existingRects.first(where: { $0.intersects(rect) }) else { return y }
+      y = collision.minY - size - 4
+      rect.origin.y = y
     }
-    return rect.minY
+    // 轮数耗尽：挪到全部既有图标之下（minY 最小者再往下）
+    let lowest = existingRects.map(\.minY).min() ?? y
+    return min(lowest - size - 4, y)
   }
 
   /// 命中批注标记（含 Popup 伴侣反查），未命中返回 nil
@@ -725,9 +735,16 @@ final class AnnotationToolbarController: NSObject {
   /// 弹出批注编辑框（锚定图标，朝页面内容一侧展开）
   private func edit(comment marker: PDFAnnotation) {
     guard let pdfView, let page = marker.page else { return }
+    // 上一个编辑还挂着（popover 打开或关闭动画未走完）：必须同步先落定旧草稿——
+    // 旧 popover 的 willClose 是异步到达的，等到那时 commentPopover 已被替换，
+    // 身份闸必然失败：旧草稿既不落定也不丢弃，且旧 popover 若因新 show 暂缓仍挂在
+    // 屏上，用户敲的是过期草稿，落定时还会把旧内容写进新标注（实测内容串台）
+    if let oldPopover = commentPopover {
+      finishCommentEditing(for: oldPopover)
+      oldPopover.close()  // finish 已清引用，用保存的引用物理关闭旧 popover
+    }
     // 撤下创建时已排的落盘：否则那次写回正好砸在编辑框出现、光标该闪的时刻
     store.deferPendingWrites()
-    commentPopover?.close()
     // 点击图标可能刚把原生 Popup 伴侣窗打开，压掉（编辑统一走我们的 popover）
     if let popup = marker.popup {
       (popup as? PDFAnnotationPopup)?.isOpen = false

@@ -70,8 +70,11 @@ final class PDFReaderStoreTests: XCTestCase {
     let file = realDir.appendingPathComponent("paper.pdf")
     try Data().write(to: file)
     // 沙盒容器的临时目录未必经符号链接：自建符号链接保证两种形态真实存在
-    let linkDir = realDir.deletingLastPathComponent().appendingPathComponent("linkdir")
+    //（沙盒 tmp 跨测试运行共享，链接名须唯一防残留冲突）
+    let linkDir = realDir.deletingLastPathComponent()
+      .appendingPathComponent("linkdir-\(UUID().uuidString.prefix(8))")
     try FileManager.default.createSymbolicLink(at: linkDir, withDestinationURL: realDir)
+    defer { try? FileManager.default.removeItem(at: linkDir) }
     let fileViaLink = linkDir.appendingPathComponent("paper.pdf")
     XCTAssertNotEqual(fileViaLink.standardizedFileURL.path, fileViaLink.resolvingSymlinksInPath().path)
 
