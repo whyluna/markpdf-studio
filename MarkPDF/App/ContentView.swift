@@ -540,12 +540,58 @@ private struct SidebarDragStrip: NSViewRepresentable {
 }
 
 final class SidebarDragStripNSView: NSView {
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    // 全局兜底（覆盖直接拖系统分隔条的路径）：SwiftUI 列宽 max 约束异步生效，
+    // 拖动结束后仍可能落定超宽列（残余 5-10pt 双侧溢出来自这里）。
+    // 监听目标分隔视图的子视图重排，非拖动进行中且超上限时压回
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(splitResized(_:)),
+      name: NSSplitView.didResizeSubviewsNotification, object: nil
+    )
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(splitResized(_:)),
+      name: NSSplitView.didResizeSubviewsNotification, object: nil
+    )
+  }
+
+  deinit {
+    NotificationCenter.default.removeObserver(self)
+  }
+
+  /// 仅响应「自己所在的那只分隔视图」：应用里还有 AI 面板/检查器等多只
+  /// NSSplitView，对它们 setPosition 会改坏无关布局
+  @objc private func splitResized(_ note: Notification) {
+    guard let split = note.object as? NSSplitView,
+      enclosingNavSplit === split
+    else { return }
+    // 拖动进行中不干预（与系统跟踪循环互搏会抖）；松手后落定的超宽一次性压回
+    let event = NSApp.currentEvent
+    if event?.type == .leftMouseDragged || event?.type == .leftMouseDown { return }
+    Self.clampSidebarColumn(of: split)
+  }
+
+  /// 从自身向上找到第一只 NSSplitView 祖先 = NavigationSplitView 的分隔视图
+  ///（内层分隔视图都在 detail 列里，不可能是本视图的祖先）
+  private var enclosingNavSplit: NSSplitView? {
+    var ancestor = superview
+    while let view = ancestor {
+      if let split = view as? NSSplitView { return split }
+      ancestor = view.superview
+    }
+    return nil
+  }
+
   override func resetCursorRects() {
     addCursorRect(bounds, cursor: .resizeLeftRight)
   }
 
   /// 事件重定向：把落在加宽带上的按下转交给分隔条中心的系统拖动跟踪——
-  /// 自己拨条会与 NavigationSplitView 的宽度同步回环打架（从左侧靠近必抖的根因），
+  /// 自己拨条会与 NavigationSplitView 的宽度同步回环打架（从左侧接近必抖的根因），
   /// 系统接管后手感与右栏检查器完全一致
   override func mouseDown(with event: NSEvent) {
     guard let window, let split = Self.findSplitView(in: window.contentView),
@@ -568,12 +614,9 @@ final class SidebarDragStripNSView: NSView {
       pressure: 1
     ) else { return }
     split.mouseDown(with: redirected)
-    // 过拖封顶兜底：NSSplitView 的拖动跟踪在 mouseDown 内同步完成（松手即返回）。
-    // SwiftUI 的列宽 max 约束异步生效，快拖到尽头会滞留超宽列——列错位、
-    // 左右两列向窗口双侧溢出的故障就来自这里。就地压回上限，并在下一轮
-    // runloop 复查一次（防被在途的 SwiftUI 布局回写再次顶开）
+    // 过拖封顶：NSSplitView 的拖动跟踪在 mouseDown 内同步完成（松手即返回），
+    // 就地压回上限；迟到的 SwiftUI 布局回写由 splitResized 观察者兜底
     Self.clampSidebarColumn(of: split)
-    DispatchQueue.main.async { Self.clampSidebarColumn(of: split) }
   }
 
   /// 左列超出上限时压回（拖动已结束，不会与跟踪循环互搏）
