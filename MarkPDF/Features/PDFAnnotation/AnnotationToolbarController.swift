@@ -1149,13 +1149,56 @@ final class AnnotationToolbarController: NSObject {
       }
     ))
     let isLeft = marker.bounds.midX < page.bounds(for: pdfView.displayBox).midX
-    let anchorRect = pdfView.convert(marker.bounds, from: page)
     commentPopover = popover
-    // 下一 runloop 再弹出：在 mouseDown/mouseUp 事件处理中同步 show 与 transient
-    // 行为竞态，会导致编辑框偶发不出现
-    DispatchQueue.main.async {
-      popover.show(relativeTo: anchorRect, of: pdfView, preferredEdge: isLeft ? .maxX : .minX)
+    // 锚点优先正文内容块（用户视线所在；放大后页缘标记可能在视口外，
+    // 锚它会把弹窗定位到窗外——「缩放后批注弹窗出不来」的根因）；
+    // 内容块也不可见（滚动脱离）则先滚到标记处再弹
+    let visible = pdfView.bounds
+    let contentRect = contentUnionViewRect(of: marker)
+    if let content = contentRect, visible.intersects(content.insetBy(dx: -10, dy: -10)) {
+      DispatchQueue.main.async {
+        popover.show(relativeTo: content, of: pdfView, preferredEdge: isLeft ? .maxX : .minX)
+      }
+    } else {
+      let markerRect = pdfView.convert(marker.bounds, from: page)
+      if visible.insetBy(dx: -20, dy: -20).intersects(markerRect) {
+        DispatchQueue.main.async {
+          self.presentEditPopover(popover, marker: marker, isLeft: isLeft)
+        }
+      } else {
+        pdfView.go(to: PDFDestination(page: page, at: NSPoint(x: marker.bounds.midX, y: marker.bounds.midY)))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+          self?.presentEditPopover(popover, marker: marker, isLeft: isLeft)
+        }
+      }
     }
+  }
+
+  /// 弹出编辑框（锚点现算 + 视口夹取兜底：滚动/布局变动后标记仍可能在视口外，
+  /// 原样锚定会把弹窗定位到窗外出不来）
+  private func presentEditPopover(_ popover: NSPopover, marker: PDFAnnotation, isLeft: Bool) {
+    guard let pdfView, let page = marker.page else { return }
+    var anchor = pdfView.convert(marker.bounds, from: page)
+    let visible = pdfView.bounds
+    if !visible.intersects(anchor) {
+      anchor.origin.x = min(max(anchor.minX, visible.minX + 8), max(visible.minX + 8, visible.maxX - anchor.width - 8))
+      anchor.origin.y = min(max(anchor.minY, visible.minY + 8), max(visible.minY + 8, visible.maxY - anchor.height - 8))
+    }
+    popover.show(relativeTo: anchor, of: pdfView, preferredEdge: isLeft ? .maxX : .minX)
+  }
+
+  /// 批注组正文内容块（视图坐标）：组内高亮/下划线合集换算；弹窗锚点用
+  private func contentUnionViewRect(of marker: PDFAnnotation) -> NSRect? {
+    guard let pdfView, let page = marker.page else { return nil }
+    var union: NSRect? = nil
+    for annotation in page.annotations where annotation.userName == marker.userName {
+      let kind = AnnotationKind.of(annotation)
+      guard kind == .highlight || kind == .underline, annotation.bounds.width > 5 else { continue }
+      union = union?.union(annotation.bounds) ?? annotation.bounds
+    }
+    guard let u = union else { return nil }
+    let rect = pdfView.convert(u, from: page)
+    return rect.isFiniteRect ? rect : nil
   }
 
   /// 删除整条批注（图标 + 虚线段 + 高亮，同组；Popup 伴侣由 store.remove 连带）
