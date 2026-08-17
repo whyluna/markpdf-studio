@@ -3,9 +3,11 @@ import Foundation
 import os
 
 /// 工作区状态（FR-1.1）：根文件夹、文件树扫描、当前选中节点。
+/// 左右边栏宽度/显隐见 PanelLayoutStore（拖拽 60Hz 状态，须与重内容隔离）。
 /// 沙盒授权来自 NSOpenPanel 的用户选择（entitlements: files.user-selected.read-write）。
 /// 与 EditorStore 一致：主线程使用（开发规范 §3.2）。
 final class WorkspaceStore: ObservableObject {
+
   /// 已打开的工作区根节点（nil = 尚未打开）
   @Published private(set) var root: FileNode? {
     didSet {
@@ -29,9 +31,6 @@ final class WorkspaceStore: ObservableObject {
   @Published var isAIAssistantPresented = false {
     didSet { onStateChange?() }
   }
-  /// 右侧上下文面板（缩略图/大纲/AI 助手整栏）显隐：false 时整栏收起归零宽，
-  /// 正文区吸收全部空间（会话态，不持久）
-  @Published var isDetailPanelPresented = true
   /// 折叠的文件夹（FR-1.1 树展开态；默认全部展开，点击文件夹行切换，重扫后按 URL 保留）
   @Published var collapsedFolders: Set<URL> = [] {
     didSet { onStateChange?() }

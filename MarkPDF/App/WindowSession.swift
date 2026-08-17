@@ -10,6 +10,10 @@ final class WindowSession: ObservableObject, Identifiable {
   let id = UUID()
   let workspaceStore = WorkspaceStore()
   let tabStore = TabStore()
+  /// 边栏布局（宽度/显隐；独立 store：拖拽 60Hz 状态不牵动重内容视图）
+  let panelLayout = PanelLayoutStore()
+  /// 标签拖拽协调（独立于 TabStore：拖拽指针 60Hz 发布只让 TabBarView 重算）
+  let tabDragStore = TabDragStore()
   let pdfStore = PDFReaderStore()
   let pdfBookmarksStore = PDFBookmarksStore()
   let imageStore = ImagePreviewStore()

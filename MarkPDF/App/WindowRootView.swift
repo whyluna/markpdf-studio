@@ -43,6 +43,8 @@ struct WindowRootView: View {
       .environmentObject(session)
       .environmentObject(session.workspaceStore)
       .environmentObject(session.tabStore)
+      .environmentObject(session.tabDragStore)
+      .environmentObject(session.panelLayout)
       .environmentObject(session.pdfStore)
       .environmentObject(session.pdfBookmarksStore)
       .environmentObject(session.imageStore)

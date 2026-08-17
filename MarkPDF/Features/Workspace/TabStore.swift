@@ -9,8 +9,6 @@ final class TabStore: ObservableObject {
   @Published var activeGroupID: TabGroup.ID {
     didSet { onStructureChange?() }
   }
-  /// 拖拽中的标签（应用内拖拽共享状态）
-  var draggingTab: (tab: EditorTab, from: TabGroup.ID)?
   /// 文件被打开的回调（FR-1.5 最近打开记录；由 App 层接线，与工作区根路径关联）
   var onOpenFile: ((URL) -> Void)?
   /// 标签结构变化回调（FR-1.6 快照保存；由 App 层接线）
@@ -127,8 +125,9 @@ final class TabStore: ObservableObject {
     }
   }
 
-  /// 把标签移到另一组（目标组不存在则先创建）
-  func moveTab(_ tab: EditorTab, from source: TabGroup, to target: TabGroup?) {
+  /// 把标签移到另一组（目标组不存在则先创建；before 指定插入位置，nil 移组尾）。
+  /// 拖拽落点统一经此入口（组内重排走 TabGroup.moveTab，不经过这里）
+  func moveTab(_ tab: EditorTab, from source: TabGroup, to target: TabGroup?, before targetTab: EditorTab? = nil) {
     let targetGroup = target ?? {
       let group = makeGroup()
       groups.append(group)
@@ -136,7 +135,11 @@ final class TabStore: ObservableObject {
     }()
     guard source.id != targetGroup.id else { return }
     let store = source.detach(tab)
-    targetGroup.attach(tab, store: store)
+    if let targetTab {
+      targetGroup.insert(tab, store: store, before: targetTab)
+    } else {
+      targetGroup.attach(tab, store: store)
+    }
     activeGroupID = targetGroup.id
     collapseIfEmpty(source)
   }

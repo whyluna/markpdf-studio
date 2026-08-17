@@ -22,6 +22,8 @@ struct ContentView: View {
       splitView
       StatusBarView()
     }
+    // 窗口工具栏挂最外层：挂在正文 HStack 内会随右栏拖拽/收放一起被挤动
+    .toolbar { toolbarContent }
     // 菜单命令上下文（v1.5 多窗口）：焦点窗口发布，AppCommands 消费；
     // body 随各 store @Published 重算，标志变化即刷新菜单禁用态
     .focusedSceneValue(\.commandContext, commandContext)
@@ -48,6 +50,71 @@ struct ContentView: View {
       } else if workspaceStore.isCommandPalettePresented {
         commandPaletteOverlay
       }
+    }
+    // 拖拽幽灵标签（VSCode 式）：被拖标签以浮起卡片跟随指针
+    .overlay {
+      TabDragGhostOverlay()
+    }
+  }
+
+  /// 拖拽幽灵浮层（VSCode 式）：被拖标签跟随指针的浮起卡片。
+  /// 自观测拖拽 store——指针每帧变化只重算本浮层，不牵动 ContentView/工具栏
+  private struct TabDragGhostOverlay: View {
+    @EnvironmentObject private var tabDragStore: TabDragStore
+    /// 本浮层的全局帧（指针全局坐标换算本层位置用）
+    @State private var myGlobalFrame: CGRect = .zero
+
+    var body: some View {
+      Group {
+        if let dragging = tabDragStore.draggingTab, let pointer = tabDragStore.dragPointer,
+          myGlobalFrame != .zero
+        {
+          ghostCard(tab: dragging.tab)
+            // 左上角对齐鼠标（offset 相对 topLeading 摆位）：卡片不会盖住
+            // 指针位置左侧与上方的标签栏信息
+            .offset(
+              x: pointer.x - myGlobalFrame.minX,
+              y: pointer.y - myGlobalFrame.minY
+            )
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .allowsHitTesting(false)
+      .background(
+        GeometryReader { geo in
+          Color.clear.onAppear { myGlobalFrame = geo.frame(in: .global) }
+        }
+      )
+    }
+
+    /// 浮起卡片：与原标签同形等宽（顶部圆角标签形 + 实测宽度复刻），
+    /// 阴影浮起 + 轻微透明
+    private func ghostCard(tab: EditorTab) -> some View {
+      HStack(spacing: 8) {
+        Image(systemName: tab.iconName)
+          .font(.system(size: 11))
+          .foregroundStyle(Color.accentColor)
+        Text(tab.title)
+          .font(.system(size: 13))
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .frame(maxWidth: 190, alignment: .leading)
+          .fixedSize(horizontal: true, vertical: false)
+      }
+      // 内容区等宽复刻（扣除两侧内衬 5pt）：与原标签长度一致
+      .frame(width: max((tabDragStore.ghostWidth ?? 0) - 10, 0), alignment: .leading)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 7)
+      .background(
+        TopRoundedRectangle(radius: 8)
+          .fill(Color(nsColor: .windowBackgroundColor))
+          .shadow(color: .black.opacity(0.25), radius: 5, y: 2)
+      )
+      .overlay(
+        TopRoundedRectangle(radius: 8)
+          .stroke(Color.primary.opacity(0.18), lineWidth: 0.5)
+      )
+      .opacity(0.92)
     }
   }
 
@@ -102,98 +169,89 @@ struct ContentView: View {
   // MARK: - 三栏布局
 
   private var splitView: some View {
-    // 右侧面板走系统检查器（inspector）：独立于分栏——边栏收放/拖动只影响正文；
-    // prominentDetail 样式让正文承担全部宽度分配（边栏展开时右栏不再被压）
-    NavigationSplitView {
-      // FR-1.1 工作区文件树。列宽上限 360（用户定夺）：SwiftUI 的 max 约束
-      // 拖动期间不生效（分隔条可物理拖到 detail 触底，松手后列错位/双侧溢出
-      // 且不可恢复）——拖拽条在 AppKit 层给边栏列加 238–360 硬约束，
-      // 分隔条拖不出范围，失步无从触发
-      FileTreeView()
-        .overlay(alignment: .trailing) {
-          SidebarDragStrip()
-            .frame(width: 6)
-            .frame(maxHeight: .infinity)
-        }
-        .navigationSplitViewColumnWidth(min: 238, ideal: 260, max: 360)
-    } detail: {
-      tabAreaWithToolbar
+    // 左右边栏均为自定义面板（HStack 自管宽度）：消融实验证实 NavigationSplitView
+    // 的列宽协商层存在不可修的宽度振荡（拖面板时 ±10~100pt 的 4 值极限环）；
+    // 系统检查器的拖拽又自带「拖过最窄即收起」，而需求是显隐只由按钮控制。
+    // 宽度/显隐由 PanelLayoutStore 承载且宿主自观测——ContentView 与 .toolbar
+    // 不随拖拽逐帧宽度重算（此前拖右栏会带着工具栏一起动的根因）
+    HStack(spacing: 0) {
+      SidebarPanelHost()
+      tabArea
         .frame(minWidth: 360)
-        .inspector(isPresented: $workspaceStore.isDetailPanelPresented) {
-          detailPanel
-            .inspectorColumnWidth(min: 280, ideal: 300, max: 360)
-        }
+      DetailPanelHost()
     }
   }
 
-  /// 正文栏（标签区 + 窗口工具栏）
-  private var tabAreaWithToolbar: some View {
-    tabArea
-      .toolbar {
-        ToolbarItem(placement: .principal) {
-          if tabStore.activeGroup.activeTab?.kind == .pdf {
-            // PDF 标注工具组（FR-4.4，对齐设计稿 #pdfTools）
-            PDFToolsView()
-          } else if let store = tabStore.activeEditorStore {
-            EditorModePicker(store: store)
-          }
-        }
-        ToolbarItem(placement: .primaryAction) {
-          // 导出菜单（设计稿 #btnExport）
-          Menu {
-            Button("导出为 PDF") {
-              exportMarkdown(.pdf)
-            }
-            .disabled(!canExportMarkdown)
-            Button("导出为 HTML") {
-              exportMarkdown(.html)
-            }
-            .disabled(!canExportMarkdown)
-            Divider()
-            Button("导出全部标注为 Markdown…") {
-              exportAnnotations()
-            }
-            .disabled(!canExportAnnotations)
-          } label: {
-            Image(systemName: "square.and.arrow.up")
-          }
-          .help("导出")
-        }
-        ToolbarItem(placement: .primaryAction) {
-          // AI 助手（FR-AI.2；⌘⇧A / 命令面板同源开关）
-          Button {
-            workspaceStore.isAIAssistantPresented.toggle()
-          } label: {
-            Image(systemName: workspaceStore.isAIAssistantPresented ? "sparkles.rectangle.stack.fill" : "sparkles.rectangle.stack")
-          }
-          .help(workspaceStore.isAIAssistantPresented ? "隐藏 AI 助手" : "显示 AI 助手")
-        }
-        ToolbarItem(placement: .primaryAction) {
-          // 分栏切换（FR-1.4；设计稿 #btnSplit）
-          Button {
-            tabStore.toggleSplit()
-          } label: {
-            Image(systemName: tabStore.isSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
-          }
-          .help(tabStore.isSplit ? "合并为单栏" : "左右分栏")
-        }
-        ToolbarItem(placement: .primaryAction) {
-          // 右侧面板整栏收起/展开（缩略图/大纲/AI 助手同栏）。
-          // 系统检查器开关可能被挤出工具栏——自己的按钮必然可达
-          Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-              workspaceStore.isDetailPanelPresented.toggle()
-            }
-          } label: {
-            Image(systemName: "sidebar.right")
-              .symbolVariant(workspaceStore.isDetailPanelPresented ? .fill : .none)
-          }
-          .help(workspaceStore.isDetailPanelPresented ? "收起右侧面板" : "展开右侧面板")
-        }
-      }
-  }
+  /// 左侧悬浮侧栏宿主：自观测 PanelLayoutStore（宽度/显隐变化只重排本栏）
+  private struct SidebarPanelHost: View {
+  @EnvironmentObject private var panels: PanelLayoutStore
 
-  /// 右侧 detail 列宽度约束见 inspectorColumnWidth（280/300/360，系统检查器托管）
+  var body: some View {
+    if panels.isFileSidebarPresented {
+      FileTreeView()
+        // 主色压白 + 可调透度：titlebar 材质(behindWindow)提供桌面透映，
+        // 白色叠加层把主色拉回白、opacity 即透度旋钮（0.82 = 82% 白 +
+        // 18% 桌面，用户反馈「微微透出」；改这一个数即可调）
+        .background(
+          ZStack {
+            SidebarMaterialBackground()
+              .ignoresSafeArea(edges: .top)
+            Color.white.opacity(0.82)
+          }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .shadow(color: .black.opacity(0.14), radius: 3, y: 1)
+        .frame(width: panels.fileSidebarWidth)
+        .frame(maxHeight: .infinity)
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .padding(.bottom, 8)
+        .overlay(alignment: .trailing) {
+          // 拖拽区覆盖面板右缘 ±6pt（落在右侧 10pt 外衬内）
+          PanelDragStrip(
+            width: $panels.fileSidebarWidth,
+            clamp: PanelLayoutStore.clampedFileSidebarWidth
+          )
+          .frame(width: 12)
+          .frame(maxHeight: .infinity)
+          .padding(.trailing, 4)
+        }
+    }
+  }
+}
+
+/// 右侧面板宿主（自定义，复刻系统检查器）：inspector 材质 + 左缘拖拽条
+///（280–360 钳制）。拖拽永不触发收起——显隐只由工具栏按钮控制
+private struct DetailPanelHost: View {
+  @EnvironmentObject private var panels: PanelLayoutStore
+  @EnvironmentObject private var workspaceStore: WorkspaceStore
+  @EnvironmentObject private var tabStore: TabStore
+
+  var body: some View {
+    if panels.isDetailPanelPresented {
+      ZStack {
+        InspectorMaterialBackground()
+        detailPanel
+      }
+      .frame(width: panels.detailPanelWidth)
+      .frame(maxHeight: .infinity)
+      .overlay(alignment: .leading) {
+        Divider()
+      }
+      .overlay(alignment: .leading) {
+        // 拖拽区以分界线为中心左右各探 6pt（offset -6 向左探出面板覆盖分界线本身，
+        // 光标放在分界线上即可拖拽）：拖左增宽、拖右收窄（direction -1）
+        PanelDragStrip(
+          width: $panels.detailPanelWidth,
+          direction: -1,
+          clamp: PanelLayoutStore.clampedDetailPanelWidth
+        )
+        .frame(width: 12)
+        .frame(maxHeight: .infinity)
+        .offset(x: -6)
+      }
+    }
+  }
 
   /// 右侧面板：AI 助手可见时整栏替代（FR-AI.2 替代式单栏）；
   /// 否则 pdf 标签 = 缩略图/书签/标注/引用（FR-3.3/5.4），其余 = 大纲（FR-2.6）+ 反向链接（FR-5.4）
@@ -217,6 +275,100 @@ struct ContentView: View {
           // 初始限制最大高度：反向链接默认只占底部小块（idealHeight 软引导对 VSplitView 布局无效，改用 maxHeight 硬约束）
           .frame(minHeight: 60, idealHeight: 90, maxHeight: 190)
       }
+    }
+  }
+}
+
+/// 左侧文件树收起/展开按钮（FR-1.1）：独立观测布局 store，点击不牵动 ContentView
+private struct FileSidebarToggleButton: View {
+  @EnvironmentObject private var panels: PanelLayoutStore
+
+  var body: some View {
+    Button {
+      withAnimation(.easeOut(duration: 0.15)) {
+        panels.isFileSidebarPresented.toggle()
+      }
+    } label: {
+      Image(systemName: "sidebar.leading")
+    }
+    .help("显示/隐藏文件树")
+  }
+}
+
+/// 右侧面板收起/展开按钮：自定义面板无系统拖动收起，显隐完全由此按钮控制
+private struct DetailPanelToggleButton: View {
+  @EnvironmentObject private var panels: PanelLayoutStore
+
+  var body: some View {
+    Button {
+      withAnimation(.easeInOut(duration: 0.2)) {
+        panels.isDetailPanelPresented.toggle()
+      }
+    } label: {
+      Image(systemName: "sidebar.right")
+        .symbolVariant(panels.isDetailPanelPresented ? .fill : .none)
+    }
+    .help(panels.isDetailPanelPresented ? "收起右侧面板" : "展开右侧面板")
+  }
+}
+
+  /// 窗口工具栏（挂最外层 body，不随右栏拖拽/收放被挤动）
+  @ToolbarContentBuilder
+  private var toolbarContent: some ToolbarContent {
+    ToolbarItem(placement: .navigation) {
+      // 左侧文件树收起/展开（FR-1.1）；按钮自观测布局 store，拖拽调宽不牵动工具栏
+      FileSidebarToggleButton()
+    }
+    ToolbarItem(placement: .principal) {
+      if tabStore.activeGroup.activeTab?.kind == .pdf {
+        // PDF 标注工具组（FR-4.4，对齐设计稿 #pdfTools）
+        PDFToolsView()
+      } else if let store = tabStore.activeEditorStore {
+        EditorModePicker(store: store)
+      }
+    }
+    ToolbarItem(placement: .primaryAction) {
+      // 导出菜单（设计稿 #btnExport）
+      Menu {
+        Button("导出为 PDF") {
+          exportMarkdown(.pdf)
+        }
+        .disabled(!canExportMarkdown)
+        Button("导出为 HTML") {
+          exportMarkdown(.html)
+        }
+        .disabled(!canExportMarkdown)
+        Divider()
+        Button("导出全部标注为 Markdown…") {
+          exportAnnotations()
+        }
+        .disabled(!canExportAnnotations)
+      } label: {
+        Image(systemName: "square.and.arrow.up")
+      }
+      .help("导出")
+    }
+    ToolbarItem(placement: .primaryAction) {
+      // AI 助手（FR-AI.2；⌘⇧A / 命令面板同源开关）
+      Button {
+        workspaceStore.isAIAssistantPresented.toggle()
+      } label: {
+        Image(systemName: workspaceStore.isAIAssistantPresented ? "sparkles.rectangle.stack.fill" : "sparkles.rectangle.stack")
+      }
+      .help(workspaceStore.isAIAssistantPresented ? "隐藏 AI 助手" : "显示 AI 助手")
+    }
+    ToolbarItem(placement: .primaryAction) {
+      // 分栏切换（FR-1.4；设计稿 #btnSplit）
+      Button {
+        tabStore.toggleSplit()
+      } label: {
+        Image(systemName: tabStore.isSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+      }
+      .help(tabStore.isSplit ? "合并为单栏" : "左右分栏")
+    }
+    ToolbarItem(placement: .primaryAction) {
+      // 右侧面板整栏收起/展开（缩略图/大纲/AI 助手同栏）；按钮自观测布局 store
+      DetailPanelToggleButton()
     }
   }
 
@@ -485,10 +637,11 @@ private struct EditorModePicker: View {
   }
 }
 
-/// 窗口右缘的标签落点：拖标签到此处创建/移入最右侧组
+/// 窗口右缘的标签落点（拖标签到此处创建/移入最右侧组）：
+/// 高亮跟随共享拖拽指针；落定逻辑在源栏手势 onEnded 里执行（无系统拖放会话，不设 onDrop）
 private struct EdgeTabDropZone: View {
-  @EnvironmentObject private var tabStore: TabStore
-  @State private var isTargeted = false
+  @EnvironmentObject private var tabDragStore: TabDragStore
+  @State private var myFrame: CGRect = .zero
 
   var body: some View {
     Color.clear
@@ -498,15 +651,25 @@ private struct EdgeTabDropZone: View {
           .fill(isTargeted ? Color.accentColor.opacity(0.2) : Color.clear)
           .padding(4)
       )
-      .onDrop(of: [.text], isTargeted: $isTargeted) { _ in
-        guard let dragging = tabStore.draggingTab,
-          let source = tabStore.groups.first(where: { $0.id == dragging.from })
-        else { return false }
-        let target = tabStore.isSplit ? tabStore.groups.last : nil
-        tabStore.moveTab(dragging.tab, from: source, to: target)
-        tabStore.draggingTab = nil
-        return true
-      }
+      .background(
+        // 上报本条的全局帧（源栏手势据此判定边缘落点）
+        GeometryReader { geo in
+          Color.clear
+            .onAppear {
+              myFrame = geo.frame(in: .global)
+              tabDragStore.edgeDropFrame = myFrame
+            }
+            .onChange(of: geo.frame(in: .global)) { newFrame in
+              myFrame = newFrame
+              tabDragStore.edgeDropFrame = newFrame
+            }
+        }
+      )
+  }
+
+  private var isTargeted: Bool {
+    guard let pointer = tabDragStore.dragPointer else { return false }
+    return myFrame.contains(pointer)
   }
 }
 
@@ -520,90 +683,85 @@ private struct EdgeTabDropZone: View {
     ))
     .environmentObject(WorkspaceStore())
     .environmentObject(TabStore())
+    .environmentObject(TabDragStore())
+    .environmentObject(PanelLayoutStore())
     .environmentObject(PDFReaderStore())
     .environmentObject(PDFBookmarksStore())
     .environmentObject(WorkspaceStateStore())
 }
 
 
-/// 左侧边栏分隔条加宽拖拽条（系统分隔线命中区太窄的根治）：
-/// 叠在边栏列右缘 6pt，命中即左右箭头；拖动循环直接拨 NSSplitView 分隔条
-///（不走 SwiftUI 逐帧更新，手感与右栏检查器完全一致）
-private struct SidebarDragStrip: NSViewRepresentable {
-  func makeNSView(context: Context) -> SidebarDragStripNSView {
-    SidebarDragStripNSView()
+/// 侧栏底材：titlebar 材质 + behindWindow——提供桌面透映（与右栏检查器
+/// 同款机制）；主色/透度由面板上的白色叠加层（opacity 0.82）控制
+private struct SidebarMaterialBackground: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSVisualEffectView {
+    let view = NSVisualEffectView()
+    view.material = .titlebar
+    view.blendingMode = .behindWindow
+    view.state = .active
+    return view
   }
 
-  func updateNSView(_ nsView: SidebarDragStripNSView, context: Context) {}
+  func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
-final class SidebarDragStripNSView: NSView {
-  /// 已加宽度硬约束的分隔视图（SwiftUI 重建分隔视图后需重装，按窗口存活判断）
-  private var constrainedSplit: NSSplitView?
-
-  override func viewDidMoveToWindow() {
-    super.viewDidMoveToWindow()
-    installWidthConstraints()
+/// 右侧面板底材：inspector 材质（运行时实测 rawValue 18）+ withinWindow——
+/// 复刻系统检查器外观（透出窗口内内容而非桌面，见 MatProbe 对照结论）
+private struct InspectorMaterialBackground: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSVisualEffectView {
+    let view = NSVisualEffectView()
+    view.material = NSVisualEffectView.Material(rawValue: 18) ?? .sidebar
+    view.blendingMode = .withinWindow
+    view.state = .active
+    return view
   }
 
-  /// 边栏列宽硬约束（238–360，priority 999）：SwiftUI 的 min/max 约束
-  /// 拖动期间不生效——分隔条可物理拖到 detail 触底（约 888pt），松手后
-  /// SwiftUI 记账与显示失步（列错位/双侧溢出，且失步后不可恢复）。
-  /// AppKit 层把分隔条的物理行程限死在合法区间，SwiftUI 永远见不到
-  /// 越界值，失步无从触发；优先级 999 不与 SwiftUI 必需约束打架
-  private func installWidthConstraints() {
-    if let split = constrainedSplit, split.window != nil { return }
-    constrainedSplit = nil
-    guard let split = Self.findSplitView(in: window?.contentView),
-      split.arrangedSubviews.count >= 2
-    else { return }
-    let sidebar = split.arrangedSubviews[0]
-    let lower = sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 238)
-    let upper = sidebar.widthAnchor.constraint(lessThanOrEqualToConstant: 360)
-    for constraint in [lower, upper] {
-      constraint.priority = .init(999)
-      constraint.isActive = true
+  func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+/// 面板拖拽条（左右边栏共用）：按住水平拖动直写列宽，方向系数区分两侧——
+/// 左栏拖右增宽（direction 1）；右栏拖左增宽（direction -1）。
+/// 宽度由状态直接指定并钳制，无系统协商，拖不出显隐切换
+private struct PanelDragStrip: NSViewRepresentable {
+  @Binding var width: CGFloat
+  /// 拖动方向系数：+1 拖右增宽（左栏）；-1 拖左增宽（右栏）
+  var direction: CGFloat = 1
+  /// 列宽钳制函数（各自栏的 min/max 范围）
+  var clamp: (CGFloat) -> CGFloat
+
+  func makeNSView(context: Context) -> PanelDragStripNSView {
+    PanelDragStripNSView()
+  }
+
+  func updateNSView(_ nsView: PanelDragStripNSView, context: Context) {
+    nsView.currentWidth = width
+    nsView.direction = direction
+    nsView.onWidthChanged = { newWidth in
+      width = clamp(newWidth)
     }
-    constrainedSplit = split
   }
+}
+
+final class PanelDragStripNSView: NSView {
+  /// 当前列宽（SwiftUI 每轮同步；拖动起点）
+  var currentWidth: CGFloat = 0
+  /// 拖动方向系数（±1，见 PanelDragStrip）
+  var direction: CGFloat = 1
+  /// 拖动中目标列宽回调
+  var onWidthChanged: ((CGFloat) -> Void)?
+  private var dragStartX: CGFloat = 0
+  private var dragStartWidth: CGFloat = 0
 
   override func resetCursorRects() {
     addCursorRect(bounds, cursor: .resizeLeftRight)
   }
 
-  /// 事件重定向：把落在加宽带上的按下转交给分隔条中心的系统拖动跟踪——
-  /// 自己拨条会与 NavigationSplitView 的宽度同步回环打架（从左侧接近必抖的根因），
-  /// 系统接管后手感与右栏检查器完全一致
   override func mouseDown(with event: NSEvent) {
-    installWidthConstraints()
-    guard let window, let split = Self.findSplitView(in: window.contentView),
-      split.arrangedSubviews.count >= 2
-    else { return }
-    let dividerCenterInSplit = NSPoint(
-      x: split.arrangedSubviews[0].frame.maxX + split.dividerThickness / 2,
-      y: split.bounds.midY
-    )
-    let inWindow = split.convert(dividerCenterInSplit, to: nil)
-    guard let redirected = NSEvent.mouseEvent(
-      with: .leftMouseDown,
-      location: inWindow,
-      modifierFlags: event.modifierFlags,
-      timestamp: event.timestamp,
-      windowNumber: event.windowNumber,
-      context: nil,
-      eventNumber: event.eventNumber,
-      clickCount: 1,
-      pressure: 1
-    ) else { return }
-    split.mouseDown(with: redirected)
+    dragStartX = event.locationInWindow.x
+    dragStartWidth = currentWidth
   }
 
-  private static func findSplitView(in view: NSView?) -> NSSplitView? {
-    guard let view else { return nil }
-    if let split = view as? NSSplitView { return split }
-    for subview in view.subviews {
-      if let found = findSplitView(in: subview) { return found }
-    }
-    return nil
+  override func mouseDragged(with event: NSEvent) {
+    onWidthChanged?(dragStartWidth + direction * (event.locationInWindow.x - dragStartX))
   }
 }

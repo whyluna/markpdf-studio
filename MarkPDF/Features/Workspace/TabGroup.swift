@@ -157,7 +157,25 @@ final class TabGroup: ObservableObject, Identifiable {
     activeTabID = tab.id
   }
 
-  /// 全部标签落盘（退出前兜底）
+  /// 接收跨组移入的标签并插到指定标签之前（同 attach 的接线口径；拖到栏内某位置时用）
+  func insert(_ tab: EditorTab, store: EditorStore?, before target: EditorTab) {
+    if let store {
+      editorStores[tab.id] = store
+    } else {
+      prepareStore(for: tab)
+    }
+    // 跨组搬运的 store 其光标上报闭包仍弱指源组——源组释放（合栏）后上报静默失效，
+    // 重接到本组（FR-1.6 编辑位置记忆不断线）
+    editorStores[tab.id]?.onCursorLineChange = { [weak self] url, line in
+      self?.onEditorCursorLine?(url, line)
+    }
+    if let to = tabs.firstIndex(where: { $0.id == target.id }) {
+      tabs.insert(tab, at: to)
+    } else {
+      tabs.append(tab)
+    }
+    activeTabID = tab.id
+  }
   func flushAll() {
     for store in editorStores.values {
       store.flushPendingSave()
