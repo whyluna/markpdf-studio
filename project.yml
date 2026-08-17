@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    MARKETING_VERSION: "0.1.8"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "100"
     SWIFT_STRICT_CONCURRENCY: minimal
     # 编译时把 SwiftUI 字面量与 String(localized:) 自动收编进 Localizable.xcstrings
     SWIFT_EMIT_LOC_STRINGS: YES
