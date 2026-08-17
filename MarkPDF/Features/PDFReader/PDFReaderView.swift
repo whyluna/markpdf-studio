@@ -40,11 +40,20 @@ final class ZoomablePDFView: PDFView {
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     disableDocumentAnalysis()
+    setupViewportClipping()
   }
 
   required init?(coder: NSCoder) {
     super.init(coder: coder)
     disableDocumentAnalysis()
+    setupViewportClipping()
+  }
+
+  /// 裁剪到视口：批注卡片/连线层等覆盖子视图跟随内容滚动，位置可能落在
+  /// 可见区之外（如内容滚出上缘）；PDFView 默认不裁剪子视图，溢出部分
+  /// 会画到上方标签栏（实测上滚后遮挡标签页）。开子视图裁剪统一兜底
+  private func setupViewportClipping() {
+    clipsToBounds = true
   }
 
   /// macOS 26 文档分析会把对齐排版的题行（题干+ABCD 选项）识别成表单候选，

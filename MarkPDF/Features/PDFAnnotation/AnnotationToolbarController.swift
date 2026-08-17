@@ -258,6 +258,8 @@ final class AnnotationToolbarController: NSObject {
     origin.y = min(max(origin.y, 8), maxY)
     hostingView.frame = NSRect(origin: origin, size: NSSize(width: width, height: size.height))
     hostingView.isHidden = false
+    // 工具条恒在覆盖层最顶（卡片重建会被 addSubview 垫到它上面）
+    restackOverlays()
     syncCursorRects()
   }
 
@@ -523,8 +525,8 @@ final class AnnotationToolbarController: NSObject {
     origin.y = min(max(origin.y, 4), pdfView.bounds.height - size.height - 4)
     deleteHosting.frame = NSRect(origin: origin, size: size)
     deleteHosting.isHidden = false
-    // 置顶：避免被虚线框覆盖导致点不到
-    pdfView.addSubview(deleteHosting, positioned: .above, relativeTo: nil)
+    // 置顶：避免被虚线框/批注卡片覆盖导致点不到（与工具条一起进统一 z 序）
+    restackOverlays()
     syncCursorRects()
   }
 
@@ -643,6 +645,8 @@ final class AnnotationToolbarController: NSObject {
     let layer = CommentConnectorLayer()
     layer.frame = pdfView.bounds
     layer.autoresizingMask = [.width, .height]
+    // 自绘内容同样裁到自身 bounds（防 drawRect 路径绕过默认裁剪溢出到标签栏）
+    layer.clipsToBounds = true
     pdfView.addSubview(layer)
     connectorLayer = layer
     // 滚动跟随：PDFView 没有滚动通知，监听内部文档滚动视图裁剪区的 bounds 变化
@@ -667,6 +671,23 @@ final class AnnotationToolbarController: NSObject {
       rebuildCommentCards()
     } else {
       updateCommentCardFrames()
+    }
+  }
+
+  /// 覆盖层 z 序固定（自下而上）：连线层 → 批注卡片 → 点选虚线边框 →
+  /// 编辑条 → 浮动工具条。addSubview 恒置顶，卡片随 revision 全量重建后
+  /// 会垫到工具条上方（虚线框/卡片盖住工具条、撑出 PDF 区的根因），
+  /// 每次覆盖层增删后统一重排
+  private func restackOverlays() {
+    guard let pdfView else { return }
+    let order: [NSView?] =
+      [connectorLayer]
+      + commentCards.map(\.hosting)
+      + borderViews
+      + [deleteHosting, hostingView]
+    for case let view? in order where view.superview === pdfView {
+      view.removeFromSuperview()
+      pdfView.addSubview(view)
     }
   }
 
@@ -741,6 +762,7 @@ final class AnnotationToolbarController: NSObject {
       migratedPages.removeAll()
     }
     updateCommentCardFrames()
+    restackOverlays()
   }
 
   /// 重摆：页坐标 → 视图坐标换算卡片 frame，并按当前缩放同步 rootView 尺寸参数。
