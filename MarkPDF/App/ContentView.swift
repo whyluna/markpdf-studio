@@ -1,4 +1,5 @@
 import AppKit
+import os
 import PDFKit
 import SwiftUI
 
@@ -100,24 +101,21 @@ struct ContentView: View {
 
   // MARK: - 三栏布局
 
-  /// 左侧文件树列宽上限：SwiftUI 的 max 约束异步生效，快拖到尽头会滞留
-  /// 超宽列（列错位/双侧溢出故障）——SidebarDragStrip 在拖动结束后
-  /// 以同源常量做 AppKit 侧封顶兜底
-  static let sidebarColumnMax: CGFloat = 360
-
   private var splitView: some View {
     // 右侧面板走系统检查器（inspector）：独立于分栏——边栏收放/拖动只影响正文；
     // prominentDetail 样式让正文承担全部宽度分配（边栏展开时右栏不再被压）
     NavigationSplitView {
-      // FR-1.1 工作区文件树。列宽上限 360（用户定夺）：过拖会触发
-      // NavigationSplitView 的列错位/空白故障，封顶封死故障区间
+      // FR-1.1 工作区文件树。列宽上限 360（用户定夺）：SwiftUI 的 max 约束
+      // 拖动期间不生效（分隔条可物理拖到 detail 触底，松手后列错位/双侧溢出
+      // 且不可恢复）——拖拽条在 AppKit 层给边栏列加 238–360 硬约束，
+      // 分隔条拖不出范围，失步无从触发
       FileTreeView()
         .overlay(alignment: .trailing) {
           SidebarDragStrip()
             .frame(width: 6)
             .frame(maxHeight: .infinity)
         }
-        .navigationSplitViewColumnWidth(min: 238, ideal: 260, max: Self.sidebarColumnMax)
+        .navigationSplitViewColumnWidth(min: 238, ideal: 260, max: 360)
     } detail: {
       tabAreaWithToolbar
         .frame(minWidth: 360)
@@ -195,7 +193,7 @@ struct ContentView: View {
       }
   }
 
-  /// 右侧 detail 列宽度约束见 inspectorColumnWidth（240/300/360，系统检查器托管）
+  /// 右侧 detail 列宽度约束见 inspectorColumnWidth（280/300/360，系统检查器托管）
 
   /// 右侧面板：AI 助手可见时整栏替代（FR-AI.2 替代式单栏）；
   /// 否则 pdf 标签 = 缩略图/书签/标注/引用（FR-3.3/5.4），其余 = 大纲（FR-2.6）+ 反向链接（FR-5.4）
@@ -530,7 +528,7 @@ private struct EdgeTabDropZone: View {
 
 /// 左侧边栏分隔条加宽拖拽条（系统分隔线命中区太窄的根治）：
 /// 叠在边栏列右缘 6pt，命中即左右箭头；拖动循环直接拨 NSSplitView 分隔条
-///（不走 SwiftUI 逐帧更新，238–360 同列宽上限）
+///（不走 SwiftUI 逐帧更新，手感与右栏检查器完全一致）
 private struct SidebarDragStrip: NSViewRepresentable {
   func makeNSView(context: Context) -> SidebarDragStripNSView {
     SidebarDragStripNSView()
@@ -540,50 +538,33 @@ private struct SidebarDragStrip: NSViewRepresentable {
 }
 
 final class SidebarDragStripNSView: NSView {
-  override init(frame frameRect: NSRect) {
-    super.init(frame: frameRect)
-    // 全局兜底（覆盖直接拖系统分隔条的路径）：SwiftUI 列宽 max 约束异步生效，
-    // 拖动结束后仍可能落定超宽列（残余 5-10pt 双侧溢出来自这里）。
-    // 监听目标分隔视图的子视图重排，非拖动进行中且超上限时压回
-    NotificationCenter.default.addObserver(
-      self, selector: #selector(splitResized(_:)),
-      name: NSSplitView.didResizeSubviewsNotification, object: nil
-    )
+  /// 已加宽度硬约束的分隔视图（SwiftUI 重建分隔视图后需重装，按窗口存活判断）
+  private var constrainedSplit: NSSplitView?
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    installWidthConstraints()
   }
 
-  required init?(coder: NSCoder) {
-    super.init(coder: coder)
-    NotificationCenter.default.addObserver(
-      self, selector: #selector(splitResized(_:)),
-      name: NSSplitView.didResizeSubviewsNotification, object: nil
-    )
-  }
-
-  deinit {
-    NotificationCenter.default.removeObserver(self)
-  }
-
-  /// 仅响应「自己所在的那只分隔视图」：应用里还有 AI 面板/检查器等多只
-  /// NSSplitView，对它们 setPosition 会改坏无关布局
-  @objc private func splitResized(_ note: Notification) {
-    guard let split = note.object as? NSSplitView,
-      enclosingNavSplit === split
+  /// 边栏列宽硬约束（238–360，priority 999）：SwiftUI 的 min/max 约束
+  /// 拖动期间不生效——分隔条可物理拖到 detail 触底（约 888pt），松手后
+  /// SwiftUI 记账与显示失步（列错位/双侧溢出，且失步后不可恢复）。
+  /// AppKit 层把分隔条的物理行程限死在合法区间，SwiftUI 永远见不到
+  /// 越界值，失步无从触发；优先级 999 不与 SwiftUI 必需约束打架
+  private func installWidthConstraints() {
+    if let split = constrainedSplit, split.window != nil { return }
+    constrainedSplit = nil
+    guard let split = Self.findSplitView(in: window?.contentView),
+      split.arrangedSubviews.count >= 2
     else { return }
-    // 拖动进行中不干预（与系统跟踪循环互搏会抖）；松手后落定的超宽一次性压回
-    let event = NSApp.currentEvent
-    if event?.type == .leftMouseDragged || event?.type == .leftMouseDown { return }
-    Self.clampSidebarColumn(of: split)
-  }
-
-  /// 从自身向上找到第一只 NSSplitView 祖先 = NavigationSplitView 的分隔视图
-  ///（内层分隔视图都在 detail 列里，不可能是本视图的祖先）
-  private var enclosingNavSplit: NSSplitView? {
-    var ancestor = superview
-    while let view = ancestor {
-      if let split = view as? NSSplitView { return split }
-      ancestor = view.superview
+    let sidebar = split.arrangedSubviews[0]
+    let lower = sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 238)
+    let upper = sidebar.widthAnchor.constraint(lessThanOrEqualToConstant: 360)
+    for constraint in [lower, upper] {
+      constraint.priority = .init(999)
+      constraint.isActive = true
     }
-    return nil
+    constrainedSplit = split
   }
 
   override func resetCursorRects() {
@@ -594,6 +575,7 @@ final class SidebarDragStripNSView: NSView {
   /// 自己拨条会与 NavigationSplitView 的宽度同步回环打架（从左侧接近必抖的根因），
   /// 系统接管后手感与右栏检查器完全一致
   override func mouseDown(with event: NSEvent) {
+    installWidthConstraints()
     guard let window, let split = Self.findSplitView(in: window.contentView),
       split.arrangedSubviews.count >= 2
     else { return }
@@ -614,18 +596,6 @@ final class SidebarDragStripNSView: NSView {
       pressure: 1
     ) else { return }
     split.mouseDown(with: redirected)
-    // 过拖封顶：NSSplitView 的拖动跟踪在 mouseDown 内同步完成（松手即返回），
-    // 就地压回上限；迟到的 SwiftUI 布局回写由 splitResized 观察者兜底
-    Self.clampSidebarColumn(of: split)
-  }
-
-  /// 左列超出上限时压回（拖动已结束，不会与跟踪循环互搏）
-  private static func clampSidebarColumn(of split: NSSplitView) {
-    guard split.arrangedSubviews.count >= 2 else { return }
-    let sidebar = split.arrangedSubviews[0]
-    guard sidebar.frame.width > ContentView.sidebarColumnMax + 1 else { return }
-    split.setPosition(ContentView.sidebarColumnMax, ofDividerAt: 0)
-    split.adjustSubviews()
   }
 
   private static func findSplitView(in view: NSView?) -> NSSplitView? {
