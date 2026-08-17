@@ -100,6 +100,11 @@ struct ContentView: View {
 
   // MARK: - 三栏布局
 
+  /// 左侧文件树列宽上限：SwiftUI 的 max 约束异步生效，快拖到尽头会滞留
+  /// 超宽列（列错位/双侧溢出故障）——SidebarDragStrip 在拖动结束后
+  /// 以同源常量做 AppKit 侧封顶兜底
+  static let sidebarColumnMax: CGFloat = 360
+
   private var splitView: some View {
     // 右侧面板走系统检查器（inspector）：独立于分栏——边栏收放/拖动只影响正文；
     // prominentDetail 样式让正文承担全部宽度分配（边栏展开时右栏不再被压）
@@ -112,7 +117,7 @@ struct ContentView: View {
             .frame(width: 6)
             .frame(maxHeight: .infinity)
         }
-        .navigationSplitViewColumnWidth(min: 238, ideal: 260, max: 360)
+        .navigationSplitViewColumnWidth(min: 238, ideal: 260, max: Self.sidebarColumnMax)
     } detail: {
       tabAreaWithToolbar
         .frame(minWidth: 360)
@@ -563,6 +568,21 @@ final class SidebarDragStripNSView: NSView {
       pressure: 1
     ) else { return }
     split.mouseDown(with: redirected)
+    // 过拖封顶兜底：NSSplitView 的拖动跟踪在 mouseDown 内同步完成（松手即返回）。
+    // SwiftUI 的列宽 max 约束异步生效，快拖到尽头会滞留超宽列——列错位、
+    // 左右两列向窗口双侧溢出的故障就来自这里。就地压回上限，并在下一轮
+    // runloop 复查一次（防被在途的 SwiftUI 布局回写再次顶开）
+    Self.clampSidebarColumn(of: split)
+    DispatchQueue.main.async { Self.clampSidebarColumn(of: split) }
+  }
+
+  /// 左列超出上限时压回（拖动已结束，不会与跟踪循环互搏）
+  private static func clampSidebarColumn(of split: NSSplitView) {
+    guard split.arrangedSubviews.count >= 2 else { return }
+    let sidebar = split.arrangedSubviews[0]
+    guard sidebar.frame.width > ContentView.sidebarColumnMax + 1 else { return }
+    split.setPosition(ContentView.sidebarColumnMax, ofDividerAt: 0)
+    split.adjustSubviews()
   }
 
   private static func findSplitView(in view: NSView?) -> NSSplitView? {
