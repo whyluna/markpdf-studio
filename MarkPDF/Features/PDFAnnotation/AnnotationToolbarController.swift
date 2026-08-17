@@ -11,6 +11,9 @@ import SwiftUI
 @MainActor
 final class AnnotationToolbarController: NSObject {
   private weak var pdfView: PDFView?
+  /// 覆盖层宿主（与 pdfView 平级同帧）：夜间反色滤镜挂在 pdfView 图层上，
+  /// 覆盖层挂其内会被连带反色（深色下卡片深底变白块）——一律挂宿主
+  private weak var overlayHost: NSView?
   private let store: PDFAnnotationStore
   private let aiSettings: AISettingsStore
   private let translationStore: TranslationStore
@@ -22,8 +25,12 @@ final class AnnotationToolbarController: NSObject {
   /// 交互源注册令牌（分栏双控制器互不覆盖；deinit 注销）
   private var interactionCheckID: UUID?
 
-  init(pdfView: PDFView, store: PDFAnnotationStore, aiSettings: AISettingsStore, aiKeys: AIKeyStore) {
+  /// 覆盖层挂载点：宿主缺席（异常装配）退回 pdfView，保证功能可用
+  private var overlayParent: NSView? { overlayHost ?? pdfView }
+
+  init(pdfView: PDFView, overlayHost: NSView, store: PDFAnnotationStore, aiSettings: AISettingsStore, aiKeys: AIKeyStore) {
     self.pdfView = pdfView
+    self.overlayHost = overlayHost
     self.store = store
     self.aiSettings = aiSettings
     translationStore = TranslationStore(settings: aiSettings, service: AIService(keys: aiKeys))
@@ -37,7 +44,7 @@ final class AnnotationToolbarController: NSObject {
     )
     let hosting = NSHostingView(rootView: panel)
     hosting.isHidden = true
-    pdfView.addSubview(hosting)
+    overlayHost.addSubview(hosting)
     hostingView = hosting
 
     NotificationCenter.default.addObserver(
@@ -491,7 +498,7 @@ final class AnnotationToolbarController: NSObject {
       shape.lineWidth = 1.2
       shape.lineDashPattern = [4, 3]
       border.layer?.addSublayer(shape)
-      pdfView.addSubview(border)
+      overlayParent?.addSubview(border)
       borderViews.append(border)
     }
   }
@@ -515,7 +522,7 @@ final class AnnotationToolbarController: NSObject {
       deleteHosting.rootView = rootView
     } else {
       let hosting = NSHostingView(rootView: rootView)
-      pdfView.addSubview(hosting)
+      overlayParent?.addSubview(hosting)
       deleteHosting = hosting
     }
     guard let deleteHosting else { return }
@@ -647,7 +654,7 @@ final class AnnotationToolbarController: NSObject {
     layer.autoresizingMask = [.width, .height]
     // 自绘内容同样裁到自身 bounds（防 drawRect 路径绕过默认裁剪溢出到标签栏）
     layer.clipsToBounds = true
-    pdfView.addSubview(layer)
+    overlayParent?.addSubview(layer)
     connectorLayer = layer
     // 滚动跟随：PDFView 没有滚动通知，监听内部文档滚动视图裁剪区的 bounds 变化
     if let clip = pdfView.subviews.compactMap({ $0 as? NSScrollView }).first?.contentView {
@@ -679,15 +686,15 @@ final class AnnotationToolbarController: NSObject {
   /// 会垫到工具条上方（虚线框/卡片盖住工具条、撑出 PDF 区的根因），
   /// 每次覆盖层增删后统一重排
   private func restackOverlays() {
-    guard let pdfView else { return }
+    guard let parent = overlayParent else { return }
     let order: [NSView?] =
       [connectorLayer]
       + commentCards.map(\.hosting)
       + borderViews
       + [deleteHosting, hostingView]
-    for case let view? in order where view.superview === pdfView {
+    for case let view? in order where view.superview === parent {
       view.removeFromSuperview()
-      pdfView.addSubview(view)
+      parent.addSubview(view)
     }
   }
 
@@ -750,7 +757,7 @@ final class AnnotationToolbarController: NSObject {
           anchor: anchor,
           isLeftMargin: isLeft
         )
-        pdfView.addSubview(slot.hosting)
+        overlayParent?.addSubview(slot.hosting)
         commentCards.append(slot)
       }
     }

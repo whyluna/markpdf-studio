@@ -173,6 +173,51 @@ final class ZoomablePDFView: PDFView {
   }
 }
 
+/// PDF 视口容器：pdfView（夜间模式挂反色滤镜）+ 平级覆盖层宿主（永不被滤镜波及）。
+/// 反色滤镜作用在 pdfView 整棵图层树上——覆盖层（批注卡片/连线层/工具条）
+/// 若挂在其内会被连带反色（深色下卡片深底变白块）。宿主与 pdfView 同帧同
+/// 坐标系（覆盖层几何按 pdfView 坐标现算后直接套用），事件穿透、裁剪到视口
+final class PDFViewportView: NSView {
+  let pdfView: ZoomablePDFView
+  let overlayHost = OverlayPassthroughView()
+
+  override init(frame frameRect: NSRect) {
+    pdfView = ZoomablePDFView()
+    super.init(frame: frameRect)
+    for view in [pdfView, overlayHost] {
+      addSubview(view)
+      view.frame = bounds
+      view.autoresizingMask = [.width, .height]
+    }
+    // 覆盖层随内容滚动可能摆到视口外（上滚遮标签页），同 PDFView 一起裁剪兜底
+    overlayHost.clipsToBounds = true
+  }
+
+  required init?(coder: NSCoder) {
+    pdfView = ZoomablePDFView()
+    super.init(coder: coder)
+    for view in [pdfView, overlayHost] {
+      addSubview(view)
+      view.frame = bounds
+      view.autoresizingMask = [.width, .height]
+    }
+    overlayHost.clipsToBounds = true
+  }
+}
+
+/// 事件穿透容器：自身不命中，只把命中转给子视图（覆盖层之间的点击互不影响
+/// 底下 PDFView 的选择/翻页/捏合）
+final class OverlayPassthroughView: NSView {
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    guard !isHidden, alphaValue > 0.01 else { return nil }
+    for subview in subviews.reversed() {
+      let local = convert(point, to: subview)
+      if let hit = subview.hitTest(local) { return hit }
+    }
+    return nil
+  }
+}
+
 /// PDF 阅读视图（FR-3.1/3.2）：系统 PDFKit 渲染，连续滚动；
 /// 缩放支持按钮/快捷键（Store 驱动）与触控板捏合，范围 50%–400%。
 /// 高亮 / 下划线等标注能力（FR-4.x）将在 M2 叠加在此视图之上。
@@ -192,8 +237,9 @@ struct PDFReaderView: NSViewRepresentable {
     colorScheme == .dark
   }
 
-  func makeNSView(context: Context) -> PDFView {
-    let pdfView = ZoomablePDFView()
+  func makeNSView(context: Context) -> PDFViewportView {
+    let viewport = PDFViewportView()
+    let pdfView = viewport.pdfView
     // FR-7.2：默认视图模式设置
     pdfView.displayMode = settings.pdfViewMode.pdfDisplayMode
     pdfView.displayDirection = .vertical
@@ -242,6 +288,7 @@ struct PDFReaderView: NSViewRepresentable {
       object: pdfView
     )
     context.coordinator.pdfView = pdfView
+    context.coordinator.overlayHost = viewport.overlayHost
     pdfStore.pdfView = pdfView
     // 捏合缩放（FR-3.2）窗口级接管：事件进 App 的监控通道实测永不丢（PDFKit 内部
     //  pinch 在文档重挂载后只预览不落 scaleFactor——视觉变了又弹回、状态栏不跟；
@@ -249,19 +296,22 @@ struct PDFReaderView: NSViewRepresentable {
     context.coordinator.magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak coordinator = context.coordinator] event in
       coordinator?.handleWindowMagnify(event)
     }
-    // 划词浮动工具条（FR-4.1 + FR-AI.1 划词翻译）与标注写回关联（FR-4.6）
+    // 划词浮动工具条（FR-4.1 + FR-AI.1 划词翻译）与标注写回关联（FR-4.6）；
+    // 覆盖层挂平级宿主（不随夜间反色）
     context.coordinator.toolbarController = AnnotationToolbarController(
       pdfView: pdfView,
+      overlayHost: viewport.overlayHost,
       store: annotationStore,
       aiSettings: aiSettings,
       aiKeys: aiKeys
     )
     // 异步解析文档（NFR-1：大 PDF 主线程同步解析整窗卡顿，237 页实测 ~1s）
     context.coordinator.loadDocumentAsync(url: url)
-    return pdfView
+    return viewport
   }
 
-  func updateNSView(_ pdfView: PDFView, context: Context) {
+  func updateNSView(_ viewport: PDFViewportView, context: Context) {
+    let pdfView = viewport.pdfView
     // 视图被同类标签复用（切标签不重建，同类不同文档共用同一 PDFView）：
     // parent 必须每轮跟随——否则 coordinator 里的 url 停留在首个文档，
     // 位置/缩放存档全部写到第一个文件名下（实测「答案」的存档全记到「讲义」）
@@ -318,7 +368,9 @@ struct PDFReaderView: NSViewRepresentable {
   ///（Dark Reader 方案：亮度反转、色相保持，图片观感接近正常——PDFKit 无内容流级
   /// 反色能力，这是其上最贴近「智能反色、图片不反色」的可行路径。
   /// 注意：新版 macOS 已移除 CIHueRotate（返回 nil，曾导致滤镜静默失效），
-  /// 现用 CIHueAdjust 等价替代；羊皮纸档经用户决策移除）
+  /// 现用 CIHueAdjust 等价替代；羊皮纸档经用户决策移除）。
+  /// 链尾轻压对比度/亮度：反色后黑字变纯白（#fff），比 App 深色下的系统文字亮、
+  /// 纸底纯黑也比界面底色黑——压到 #ececec 级文字 + 近黑纸底，观感与 App 一致
   private func applyReadingTheme(_ theme: SettingsStore.PDFReadingTheme, to pdfView: PDFView) {
     pdfView.wantsLayer = true
     switch theme {
@@ -330,12 +382,15 @@ struct PDFReaderView: NSViewRepresentable {
       let invert = CIFilter(name: "CIColorInvert")
       let hueAdjust = CIFilter(name: "CIHueAdjust")
       hueAdjust?.setValue(Double.pi, forKey: "inputAngle")
-      pdfView.layer?.filters = [invert, hueAdjust].compactMap { $0 }
+      let soften = CIFilter(name: "CIColorControls")
+      soften?.setValue(0.90, forKey: "inputContrast")
+      soften?.setValue(-0.03, forKey: "inputBrightness")
+      pdfView.layer?.filters = [invert, hueAdjust, soften].compactMap { $0 }
       pdfView.layer?.backgroundColor = NSColor.black.cgColor
     }
   }
 
-  static func dismantleNSView(_ pdfView: PDFView, coordinator: Coordinator) {
+  static func dismantleNSView(_ viewport: PDFViewportView, coordinator: Coordinator) {
     NotificationCenter.default.removeObserver(coordinator)
     // local monitor 由系统事件通道持有，与 coordinator 生命周期无关——
     // 不摘除则每次开 PDF 标签泄漏一个全局监控器（随标签开闭线性增长）
@@ -353,6 +408,8 @@ struct PDFReaderView: NSViewRepresentable {
   final class Coordinator: NSObject {
     var parent: PDFReaderView
     weak var pdfView: PDFView?
+    /// 覆盖层宿主（与 pdfView 平级；夜间反色不波及 UI 覆盖层）
+    weak var overlayHost: NSView?
     /// 划词浮动工具条控制器（FR-4.1）
     var toolbarController: AnnotationToolbarController?
     /// 阅读位置落盘防抖（FR-3.5：翻页/缩放高频，合并写）
@@ -428,18 +485,18 @@ struct PDFReaderView: NSViewRepresentable {
       }
     }
 
-    /// 解析中的旋转指示（完成或失败后移除）
+    /// 解析中的旋转指示（完成或失败后移除）；挂覆盖层宿主（夜间反色不波及 UI）
     private func showSpinner(_ show: Bool) {
       if show {
-        guard spinner == nil, let pdfView else { return }
+        guard spinner == nil, let host = overlayHost ?? pdfView else { return }
         let indicator = NSProgressIndicator()
         indicator.style = .spinning
         indicator.controlSize = .large
         indicator.translatesAutoresizingMaskIntoConstraints = false
-        pdfView.addSubview(indicator)
+        host.addSubview(indicator)
         NSLayoutConstraint.activate([
-          indicator.centerXAnchor.constraint(equalTo: pdfView.centerXAnchor),
-          indicator.centerYAnchor.constraint(equalTo: pdfView.centerYAnchor),
+          indicator.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+          indicator.centerYAnchor.constraint(equalTo: host.centerYAnchor),
         ])
         indicator.startAnimation(nil)
         spinner = indicator
@@ -453,16 +510,16 @@ struct PDFReaderView: NSViewRepresentable {
     /// 解析失败占位（Bug 修复 3）：说明 + 重试按钮；重试/切换文档/加载成功时移除
     private func showLoadFailure(_ show: Bool) {
       if show {
-        guard failureHosting == nil, let pdfView else { return }
+        guard failureHosting == nil, let host = overlayHost ?? pdfView else { return }
         let hosting = NSHostingView(rootView: PDFLoadFailureView(
           message: parent.pdfStore.lastError ?? String(localized: "无法打开 PDF"),
           onRetry: { [weak self] in self?.retryLoad() }
         ))
         hosting.translatesAutoresizingMaskIntoConstraints = false
-        pdfView.addSubview(hosting)
+        host.addSubview(hosting)
         NSLayoutConstraint.activate([
-          hosting.centerXAnchor.constraint(equalTo: pdfView.centerXAnchor),
-          hosting.centerYAnchor.constraint(equalTo: pdfView.centerYAnchor),
+          hosting.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+          hosting.centerYAnchor.constraint(equalTo: host.centerYAnchor),
         ])
         failureHosting = hosting
       } else {
