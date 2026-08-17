@@ -20,6 +20,7 @@ const mdHighlight = HighlightStyle.define([
   { tag: t.comment, color: "var(--tok-c)" },
   { tag: [t.function(t.variableName), t.propertyName, t.typeName], color: "var(--tok-f)" },
   { tag: [t.number, t.atom, t.bool], color: "var(--tok-n)" },
+  { tag: t.variableName, color: "var(--tok-v)" },
   { tag: t.link, textDecoration: "none" },
 ]);
 import { python } from "@codemirror/lang-python";

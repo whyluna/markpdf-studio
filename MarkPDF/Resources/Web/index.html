@@ -8,15 +8,15 @@
 :root{
   --win-bg:#ffffff; --text:#1d1d1f; --text2:#6e6e73; --text3:#aeaeb2;
   --border:#e2e2e6; --sel:rgba(10,132,255,.15); --accent:#0a84ff; --code-bg:#f6f8fa;
-  --tok-k:#af3ad4; --tok-s:#c9352b; --tok-c:#8e8e93; --tok-f:#0a84ff; --tok-n:#b05c00;
+  --tok-k:#cf222e; --tok-s:#0a3069; --tok-c:#6e7781; --tok-f:#8250df; --tok-n:#0550ae; --tok-v:#953800;
   --editor-font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","PingFang SC",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   --hl:rgba(255,212,59,.4);
 }
 [data-theme="dark"]{
   --win-bg:#1e1e21; --text:#f5f5f7; --text2:#a1a1a6; --text3:#6c6c70;
-  --border:#3c3c41; --sel:rgba(10,132,255,.35); --accent:#0a84ff; --code-bg:#2a2a30;
-  --tok-k:#e08cff; --tok-s:#ff9a8a; --tok-c:#8e8e93; --tok-f:#6ab8ff; --tok-n:#ffbe5c;
+  --border:#3c3c41; --sel:rgba(10,132,255,.35); --accent:#0a84ff; --code-bg:#282c34;
+  --tok-k:#c678dd; --tok-s:#98c379; --tok-c:#7f848e; --tok-f:#61afef; --tok-n:#d19a66; --tok-v:#e06c75;
   --hl:rgba(255,197,23,.27);
 }
 *{margin:0;padding:0;box-sizing:border-box}
@@ -43,7 +43,7 @@ body{display:flex;flex-direction:column}
 
 /* ---------- 所见即所得装饰样式 ---------- */
 /* CM6 行元素禁止垂直 margin（不计入 offsetHeight，会造成坐标映射累积漂移），垂直间距一律用 padding */
-.cm-h1{font-size:27px;font-weight:700;border-bottom:1px solid var(--border);padding:4px 0 8px}
+.cm-h1{font-size:26px;font-weight:700;border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);padding:6px 0 9px}
 .cm-h2{font-size:20px;font-weight:650;padding:18px 0 2px}
 .cm-h3{font-size:17px;font-weight:600;padding:12px 0 2px}
 .cm-h4,.cm-h5,.cm-h6{font-size:15.5px;font-weight:600;padding:8px 0 2px}
@@ -51,26 +51,25 @@ body{display:flex;flex-direction:column}
 .cm-em{font-style:italic}
 .cm-strike{text-decoration:line-through;color:var(--text2)}
 .cm-inline-code{
-  font-family:var(--mono);font-size:.86em;background:var(--code-bg);
-  border-radius:5px;padding:1px 5px;color:#c7254e;
+  font-family:var(--mono);font-size:.87em;background:var(--code-bg);
+  border-radius:5px;padding:1px 5px;color:var(--text);
 }
-[data-theme="dark"] .cm-inline-code{color:#ff7a9e}
 .cm-link{color:var(--accent);border-bottom:1px dashed var(--accent)}
 /* 按住 ⌘：链接变为可点击形态 */
 .cm-mod-down .cm-link{cursor:pointer;text-decoration:underline;border-bottom-color:transparent}
 .cm-image{color:var(--accent)}
 .cm-quote-line{
-  border-left:3px solid var(--accent);background:var(--code-bg);
+  border-left:3px solid var(--text3);background:transparent;
   color:var(--text2);padding-left:14px;
 }
 /* 代码块：四周描边 + 浅灰底（对齐表格边框风格）。
    底色必须半透明：不透明底色会盖住 drawSelection 选层高亮（框内看不到选区） */
 .cm-codeblock-line{
-  font-family:var(--mono);font-size:14px;line-height:1.6;background:rgba(175,184,193,.16);
+  font-family:var(--mono);font-size:13.5px;line-height:1.55;background:rgba(175,184,193,.13);
   border-left:1px solid var(--border);border-right:1px solid var(--border);
-  padding-left:16px;padding-right:16px;
+  padding-left:14px;padding-right:14px;
 }
-[data-theme="dark"] .cm-codeblock-line{background:rgba(110,118,129,.18)}
+[data-theme="dark"] .cm-codeblock-line{background:rgba(148,158,180,.12)}
 /* 头部语言栏：badge 固定高度决定栏高（消除真机 CJK 字体行盒把栏撑高的不确定性）；
    左右 15px 使内容对齐代码 16px（边框 box-sizing 占 1px） */
 .cm-codeblock-first{
@@ -150,7 +149,7 @@ body{display:flex;flex-direction:column}
 /* 渲染态表格（对齐设计稿 .mdwrap table；Widget 根元素用 padding 代替垂直 margin） */
 .cm-table-widget{padding:8px 0;overflow-x:auto;cursor:default}
 .cm-table-widget table{width:100%;border-collapse:collapse;font-size:14px}
-.cm-table-widget th,.cm-table-widget td{border:1px solid var(--border);padding:8px 12px;text-align:left}
+.cm-table-widget th,.cm-table-widget td{border:1px solid color-mix(in srgb,var(--border) 75%,transparent);padding:7px 11px;text-align:left}
 .cm-table-widget th{background:var(--code-bg);font-weight:600}
 .cm-table-widget tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--code-bg) 45%,transparent)}
 /* KaTeX 公式（FR-2.4）。widget 根元素用 padding 代替垂直 margin（margin 不计入 offsetHeight） */
