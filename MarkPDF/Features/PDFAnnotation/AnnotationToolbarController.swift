@@ -265,8 +265,9 @@ final class AnnotationToolbarController: NSObject {
     origin.y = min(max(origin.y, 8), maxY)
     hostingView.frame = NSRect(origin: origin, size: NSSize(width: width, height: size.height))
     hostingView.isHidden = false
-    // 工具条恒在覆盖层最顶（卡片重建会被 addSubview 垫到它上面）
-    restackOverlays()
+    // 不在此重排 z 序：全局 mouseUp 监听先于按钮事件分派，此刻摘挂工具条
+    // 会取消进行中的点击（点标注按钮无效的根因之一）。z 序由
+    // rebuildCommentCards 末尾的 restackOverlays 统一维护（隐藏视图同样参与排序）
     syncCursorRects()
   }
 
@@ -532,8 +533,9 @@ final class AnnotationToolbarController: NSObject {
     origin.y = min(max(origin.y, 4), pdfView.bounds.height - size.height - 4)
     deleteHosting.frame = NSRect(origin: origin, size: size)
     deleteHosting.isHidden = false
-    // 置顶：避免被虚线框/批注卡片覆盖导致点不到（与工具条一起进统一 z 序）
-    restackOverlays()
+    // 置顶（编辑条在 mouseDown 时段显示，此刻无覆盖层点击在途，安全；
+    // 不走 restackOverlays——统一重排会波及工具条等其它视图）
+    overlayParent?.addSubview(deleteHosting, positioned: .above, relativeTo: nil)
     syncCursorRects()
   }
 

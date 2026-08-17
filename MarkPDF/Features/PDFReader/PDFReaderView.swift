@@ -208,11 +208,13 @@ final class PDFViewportView: NSView {
 /// 事件穿透容器：自身不命中，只把命中转给子视图（覆盖层之间的点击互不影响
 /// 底下 PDFView 的选择/翻页/捏合）
 final class OverlayPassthroughView: NSView {
+  /// NSView.hitTest 的入参本就是「父视图坐标系」的点——直接透传给子视图，
+  /// 不得再 convert（曾把点转到子视图坐标，偏离原点的工具条/卡片命中区
+  /// 全部错位：点击穿透清掉选区、卡片点不中）
   override func hitTest(_ point: NSPoint) -> NSView? {
     guard !isHidden, alphaValue > 0.01 else { return nil }
     for subview in subviews.reversed() {
-      let local = convert(point, to: subview)
-      if let hit = subview.hitTest(local) { return hit }
+      if let hit = subview.hitTest(point) { return hit }
     }
     return nil
   }
