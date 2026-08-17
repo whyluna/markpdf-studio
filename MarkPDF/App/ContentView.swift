@@ -118,7 +118,7 @@ struct ContentView: View {
         .frame(minWidth: 360)
         .inspector(isPresented: $workspaceStore.isDetailPanelPresented) {
           detailPanel
-            .inspectorColumnWidth(min: 240, ideal: 300, max: 360)
+            .inspectorColumnWidth(min: 280, ideal: 300, max: 360)
         }
     }
   }

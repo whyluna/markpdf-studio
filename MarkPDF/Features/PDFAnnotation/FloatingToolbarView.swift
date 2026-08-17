@@ -29,7 +29,11 @@ struct FloatingToolbarView: View {
               .font(.system(size: 13))
               .foregroundStyle(.primary)
             Circle()
-              .fill(store.colorsByKind[tool.kind]?.nsColor.swiftUI ?? .clear)
+              .fill(
+                tool.kind == .freeText
+                  ? Color(AnnotationToolbarController.commentMarkColor)
+                  : store.colorsByKind[tool.kind]?.nsColor.swiftUI ?? .clear
+              )
               .frame(width: 5, height: 5)
               .offset(x: 2, y: 2)
           }

@@ -301,7 +301,9 @@ struct AIAssistantPanelView: View {
           .font(.system(size: 11))
         Text(title)
           .font(.callout)
+          .lineLimit(1)
       }
+      .fixedSize()
       .foregroundStyle(isOn ? Color.accentColor : .secondary)
       .padding(.horizontal, 8)
       .padding(.vertical, 4)

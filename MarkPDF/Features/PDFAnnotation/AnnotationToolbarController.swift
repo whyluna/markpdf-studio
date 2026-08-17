@@ -99,6 +99,7 @@ final class AnnotationToolbarController: NSObject {
     (pdfView as? ZoomablePDFView)?.onPointingHandQuery = { [weak self] point in
       self?.markerAt(viewPoint: point) != nil
     }
+    setupCommentCards()
   }
 
   deinit {
@@ -118,6 +119,7 @@ final class AnnotationToolbarController: NSObject {
     }
     toolCancellable?.cancel()
     translationCancellable?.cancel()
+    commentCardCancellable?.cancel()
   }
 
   // MARK: - 弹出与隐藏
@@ -571,6 +573,381 @@ final class AnnotationToolbarController: NSObject {
   // MARK: - 批注（FR-4.3）
 
   /// 正在编辑的批注标记
+  // MARK: - 页边批注卡片（显示层）
+
+  /// 卡片槽位：marker（数据与锚点）+ hosting（显示）；几何每次从页坐标现算
+  private struct CommentCardSlot {
+    let marker: PDFAnnotation
+    let hosting: NSHostingView<CommentCardView>
+    /// 连接线的内容端锚点（页坐标）：x = 内容近侧边缘，y = 内容行中心。
+    /// 优先取同组正文高亮；无高亮的组退用旧版虚线点标注的远端点
+    let anchor: NSPoint?
+    let isLeftMargin: Bool
+  }
+
+  private var commentCards: [CommentCardSlot] = []
+  private var commentCardCancellable: AnyCancellable?
+  /// 可见页签名（页索引序列）：变化时才重建卡片（翻页换内容；缩放/滚动只重摆）
+  private var visiblePagesSignature = ""
+  /// 本次重建做过旧数据迁移（藏图标/清点线）的页——重建后统一标脏重绘
+  private var migratedPages: Set<PDFPage> = []
+  /// 连接虚线层（内容边缘 → 卡片近边；随卡片布局动态重绘）
+  private var connectorLayer: CommentConnectorLayer?
+  /// 页面文本行矩形缓存（页坐标）：卡片净空按「真实正文」计算——
+  /// 批注自身锚点算出的边距可能小于页面上更靠边的其他文字（实测遮挡根因）
+  private var pageLinesCache: [ObjectIdentifier: [NSRect]] = [:]
+
+  private func textLineRects(for page: PDFPage) -> [NSRect] {
+    let key = ObjectIdentifier(page)
+    if let cached = pageLinesCache[key] { return cached }
+    let rects = (page.selection(for: page.bounds(for: .cropBox))?.selectionsByLine() ?? [])
+      .map { $0.bounds(for: page) }
+      .filter { !$0.isNull && $0.width > 1 && $0.height > 1 }
+    pageLinesCache[key] = rects
+    return rects
+  }
+
+  /// 卡片纵向带 [yLower, yUpper]（页坐标）内，该侧最近正文行允许的最大卡片宽（页单位）
+  private func textClearanceWidth(
+    on page: PDFPage, isLeft: Bool, yLower: CGFloat, yUpper: CGFloat
+  ) -> CGFloat? {
+    var nearest: CGFloat = isLeft ? .greatestFiniteMagnitude : -.greatestFiniteMagnitude
+    for rect in textLineRects(for: page) where rect.midY >= yLower && rect.midY <= yUpper {
+      nearest = isLeft ? min(nearest, rect.minX) : max(nearest, rect.maxX)
+    }
+    guard nearest.isFinite else { return nil }
+    let pageBounds = page.bounds(for: .cropBox)
+    return isLeft ? nearest - pageBounds.minX : pageBounds.maxX - nearest
+  }
+  /// 批注页面标记色（内容虚线框 + 连接线）：固定橙色——不在四色板内，
+  /// 与高亮的四色体系彻底区分（“这是批注”的专属签名色）
+  static let commentMarkColor = NSColor.systemOrange
+
+  /// 卡片观察接线：标注增删改（revision）→ 重建可见卡片；
+  /// 缩放/翻页/滚动/改帧 → 只重摆（setFrame + rootView 换尺寸参数）
+  private func setupCommentCards() {
+    guard let pdfView else { return }
+    commentCardCancellable = store.$revision
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.rebuildCommentCards() }
+    for name in [Notification.Name.PDFViewScaleChanged, .PDFViewPageChanged] {
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(commentCardsLayoutChanged), name: name, object: pdfView
+      )
+    }
+    pdfView.postsFrameChangedNotifications = true
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(commentCardsLayoutChanged),
+      name: NSView.frameDidChangeNotification, object: pdfView
+    )
+    let layer = CommentConnectorLayer()
+    layer.frame = pdfView.bounds
+    layer.autoresizingMask = [.width, .height]
+    pdfView.addSubview(layer)
+    connectorLayer = layer
+    // 滚动跟随：PDFView 没有滚动通知，监听内部文档滚动视图裁剪区的 bounds 变化
+    if let clip = pdfView.subviews.compactMap({ $0 as? NSScrollView }).first?.contentView {
+      clip.postsBoundsChangedNotifications = true
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(commentCardsLayoutChanged),
+        name: NSView.boundsDidChangeNotification, object: clip
+      )
+    }
+    rebuildCommentCards()
+  }
+
+  @objc private func commentCardsLayoutChanged() {
+    guard let pdfView else { return }
+    let signature = pdfView.visiblePages
+      .compactMap { pdfView.document?.index(for: $0) }
+      .map(String.init)
+      .joined(separator: ",")
+    if signature != visiblePagesSignature {
+      visiblePagesSignature = signature
+      rebuildCommentCards()
+    } else {
+      updateCommentCardFrames()
+    }
+  }
+
+  /// 全量重建：清空后为「可见页」的每个批注标记建卡（数量小，直接全建）
+  private func rebuildCommentCards() {
+    guard let pdfView else { return }
+    visiblePagesSignature = pdfView.visiblePages
+      .compactMap { pdfView.document?.index(for: $0) }
+      .map(String.init)
+      .joined(separator: ",")
+    for slot in commentCards {
+      slot.hosting.removeFromSuperview()
+    }
+    commentCards = []
+    for page in pdfView.visiblePages {
+      let pageBounds = page.bounds(for: pdfView.displayBox)
+      for marker in page.annotations where marker.isCommentMarker {
+        let isLeft = marker.bounds.midX < pageBounds.midX
+        // 内容锚点（页坐标）：高亮合集的近侧边缘 + 行中心；无高亮退用旧虚线点远端
+        var anchor: NSPoint? = nil
+        var legacyDots: [PDFAnnotation] = []
+        var contentUnion: CGRect? = nil
+        for annotation in page.annotations where annotation.userName == marker.userName {
+          let kind = AnnotationKind.of(annotation)
+          guard kind == .highlight || kind == .underline else { continue }
+          let b = annotation.bounds
+          if b.width > 5 {
+            contentUnion = contentUnion?.union(b) ?? b
+            // 正文标记只作数据（锚点/范围），显示由覆盖层虚线框承担：就地隐藏
+            if annotation.shouldDisplay {
+              annotation.shouldDisplay = false
+              migratedPages.insert(page)
+            }
+          } else if kind == .highlight, b.width < 2, b.height < 2 {
+            legacyDots.append(annotation)
+          }
+        }
+        if let union = contentUnion {
+          anchor = NSPoint(
+            x: isLeft ? union.minX : union.maxX,
+            y: union.midY
+          )
+        } else if let far = legacyDots.max(by: { $0.bounds.midX * (isLeft ? 1 : -1) < $1.bounds.midX * (isLeft ? 1 : -1) }) {
+          anchor = NSPoint(x: far.bounds.midX, y: far.bounds.midY)
+        }
+        // 旧数据迁移（内存级，随下次保存落盘）：藏原生图标、清旧点状虚线
+        if marker.shouldDisplay {
+          marker.shouldDisplay = false
+          migratedPages.insert(page)
+        }
+        for dot in legacyDots {
+          page.removeAnnotation(dot)
+          migratedPages.insert(page)
+        }
+        let slot = CommentCardSlot(
+          marker: marker,
+          hosting: NSHostingView(rootView: CommentCardView(
+            text: "", color: .systemBlue, isLeftMargin: true, scale: 1, width: nil, onClick: {}
+          )),
+          anchor: anchor,
+          isLeftMargin: isLeft
+        )
+        pdfView.addSubview(slot.hosting)
+        commentCards.append(slot)
+      }
+    }
+    if !migratedPages.isEmpty {
+      for page in migratedPages {
+        pdfView.annotationsChanged(on: page)
+      }
+      pdfView.setNeedsDisplay(pdfView.bounds)
+      migratedPages.removeAll()
+    }
+    updateCommentCardFrames()
+  }
+
+  /// 重摆：页坐标 → 视图坐标换算卡片 frame，并按当前缩放同步 rootView 尺寸参数。
+  /// 宽度 = 页缘 → 内容近侧边缘（无边距数据退化芯片，绝不盲设宽度遮正文）；
+  /// 芯片/卡片不小于图标（完全盖住原生便签，杜绝「底部露一条蓝」）；
+  /// 同页同侧自上而下防叠下推（图标 22pt 错位不足以错开几十 pt 高的卡片）
+  private func updateCommentCardFrames() {
+    guard let pdfView else { return }
+    let scale = max(pdfView.scaleFactor, 0.01)
+    struct Placed {
+      var frame: NSRect
+      let index: Int
+    }
+    var placed: [Placed] = []
+
+    for (index, slot) in commentCards.enumerated() {
+      guard let page = slot.marker.page else {
+        slot.hosting.isHidden = true
+        placed.append(Placed(frame: .zero, index: index))
+        continue
+      }
+      let viewMarker = pdfView.convert(slot.marker.bounds, from: page)
+      let viewPage = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
+      guard viewMarker.isFiniteRect, viewPage.isFiniteRect else {
+        slot.hosting.isHidden = true
+        placed.append(Placed(frame: .zero, index: index))
+        continue
+      }
+      // 可用边距（视图单位）：页缘 → 内容近侧边缘；无内容数据 → 芯片（安全兜底）。
+      /// 上限 55pt（页单位）——页边是提示区不是阅读区，宁可截断不多占
+      var cardWidth: CGFloat? = nil
+      var contentEdgeViewX: CGFloat? = nil
+      if let anchor = slot.anchor {
+        let edgeRect = pdfView.convert(
+          NSRect(x: anchor.x - 0.5, y: anchor.y, width: 1, height: 1),
+          from: page
+        )
+        if edgeRect.isFiniteRect {
+          contentEdgeViewX = edgeRect.midX
+          let available = slot.isLeftMargin
+            ? edgeRect.midX - viewPage.minX
+            : viewPage.maxX - edgeRect.midX
+          var usable = available - 6 * scale
+          // 文本净空（页单位）：该纵向带内最近的正文行才是硬边界——
+          // 批注自身内容算的边距可能比页面上其他更靠边的文字宽（遮挡根因）
+          if let clear = textClearanceWidth(
+            on: page, isLeft: slot.isLeftMargin,
+            yLower: slot.marker.bounds.minY - 4,
+            yUpper: slot.marker.bounds.minY + 80
+          ) {
+            usable = min(usable, clear * scale - 6 * scale)
+          }
+          if usable >= 36 * scale {
+            cardWidth = min(usable, 55 * scale)
+          }
+        }
+      }
+
+      let text = slot.marker.contents ?? ""
+      let isEmpty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      slot.hosting.rootView = CommentCardView(
+        text: text,
+        color: Self.commentMarkColor,
+        isLeftMargin: slot.isLeftMargin,
+        scale: scale,
+        width: isEmpty ? nil : cardWidth,
+        onClick: { [weak self] in self?.edit(comment: slot.marker) }
+      )
+
+      let fitted = slot.hosting.fittingSize
+      let width = cardWidth ?? fitted.width
+      let height = fitted.height
+      guard width > 0, height > 0, width.isFinite, height.isFinite else {
+        slot.hosting.isHidden = true
+        placed.append(Placed(frame: .zero, index: index))
+        continue
+      }
+      // 卡顶与图标顶对齐向下生长（非翻转系：顶缘 = maxY）
+      var frame = NSRect(
+        x: slot.isLeftMargin ? viewMarker.minX - 2 : viewMarker.maxX + 2 - width,
+        y: viewMarker.maxY + 2 - height,
+        width: width,
+        height: height
+      )
+      frame.origin.x = min(max(frame.minX, viewPage.minX), max(viewPage.maxX - width, viewPage.minX))
+      // 硬净空：卡片绝不越过内容近侧边缘（哪怕边距数据有出入）
+      if let edgeX = contentEdgeViewX {
+        if slot.isLeftMargin, frame.maxX > edgeX - 4 {
+          frame.origin.x = max(viewPage.minX, edgeX - 4 - width)
+        } else if !slot.isLeftMargin, frame.minX < edgeX + 4 {
+          frame.origin.x = min(viewPage.maxX - width, edgeX + 4)
+        }
+      }
+      placed.append(Placed(frame: frame, index: index))
+    }
+
+    // 同页同侧防叠（非翻转坐标系：y 大 = 屏幕上方，卡下缘 = minY）：
+    // 自上而下，与上一张卡下缘冲突则下推 4pt；整组越出页底则整体上移夹回
+    var handled = [Bool](repeating: false, count: placed.count)
+    for indexA in placed.indices where commentCards[placed[indexA].index].marker.page != nil {
+      if handled[indexA] { continue }
+      var group = [indexA]
+      for indexB in placed.indices where indexB != indexA {
+        let slotA = commentCards[placed[indexA].index]
+        let slotB = commentCards[placed[indexB].index]
+        if !handled[indexB],
+          slotA.isLeftMargin == slotB.isLeftMargin,
+          slotA.marker.page === slotB.marker.page
+        {
+          group.append(indexB)
+        }
+      }
+      group.sort { placed[$0].frame.maxY > placed[$1].frame.maxY }
+      var previousLowerEdge: CGFloat? = nil
+      for g in group {
+        handled[g] = true
+        if let lower = previousLowerEdge, placed[g].frame.maxY > lower {
+          placed[g].frame.origin.y = lower - 4 - placed[g].frame.height
+        }
+        previousLowerEdge = placed[g].frame.minY
+      }
+      if let bottomIndex = group.last,
+        let page = commentCards[placed[bottomIndex].index].marker.page
+      {
+        let viewPage = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
+        let overflow = (viewPage.minY + 2) - placed[bottomIndex].frame.minY
+        if overflow > 0 {
+          for g in group {
+            placed[g].frame.origin.y += overflow
+          }
+        }
+      }
+    }
+
+    let markColor = (Self.commentMarkColor.usingColorSpace(.deviceRGB) ?? .systemOrange)
+    var segments: [CommentConnectorLayer.Segment] = []
+    var frames: [CommentConnectorLayer.Frame] = []
+    for var p in placed {
+      let slot = commentCards[p.index]
+      if slot.marker.page == nil || p.frame == .zero || !p.frame.isFiniteRect {
+        slot.hosting.isHidden = true
+        continue
+      }
+      slot.hosting.isHidden = false
+      slot.hosting.frame = p.frame
+      guard let page = slot.marker.page else { continue }
+      // 终检：下推后的最终纵向带若碰到更近的正文行，收窄卡片
+      let pageFrame = pdfView.convert(p.frame, to: page)
+      if pageFrame.isFiniteRect,
+        let clear = textClearanceWidth(
+          on: page, isLeft: slot.isLeftMargin,
+          yLower: pageFrame.minY, yUpper: pageFrame.maxY
+        ),
+        p.frame.width > clear * scale - 6 * scale
+      {
+        let allowed = max(clear * scale - 6 * scale, 24 * scale)
+        slot.hosting.rootView = CommentCardView(
+          text: slot.marker.contents ?? "",
+          color: Self.commentMarkColor,
+          isLeftMargin: slot.isLeftMargin,
+          scale: scale,
+          width: allowed,
+          onClick: { [weak self] in self?.edit(comment: slot.marker) }
+        )
+        let refit = slot.hosting.fittingSize
+        p.frame.size.width = allowed
+        p.frame.size.height = refit.height
+        slot.hosting.frame = p.frame
+      }
+      // 内容块虚线框：围住批注所指文本（组内全部数据标记的合集）
+      if let content = contentUnion(of: slot, on: page) {
+        let viewRect = pdfView.convert(content, from: page)
+        if viewRect.isFiniteRect, viewRect.width > 4, viewRect.height > 2 {
+          frames.append(.init(rect: viewRect, color: markColor))
+        }
+      }
+      // 连接虚线：内容边缘锚点 → 卡片近边中点。同行多条批注共享起点，
+      // 但各自指向卡片本体中点——支线斜率天然不同，哪条对哪卡一目了然
+      //（不再产生近水平的歧义段）
+      if let anchor = slot.anchor {
+        let a = pdfView.convert(NSPoint(x: anchor.x, y: anchor.y), from: page)
+        if a.x.isFinite, a.y.isFinite {
+          let cardEdgeX = slot.isLeftMargin ? p.frame.maxX : p.frame.minX
+          segments.append(.init(
+            start: a,
+            end: NSPoint(x: cardEdgeX, y: p.frame.midY),
+            color: markColor
+          ))
+        }
+      }
+    }
+    connectorLayer?.segments = segments
+    connectorLayer?.frames = frames
+    connectorLayer?.needsDisplay = true
+  }
+
+  /// 批注组内容块合集（页坐标）：组内宽标记（高亮/下划线，均为数据标记）bounds 并集
+  private func contentUnion(of slot: CommentCardSlot, on page: PDFPage) -> CGRect? {
+    var union: CGRect? = nil
+    for annotation in page.annotations where annotation.userName == slot.marker.userName {
+      let kind = AnnotationKind.of(annotation)
+      guard kind == .highlight || kind == .underline, annotation.bounds.width > 5 else { continue }
+      union = union?.union(annotation.bounds) ?? annotation.bounds
+    }
+    return union
+  }
+
   private var editingComment: PDFAnnotation?
   private var commentPopover: NSPopover?
   /// 编辑中的草稿（关闭时一次性写回标注，打字不触碰 PDFKit）
@@ -619,6 +996,9 @@ final class AnnotationToolbarController: NSObject {
     marker.color = palette
     marker.userName = groupID
     marker.contents = ""
+    // 原生便签图标不再显示（视觉全部由页边卡片承担）；
+    // shouldDisplay=false 仍参与命中测试，批注列表与导出不受影响
+    marker.shouldDisplay = false
     store.add(marker, to: page)
     // PDFKit 添加 /Text 会自动补 Popup 伴侣：仅 shouldDisplay=false 仍参与命中测试，
     // PDFView 会给它画带手柄的原生选中框并吃掉那块区域的划词——直接从页面摘除
@@ -628,67 +1008,37 @@ final class AnnotationToolbarController: NSObject {
       page.removeAnnotation(popup)
     }
 
-    // 点状虚线直线连接：内容块边缘 → 图标中心（排队错位时呈斜线，对应关系一目了然）
-    let iconCenter = NSPoint(x: x + size / 2, y: y + size / 2)
-    let anchorEdge = NSPoint(x: isLeft ? anchor.minX : anchor.maxX, y: anchor.midY)
-    addDashedConnector(from: anchorEdge, to: iconCenter, color: palette, groupID: groupID, page: page)
+    // 连接虚线不再入库（旧实现是几十个 1.1pt 点标注，卡片错位后指不对、
+    // 还污染标注列表）——由卡片覆盖层动态绘制（见 CommentConnectorLayer）
 
-    // 选中内容同步高亮（逐行，与 FR-4.1 高亮一致的贴合视觉）
-    let highlighted = highlightLines(of: selection, color: palette, groupID: groupID)
+    // 选中内容同步下划线（与卡片视觉协调的正文标记）
+    let highlighted = underlineLines(of: selection, color: palette, groupID: groupID)
 
-    Logger.pdf.debug("添加批注[\(isLeft ? "左" : "右")边栏]: 页 \((pdfView.document?.index(for: page) ?? 0) + 1)，anchor=\(NSStringFromRect(anchor))，page=\(NSStringFromRect(pageBounds))，icon=\(NSStringFromRect(marker.bounds))，高亮 \(highlighted) 行")
+    Logger.pdf.debug("添加批注[\(isLeft ? "左" : "右")边栏]: 页 \((pdfView.document?.index(for: page) ?? 0) + 1)，anchor=\(NSStringFromRect(anchor))，page=\(NSStringFromRect(pageBounds))，icon=\(NSStringFromRect(marker.bounds))，下划线 \(highlighted) 行")
     pdfView.setNeedsDisplay(pdfView.bounds)
     edit(comment: marker)
   }
 
-  /// 逐行创建高亮（FR-4.1 视觉：上下各缩 14% 贴合文字，相邻行不叠块）
+  /// 批注正文数据标记：逐行下划线（bounds 用作锚点/内容范围数据）。
+  /// 不显示——正文指认视觉由覆盖层的虚线圆角框承担（FR-4.3 与卡片协调，
+  /// PDFKit 程序化 Square/Line 实测不渲染，色块高亮又过重）；
+  /// 高亮工具 FR-4.1 的色块路径不受影响
   @discardableResult
-  private func highlightLines(of selection: PDFSelection, color: NSColor, groupID: String) -> Int {
+  private func underlineLines(of selection: PDFSelection, color: NSColor, groupID: String) -> Int {
     var created = 0
     for lineSelection in selection.selectionsByLine() {
       for page in lineSelection.pages {
-        var bounds = lineSelection.bounds(for: page)
+        let bounds = lineSelection.bounds(for: page)
         guard !bounds.isNull, !bounds.isEmpty else { continue }
-        let shrink = bounds.height * 0.14
-        bounds = NSRect(
-          x: bounds.minX,
-          y: bounds.minY + shrink,
-          width: bounds.width,
-          height: bounds.height * 0.72
-        )
-        let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
+        let annotation = PDFAnnotation(bounds: bounds, forType: .underline, withProperties: nil)
         annotation.color = color
         annotation.userName = groupID
+        annotation.shouldDisplay = false
         store.add(annotation, to: page)
         created += 1
       }
     }
     return created
-  }
-
-  /// 点状虚线：沿两点间直线（水平/垂直/斜线均可）按间距摆 1.1pt 小方块。
-  /// PDFKit 不渲染程序化创建的 Line/Ink 标注（渲染探针实锤），高亮块是 PDFView 可渲染的最小单元
-  private func addDashedConnector(from start: NSPoint, to end: NSPoint, color: NSColor, groupID: String, page: PDFPage) {
-    let dx = end.x - start.x
-    let dy = end.y - start.y
-    let length = hypot(dx, dy)
-    guard length > Self.commentDashStep else { return }
-    let dot = Self.commentDashSize
-    var d: CGFloat = 0
-    while d < length {
-      let t = d / length
-      let rect = NSRect(
-        x: start.x + dx * t - dot / 2,
-        y: start.y + dy * t - dot / 2,
-        width: dot,
-        height: dot
-      )
-      let dash = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
-      dash.color = color
-      dash.userName = groupID
-      store.add(dash, to: page)
-      d += Self.commentDashStep
-    }
   }
 
   /// 与同页既有批注图标纵向避让（往下挪，最多 20 轮防极端堆叠死循环）。
@@ -879,5 +1229,55 @@ private extension NSView {
 private final class PassthroughView: NSView {
   override func hitTest(_ point: NSPoint) -> NSView? {
     nil
+  }
+}
+
+/// 批注连接虚线层：内容边缘 → 卡片近边，随卡片布局动态重绘（不拦截事件）。
+/// 取代旧实现（往 PDF 里塞几十个 1.1pt 点标注）——纯显示层，不进文件
+final class CommentConnectorLayer: NSView {
+  struct Segment {
+    let start: NSPoint
+    let end: NSPoint
+    let color: NSColor
+  }
+
+  struct Frame {
+    let rect: NSRect
+    let color: NSColor
+  }
+
+  var segments: [Segment] = []
+  /// 内容块虚线圆角框（视图坐标）：围住批注所指文本，与卡片同色系
+  var frames: [Frame] = []
+
+  override func draw(_ dirtyRect: NSRect) {
+    for frame in frames {
+      let path = NSBezierPath(roundedRect: frame.rect.insetBy(dx: -3, dy: -2), xRadius: 4, yRadius: 4)
+      path.lineWidth = 1.5
+      path.setLineDash([3, 2], count: 2, phase: 0)
+      frame.color.withAlphaComponent(0.85).setStroke()
+      path.stroke()
+    }
+    for segment in segments {
+      let path = NSBezierPath()
+      path.move(to: segment.start)
+      path.line(to: segment.end)
+      path.lineWidth = 1.5
+      path.setLineDash([2, 3], count: 2, phase: 0)
+      segment.color.withAlphaComponent(0.55).setStroke()
+      path.stroke()
+    }
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    nil
+  }
+}
+
+extension NSRect {
+  /// 几何守卫：页→视图仿射变换可能产出 NaN/inf（选区 bounds 为 CGRect.null 的老坑，
+  /// setFrame 遇非法几何直接 trap）——卡片与面板共用
+  var isFiniteRect: Bool {
+    [minX, minY, width, height].allSatisfy(\.isFinite)
   }
 }
