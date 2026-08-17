@@ -36,6 +36,15 @@ struct SettingsView: View {
 
   private var generalSettings: some View {
     Form {
+      Section("外观") {
+        // 全局明暗：NSApp.appearance 覆盖所有窗口（侧边栏/标签栏/检查器），
+        // MD 内核与 PDF 夜间反色随 colorScheme 实时联动
+        Picker("界面外观", selection: $settings.appAppearance) {
+          ForEach(SettingsStore.AppAppearance.allCases) { appearance in
+            Text(appearance.title).tag(appearance)
+          }
+        }
+      }
       Section("语言") {
         Picker("界面语言", selection: $settings.appLanguage) {
           ForEach(SettingsStore.AppLanguage.allCases) { language in
@@ -68,12 +77,6 @@ struct SettingsView: View {
         Picker("PDF 默认视图", selection: $settings.pdfViewMode) {
           ForEach(SettingsStore.PDFViewMode.allCases) { mode in
             Text(mode.title).tag(mode)
-          }
-        }
-        // FR-3.6：阅读主题（白天/夜间）
-        Picker("PDF 阅读主题", selection: $settings.pdfReadingTheme) {
-          ForEach(SettingsStore.PDFReadingTheme.allCases) { theme in
-            Text(theme.title).tag(theme)
           }
         }
         // FR-2.10：打字机/专注模式（可分别开关）

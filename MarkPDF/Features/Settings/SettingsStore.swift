@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import PDFKit
 import os
@@ -68,7 +69,44 @@ final class SettingsStore: ObservableObject {
   @Published var pdfViewMode: PDFViewMode {
     didSet { defaults.set(pdfViewMode.rawValue, forKey: Key.pdfViewMode) }
   }
-  /// PDF 阅读主题（FR-3.6；羊皮纸档经用户决策移除）
+
+  /// 应用外观（全局明暗）：system 跟随系统；light/dark 经 NSApp.appearance
+  /// 覆盖所有窗口（侧边栏/标签栏/检查器/MD 内核/PDF 均随 colorScheme 联动）
+  enum AppAppearance: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: String {
+      switch self {
+      case .system: String(localized: "跟随系统")
+      case .light: String(localized: "浅色")
+      case .dark: String(localized: "深色")
+      }
+    }
+  }
+
+  @Published var appAppearance: AppAppearance {
+    didSet {
+      defaults.set(appAppearance.rawValue, forKey: Key.appAppearance)
+      applyAppAppearance()
+    }
+  }
+
+  /// 写 NSApp.appearance：nil = 跟随系统；SwiftUI/AppKit 全部窗口立即换肤
+  private func applyAppAppearance() {
+    NSApp.appearance = switch appAppearance {
+    case .system: nil
+    case .light: NSAppearance(named: .aqua)
+    case .dark: NSAppearance(named: .darkAqua)
+    }
+  }
+
+  /// PDF 阅读主题（FR-3.6；羊皮纸档经用户决策移除）。
+  /// 不再独立存储——由全局外观推导（深色 → 夜间反色），
+  /// PDF 视图经 colorScheme 环境实时联动，系统切换浅深色同样跟随
   enum PDFReadingTheme: String, CaseIterable, Identifiable {
     case day
     case night
@@ -81,11 +119,6 @@ final class SettingsStore: ObservableObject {
       case .night: String(localized: "夜间")
       }
     }
-  }
-
-  /// PDF 阅读主题（FR-3.6）
-  @Published var pdfReadingTheme: PDFReadingTheme {
-    didSet { defaults.set(pdfReadingTheme.rawValue, forKey: Key.pdfReadingTheme) }
   }
   /// 打字机模式（FR-2.10：当前行垂直居中）
   @Published var typewriterMode: Bool {
@@ -178,7 +211,8 @@ final class SettingsStore: ObservableObject {
     static let pdfViewMode = "settings.pdfViewMode"
     static let typewriterMode = "settings.typewriterMode"
     static let focusMode = "settings.focusMode"
-    static let pdfReadingTheme = "settings.pdfReadingTheme"
+    static let pdfReadingTheme = "settings.pdfReadingTheme" // 旧键：仅作迁移读取
+    static let appAppearance = "settings.appAppearance"
     static let appLanguage = "settings.appLanguage"
   }
 
@@ -194,9 +228,20 @@ final class SettingsStore: ObservableObject {
     let lineHeight = defaults.double(forKey: Key.lineHeight)
     editorLineHeight = lineHeight > 0 ? lineHeight : Self.defaultLineHeight
     pdfViewMode = PDFViewMode(rawValue: defaults.string(forKey: Key.pdfViewMode) ?? "") ?? .continuous
-    pdfReadingTheme = PDFReadingTheme(rawValue: defaults.string(forKey: Key.pdfReadingTheme) ?? "") ?? .day
+    // 迁移：独立 PDF 阅读主题已并入全局外观——老用户存过「夜间」且没选过外观的，
+    // 首次升级直接落深色，夜间阅读习惯不打断
+    if defaults.string(forKey: Key.appAppearance) == nil,
+      (defaults.string(forKey: Key.pdfReadingTheme) ?? "day") == "night"
+    {
+      appAppearance = .dark
+      defaults.set(AppAppearance.dark.rawValue, forKey: Key.appAppearance)
+    } else {
+      appAppearance = AppAppearance(rawValue: defaults.string(forKey: Key.appAppearance) ?? "") ?? .system
+    }
     typewriterMode = defaults.bool(forKey: Key.typewriterMode)
     focusMode = defaults.bool(forKey: Key.focusMode)
     appLanguage = AppLanguage(rawValue: defaults.string(forKey: Key.appLanguage) ?? "") ?? .system
+    // 存储属性全部就绪后再动 NSApp（didSet 不会在 init 阶段触发）
+    applyAppAppearance()
   }
 }

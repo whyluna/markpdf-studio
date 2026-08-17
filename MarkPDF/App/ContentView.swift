@@ -358,12 +358,14 @@ struct ContentView: View {
     }
 
     // 其他
-    for theme in SettingsStore.PDFReadingTheme.allCases {
+    // 全局外观（明暗）：替代原「PDF 阅读主题」——统一控制侧边栏/MD/PDF 反色
+    for appearance in SettingsStore.AppAppearance.allCases {
       commands.append(AppCommand(
-        id: "reading-theme-\(theme.rawValue)", title: String(localized: "PDF 阅读主题：\(theme.title)"), section: String(localized: "视图"),
-        isEnabled: { isPDF }
+        id: "appearance-\(appearance.rawValue)",
+        title: String(localized: "外观：\(appearance.title)"),
+        section: String(localized: "视图")
       ) {
-        settingsStore.pdfReadingTheme = theme
+        settingsStore.appAppearance = appearance
       })
     }
     commands.append(AppCommand(id: "typewriter", title: String(localized: "切换打字机模式"), section: String(localized: "视图"), isEnabled: { tabStore.activeEditorStore != nil }) {

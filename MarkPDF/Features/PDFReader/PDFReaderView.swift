@@ -184,6 +184,13 @@ struct PDFReaderView: NSViewRepresentable {
   @EnvironmentObject private var settings: SettingsStore
   @EnvironmentObject private var aiSettings: AISettingsStore
   @EnvironmentObject private var aiKeys: AIKeyStore
+  /// 全局外观联动：深色 → 夜间反色（NSApp.appearance 覆盖与系统切换都会实时传导）
+  @Environment(\.colorScheme) private var colorScheme
+
+  /// 夜间档判定（纯函数供单测）
+  static func isNightTheme(_ colorScheme: ColorScheme) -> Bool {
+    colorScheme == .dark
+  }
 
   func makeNSView(context: Context) -> PDFView {
     let pdfView = ZoomablePDFView()
@@ -194,7 +201,7 @@ struct PDFReaderView: NSViewRepresentable {
     // 捏合缩放走 PDFKit 原生通道，边界与按钮缩放同域（50%–400%）
     pdfView.minScaleFactor = PDFReaderStore.minScale
     pdfView.maxScaleFactor = PDFReaderStore.maxScale
-    applyReadingTheme(settings.pdfReadingTheme, to: pdfView)
+    applyReadingTheme(Self.isNightTheme(colorScheme) ? .night : .day, to: pdfView)
     // Esc 退出查找（FR-3.4）：焦点在 PDF 上时也能退出，无需先聚焦查找框
     pdfView.onEscape = { [weak coordinator = context.coordinator] in
       coordinator?.handleEscape() ?? false
@@ -282,8 +289,8 @@ struct PDFReaderView: NSViewRepresentable {
     if pdfView.displayMode != settings.pdfViewMode.pdfDisplayMode {
       pdfView.displayMode = settings.pdfViewMode.pdfDisplayMode
     }
-    // FR-3.6：阅读主题即时生效
-    applyReadingTheme(settings.pdfReadingTheme, to: pdfView)
+    // FR-3.6：阅读主题即时生效（深浅外观切换时 updateNSView 会被再次触发）
+    applyReadingTheme(Self.isNightTheme(colorScheme) ? .night : .day, to: pdfView)
     // 外部驱动的目标缩放（按钮/快捷键）；手动缩放时脱离自适应。
     // 加载窗口期不同步（Bug 修复 2）：document 未挂载时 scaleFactor 仍是初值 1.0，
     // 若此时按 store 残留倍率同步会误关 autoScales，新文档失去自适应宽度
