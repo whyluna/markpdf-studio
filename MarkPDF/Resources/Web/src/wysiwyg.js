@@ -7,7 +7,7 @@ import { syntaxTree } from "@codemirror/language";
 import katex from "katex";
 import { docContext } from "./doccontext.js";
 import { t } from "./strings.js";
-import { scanExtended } from "./extended.js";
+import { scanExtended, scanMath, scanHighlights } from "./extended.js";
 import { EMOJI_MAP } from "./emoji-map.js";
 
 /* ---------- 小部件 ---------- */
@@ -40,10 +40,16 @@ class CheckboxWidget extends WidgetType {
   }
 }
 
-// 语言选择白名单（与 main.js codeLanguages 高亮子集同步；空值 = 纯文本）
+// 语言选择白名单（下拉展示规范名；与 main.js codeLanguages 的 name 对齐，空值 = 纯文本）。
+// fence 写了别名（如 ```py）时由 select 逻辑前置为当前项，选中规范名即归一化
 const FENCE_LANGS = [
   "", "python", "javascript", "typescript", "json", "yaml", "bash",
   "c", "cpp", "java", "rust", "go", "swift", "sql", "html", "css",
+  "dockerfile", "ruby", "perl", "lua", "r", "powershell", "toml", "ini",
+  "nginx", "diff", "http", "groovy", "clojure", "haskell", "erlang", "elm",
+  "julia", "octave", "fortran", "pascal", "verilog", "vhdl", "tcl",
+  "vb", "protobuf", "sass", "stylus", "coffeescript", "crystal",
+  "d", "xml", "mermaid",
 ];
 
 // 复制按钮图标（经典双矩形）与点击后的对勾反馈；用 currentColor 跟随主题色
@@ -464,6 +470,24 @@ class TableWidget extends WidgetType {
 
     const appendSegs = (cellEl, segs) => {
       for (const seg of segs) {
+        // 单元格内行内公式（P1-3）：KaTeX 渲染（共享全局缓存）
+        if (seg.math) {
+          const el = document.createElement("span");
+          el.className = "cm-math-inline";
+          try {
+            const cacheKey = "I:" + seg.latex;
+            let html = katexHtmlCache.get(cacheKey);
+            if (html === undefined) {
+              html = katex.renderToString(seg.latex, { displayMode: false, throwOnError: false, output: "html" });
+              cachePut(katexHtmlCache, cacheKey, html, 500);
+            }
+            el.innerHTML = html;
+          } catch {
+            el.textContent = `$${seg.latex}$`; // 极端异常降级源码
+          }
+          cellEl.appendChild(el);
+          continue;
+        }
         const el = document.createElement("span");
         el.textContent = seg.text;
         if (seg.marks.includes("b")) el.style.fontWeight = "650";
@@ -472,6 +496,7 @@ class TableWidget extends WidgetType {
         if (seg.marks.includes("c")) el.classList.add("cm-inline-code");
         // classList.add 累加：单元格同时是 code+link 时两类都要保留（className 二次赋值会覆盖）
         if (seg.marks.includes("a")) el.classList.add("cm-link");
+        if (seg.hl) el.classList.add("cm-highlight");
         cellEl.appendChild(el);
       }
     };
@@ -521,6 +546,131 @@ class TableWidget extends WidgetType {
   }
 }
 
+// Callout 高亮块（P1-2，GitHub Alerts / Obsidian 双语法）：按行着色（保留块内富文本渲染），
+// [!type] 标记替换为「图标+标题」徽章。Obsidian 众多类型名折叠到 6 个规范色系（GitHub 五色 + 引用灰）
+const CALLOUT_TYPES = (() => {
+  const m = {};
+  const put = (canon, keys) => keys.forEach((k) => (m[k] = canon));
+  put("note", ["note", "info", "todo", "abstract", "summary", "tldr"]);
+  put("tip", ["tip", "hint", "success", "check", "done", "example"]);
+  put("important", ["important"]);
+  put("warning", ["warning", "attention", "question", "help", "faq"]);
+  put("caution", ["caution", "danger", "error", "bug", "failure", "fail", "missing"]);
+  put("quote", ["quote", "cite"]);
+  return m;
+})();
+
+// 规范类型的图标与默认标题（自定义标题跟在 ] 后时优先生效）
+const CALLOUT_META = {
+  note: { icon: "ℹ️", title: "备注" },
+  tip: { icon: "💡", title: "提示" },
+  important: { icon: "❗", title: "重要" },
+  warning: { icon: "⚠️", title: "警告" },
+  caution: { icon: "🛑", title: "危险" },
+  quote: { icon: "💬", title: "引用" },
+};
+
+class CalloutBadgeWidget extends WidgetType {
+  constructor(type, title) {
+    super();
+    this.type = type; // 规范类型名
+    this.title = title; // 自定义标题；null = 用默认标题
+  }
+  eq(o) {
+    return o.type === this.type && o.title === this.title;
+  }
+  toDOM() {
+    const meta = CALLOUT_META[this.type];
+    const el = document.createElement("span");
+    el.className = "cm-callout-badge";
+    el.textContent = `${meta.icon} ${this.title ?? meta.title}`;
+    return el;
+  }
+}
+
+// Mermaid 图表（P1-4 懒加载）：```mermaid 块整体替换为图表。渲染库 dist/mermaid-render.js
+// （~2MB 独立产物）由首个 mermaid widget 注入 <script> 按需加载，不拖慢启动。
+// 渲染失败（语法错误/库加载失败）降级显示源码；主题跟随明暗。
+let mermaidScriptLoading = null;
+function ensureMermaid() {
+  if (window.__markpdfMermaid) return Promise.resolve();
+  if (!mermaidScriptLoading) {
+    mermaidScriptLoading = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      // App 内走 markpdf-file:// 协议供给（file:// 页面动态加载本地脚本被 WebKit
+      // 安全策略拦截）；浏览器调试用相对路径
+      s.src = docContext.mermaidScriptURL || "dist/mermaid-render.js";
+      s.onload = () => resolve();
+      s.onerror = () => {
+        mermaidScriptLoading = null; // 允许后续重试
+        reject(new Error("mermaid script load failed"));
+      };
+      document.head.append(s);
+    });
+  }
+  return mermaidScriptLoading;
+}
+
+let mermaidRenderSeq = 0;
+class MermaidWidget extends WidgetType {
+  constructor(definition, source) {
+    super();
+    this.definition = definition; // fence 内图表定义文本
+    this.source = source; // 整块源码（eq 去重 + 降级显示）
+  }
+  eq(o) {
+    return o.source === this.source;
+  }
+  get estimatedHeight() {
+    const cached = widgetHeightCache.get("g:" + this.source);
+    if (cached) return cached;
+    const rows = this.definition.split("\n").length;
+    return rows * 26 + 40; // 粗估：行数×行高 + 边距；实测后由缓存接管
+  }
+  toDOM(view) {
+    const el = document.createElement("div");
+    el.className = "cm-mermaid";
+    el.textContent = "⏳ 图表渲染中…";
+    rememberHeight("g:" + this.source, el);
+    ensureMermaid()
+      .then(async () => {
+        const mermaid = window.__markpdfMermaid;
+        if (!el.isConnected) return;
+        try {
+          mermaid.initialize({
+            theme: document.documentElement.dataset.theme === "dark" ? "dark" : "default",
+          });
+          const { svg } = await mermaid.render(`markpdf-mmd-${++mermaidRenderSeq}`, this.definition);
+          if (!el.isConnected) return;
+          el.innerHTML = svg;
+          el.classList.add("cm-mermaid-done");
+          view.requestMeasure(); // SVG 真实高度替代估计
+        } catch {
+          // 语法错误：GitHub 同款处置——显示错误提示 + 源码可读
+          if (!el.isConnected) return;
+          el.classList.add("cm-mermaid-error");
+          el.textContent = "⚠️ 图表语法错误（点击进入源码编辑）";
+        }
+      })
+      .catch(() => {
+        if (!el.isConnected) return;
+        el.classList.add("cm-mermaid-error");
+        el.textContent = this.source;
+      });
+    // 单击落光标回源码编辑（块级公式同款）
+    el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const pos = view.posAtDOM(el);
+      view.dispatch({ selection: { anchor: pos } });
+      view.focus();
+    });
+    return el;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
 /* ---------- 工具 ---------- */
 
 // 选区是否触及 [from, to]
@@ -550,11 +700,13 @@ const headingClass = {
 
 /* ---------- 表格模型解析 ---------- */
 
-// 单元格内联内容 → 带样式片段（marks: b=粗 i=斜 s=删 c=行内代码 a=链接）
+// 单元格内联内容 → 带样式片段（marks: b/i/s/c/a；hl=高亮底；math=行内公式）。
+// 公式/高亮由单元格级正则扫描补充（lezer 不解析单元格内 $..$ / ==..==，
+// 全文档扫描又把表格整体排除——此前单元格内公式只能显示源码，P1-3 补齐）
 function cellSegments(state, cell) {
   const segs = [];
   const emit = (f, t, marks) => {
-    if (f < t) segs.push({ text: state.doc.sliceString(f, t), marks });
+    if (f < t) segs.push({ from: f, to: t, text: state.doc.sliceString(f, t), marks });
   };
   const SKIP = new Set(["EmphasisMark", "CodeMark", "StrikethroughMark", "LinkMark", "URL"]);
   const walk = (node, marks) => {
@@ -580,7 +732,50 @@ function cellSegments(state, cell) {
     pos = c.to;
   }
   emit(pos, cell.to, "");
-  return segs;
+  return splitCellRanges(segs, state.doc.sliceString(cell.from, cell.to), cell.from);
+}
+
+// 把单元格内行内公式/高亮范围切进片段流：
+// plain 片段按范围裁剪（保留原有 b/i/s/c/a 标记；高亮段叠加 hl），
+// 公式段整体替换为 KaTeX（内部 marks 忽略——内容是 LaTeX 源），
+// 高亮的 == 定界符按 skip 段丢弃。高亮与公式相交时先到先得
+//（扫描器本身已把公式范围内的 == 排除，此处为兜底）
+function splitCellRanges(segs, text, base) {
+  const maths = scanMath(text)
+    .filter((m) => !m.displayMode) // 单元格内只取行内公式（块级 $$ 不适合塞进表格）
+    .map((m) => ({ from: base + m.from, to: base + m.to, latex: m.latex, kind: "math" }));
+  const hls = [];
+  for (const h of scanHighlights(
+    text,
+    maths.map((m) => ({ from: m.from - base, to: m.to - base }))
+  )) {
+    hls.push({ from: base + h.openFrom, to: base + h.openTo, kind: "skip" });
+    hls.push({ from: base + h.contentFrom, to: base + h.contentTo, kind: "hl" });
+    hls.push({ from: base + h.closeFrom, to: base + h.closeTo, kind: "skip" });
+  }
+  if (!maths.length && !hls.length) return segs;
+  const marks = [...maths, ...hls].sort((a, b) => a.from - b.from);
+  const clip = (from, to, hl) => {
+    for (const s of segs) {
+      const f = Math.max(s.from, from);
+      const t = Math.min(s.to, to);
+      if (f >= t) continue;
+      const out = { text: s.text.slice(f - s.from, t - s.from), marks: s.marks };
+      if (hl) out.hl = true;
+      result.push(out);
+    }
+  };
+  const result = [];
+  let cursor = base;
+  for (const r of marks) {
+    if (r.from < cursor) continue;
+    clip(cursor, r.from, false);
+    if (r.kind === "math") result.push({ math: true, latex: r.latex, marks: "" });
+    else if (r.kind === "hl") clip(r.from, r.to, true);
+    cursor = r.to; // skip：直接越过（不产出片段）
+  }
+  clip(cursor, base + text.length, false);
+  return result;
 }
 
 // 图片 src 解析（FR-2.3）：相对路径按文档目录解析为 markpdf-file:// 绝对地址
@@ -878,10 +1073,34 @@ function buildDecorations(state, alwaysRender, ext) {
           return false;
         }
 
-        case "BlockQuote": {
-          const first = state.doc.lineAt(from).number;
-          const last = state.doc.lineAt(to).number;
-          for (let n = first; n <= last; n++) addLine(state.doc.line(n).from, "cm-quote-line");
+        case "Blockquote": {
+          // 注意节点名大小写：lezer 是 "Blockquote"（小写 q）——曾写成 BlockQuote
+          // 导致引用块行样式从未生效的存量 bug，随 P1-2 一并修复
+          const firstLine = state.doc.lineAt(from);
+          const lastLineNum = state.doc.lineAt(to).number;
+          // Callout 高亮块（P1-2）：首行 > [!type]（大小写不敏感；GitHub Alerts / Obsidian 通用）
+          const cm = /^>\s*\[!(\w+)\]\s*(.*)$/.exec(firstLine.text);
+          const canon = cm ? CALLOUT_TYPES[cm[1].toLowerCase()] : null;
+          if (canon) {
+            for (let n = firstLine.number; n <= lastLineNum; n++) {
+              let cls = `cm-callout cm-callout-${canon}`;
+              if (n === firstLine.number) cls += " cm-callout-first";
+              if (n === lastLineNum) cls += " cm-callout-last";
+              addLine(state.doc.line(n).from, cls);
+            }
+            // [!type] 标记 → 徽章 widget（自定义标题保留在其后的源文本里）；光标在场显源码。
+            // 徽章范围先登记 extReplaces：[!type] 会被 lezer 误解析为 Link（两个 LinkMark），
+            // 其隐藏装饰与本 replace 相交是 CM 禁止项。return 继续（非 false）：QuoteMark 等仍生效
+            if (!isLineActive(firstLine.from)) {
+              const markFrom = firstLine.from + firstLine.text.indexOf("[!");
+              const markTo = markFrom + cm[1].length + 3; // [!xxx] 共 len+3 字符
+              const customTitle = cm[2].trim();
+              extReplaces.push({ from: markFrom, to: markTo });
+              addWidgetReplace(markFrom, markTo, new CalloutBadgeWidget(canon, customTitle || null));
+            }
+            return;
+          }
+          for (let n = firstLine.number; n <= lastLineNum; n++) addLine(state.doc.line(n).from, "cm-quote-line");
           return;
         }
 
@@ -896,6 +1115,26 @@ function buildDecorations(state, alwaysRender, ext) {
         case "FencedCode": {
           const firstLine = state.doc.lineAt(from);
           const lastLine = state.doc.lineAt(Math.max(from, to - 1));
+          // 取语言标识
+          let lang = "";
+          for (let c = node.node.firstChild; c; c = c.nextSibling) {
+            if (c.name === "CodeInfo") lang = state.doc.sliceString(c.from, c.to).trim().toLowerCase();
+          }
+          const multi = lastLine.number > firstLine.number;
+          const active = isRangeActive(from, to);
+          // mermaid 图表（P1-4）：光标离块即整体替换为渲染图（懒加载库，见 MermaidWidget）
+          if (lang === "mermaid" && multi && !active) {
+            const parts = [];
+            for (let n = firstLine.number + 1; n < lastLine.number; n++) parts.push(state.doc.line(n).text);
+            const source = state.doc.sliceString(firstLine.from, lastLine.to);
+            decos.push({
+              from: firstLine.from,
+              to: lastLine.to,
+              deco: Decoration.replace({ widget: new MermaidWidget(parts.join("\n"), source), block: true }),
+            });
+            extReplaces.push({ from: firstLine.from, to: lastLine.to });
+            return false;
+          }
           for (let n = firstLine.number; n <= lastLine.number; n++) {
             // 首/末行附加类：盒子圆角与上下内边距（编辑态 fence 行可见时也是完整盒子）
             let cls = "cm-codeblock-line";
@@ -903,12 +1142,7 @@ function buildDecorations(state, alwaysRender, ext) {
             if (n === lastLine.number) cls += " cm-codeblock-last";
             addLine(state.doc.line(n).from, cls);
           }
-          if (!isRangeActive(from, to) && lastLine.number > firstLine.number) {
-            // 取语言标识
-            let lang = "";
-            for (let c = node.node.firstChild; c; c = c.nextSibling) {
-              if (c.name === "CodeInfo") lang = state.doc.sliceString(c.from, c.to).trim();
-            }
+          if (!active && multi) {
             addWidgetReplace(firstLine.from, firstLine.to, new FenceBadgeWidget(lang));
             addWidgetReplace(lastLine.from, lastLine.to, new FenceEndWidget());
           }

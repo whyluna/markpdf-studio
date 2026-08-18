@@ -36,8 +36,41 @@ import { css } from "@codemirror/lang-css";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { go } from "@codemirror/legacy-modes/mode/go";
 import { swift } from "@codemirror/legacy-modes/mode/swift";
+// 扩容语言（P1-1，全部 legacy-modes，零新依赖；与 wysiwyg.js FENCE_LANGS 保持同步）
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
+import { ruby } from "@codemirror/legacy-modes/mode/ruby";
+import { perl } from "@codemirror/legacy-modes/mode/perl";
+import { lua } from "@codemirror/legacy-modes/mode/lua";
+import { r } from "@codemirror/legacy-modes/mode/r";
+import { powerShell } from "@codemirror/legacy-modes/mode/powershell";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { properties } from "@codemirror/legacy-modes/mode/properties";
+import { nginx } from "@codemirror/legacy-modes/mode/nginx";
+import { diff } from "@codemirror/legacy-modes/mode/diff";
+import { http } from "@codemirror/legacy-modes/mode/http";
+import { groovy } from "@codemirror/legacy-modes/mode/groovy";
+import { clojure } from "@codemirror/legacy-modes/mode/clojure";
+import { haskell } from "@codemirror/legacy-modes/mode/haskell";
+import { erlang } from "@codemirror/legacy-modes/mode/erlang";
+import { elm } from "@codemirror/legacy-modes/mode/elm";
+import { julia } from "@codemirror/legacy-modes/mode/julia";
+import { octave } from "@codemirror/legacy-modes/mode/octave";
+import { fortran } from "@codemirror/legacy-modes/mode/fortran";
+import { pascal } from "@codemirror/legacy-modes/mode/pascal";
+import { verilog } from "@codemirror/legacy-modes/mode/verilog";
+import { vhdl } from "@codemirror/legacy-modes/mode/vhdl";
+import { tcl } from "@codemirror/legacy-modes/mode/tcl";
+import { vb } from "@codemirror/legacy-modes/mode/vb";
+import { protobuf } from "@codemirror/legacy-modes/mode/protobuf";
+import { sass } from "@codemirror/legacy-modes/mode/sass";
+import { stylus } from "@codemirror/legacy-modes/mode/stylus";
+import { coffeeScript } from "@codemirror/legacy-modes/mode/coffeescript";
+import { crystal } from "@codemirror/legacy-modes/mode/crystal";
+import { d } from "@codemirror/legacy-modes/mode/d";
+import { xml } from "@codemirror/legacy-modes/mode/xml";
 
-// 代码块语法高亮语言白名单（控制内核体积，全量包约 1.5MB → 子集 ~500KB）
+// 代码块语法高亮语言白名单（控制内核体积；legacy StreamLanguage 需显式包裹 LanguageSupport）
+const legacy = (mode) => new LanguageSupport(StreamLanguage.define(mode));
 const codeLanguages = [
   LanguageDescription.of({ name: "python", alias: ["py"], support: python() }),
   LanguageDescription.of({ name: "javascript", alias: ["js", "jsx"], support: javascript() }),
@@ -56,6 +89,38 @@ const codeLanguages = [
   LanguageDescription.of({ name: "sql", support: sql() }),
   LanguageDescription.of({ name: "html", support: html() }),
   LanguageDescription.of({ name: "css", support: css() }),
+  // P1-1 扩容（legacy-modes，名称/别名与常见 fence 写法对齐）
+  LanguageDescription.of({ name: "dockerfile", alias: ["docker"], support: legacy(dockerFile) }),
+  LanguageDescription.of({ name: "ruby", alias: ["rb"], support: legacy(ruby) }),
+  LanguageDescription.of({ name: "perl", support: legacy(perl) }),
+  LanguageDescription.of({ name: "lua", support: legacy(lua) }),
+  LanguageDescription.of({ name: "r", support: legacy(r) }),
+  LanguageDescription.of({ name: "powershell", alias: ["ps1"], support: legacy(powerShell) }),
+  LanguageDescription.of({ name: "toml", support: legacy(toml) }),
+  LanguageDescription.of({ name: "ini", alias: ["properties", "conf"], support: legacy(properties) }),
+  LanguageDescription.of({ name: "nginx", support: legacy(nginx) }),
+  LanguageDescription.of({ name: "diff", alias: ["patch"], support: legacy(diff) }),
+  LanguageDescription.of({ name: "http", support: legacy(http) }),
+  LanguageDescription.of({ name: "groovy", support: legacy(groovy) }),
+  LanguageDescription.of({ name: "clojure", alias: ["clj"], support: legacy(clojure) }),
+  LanguageDescription.of({ name: "haskell", alias: ["hs"], support: legacy(haskell) }),
+  LanguageDescription.of({ name: "erlang", support: legacy(erlang) }),
+  LanguageDescription.of({ name: "elm", support: legacy(elm) }),
+  LanguageDescription.of({ name: "julia", support: legacy(julia) }),
+  LanguageDescription.of({ name: "octave", alias: ["matlab"], support: legacy(octave) }),
+  LanguageDescription.of({ name: "fortran", support: legacy(fortran) }),
+  LanguageDescription.of({ name: "pascal", alias: ["delphi"], support: legacy(pascal) }),
+  LanguageDescription.of({ name: "verilog", support: legacy(verilog) }),
+  LanguageDescription.of({ name: "vhdl", support: legacy(vhdl) }),
+  LanguageDescription.of({ name: "tcl", support: legacy(tcl) }),
+  LanguageDescription.of({ name: "vb", alias: ["vbscript"], support: legacy(vb) }),
+  LanguageDescription.of({ name: "protobuf", alias: ["proto"], support: legacy(protobuf) }),
+  LanguageDescription.of({ name: "sass", alias: ["scss"], support: legacy(sass) }),
+  LanguageDescription.of({ name: "stylus", support: legacy(stylus) }),
+  LanguageDescription.of({ name: "coffeescript", alias: ["coffee"], support: legacy(coffeeScript) }),
+  LanguageDescription.of({ name: "crystal", support: legacy(crystal) }),
+  LanguageDescription.of({ name: "d", alias: ["dlang"], support: legacy(d) }),
+  LanguageDescription.of({ name: "xml", support: legacy(xml) }),
 ];
 import { wysiwyg } from "./wysiwyg.js";
 import * as Bridge from "./bridge.js";
@@ -66,6 +131,13 @@ import { matchHeadingLine } from "./extended.js";
 // <html lang> 跟随内核语言：index.html 静态硬编码 zh-CN，此处按 ?lang= 纠正；
 // 取值口径与 strings.js currentLang() 一致（currentLang 未导出，同源复述勿漂移）
 document.documentElement.lang = new URLSearchParams(location.search).get("lang") === "en" ? "en" : "zh";
+
+// mermaid 懒加载脚本供给地址（P1-4）：App 内由 native 经 ?mmd= 传入 markpdf-file://
+// 协议地址（file:// 页面动态 <script> 被拦）；浏览器调试缺省走相对路径
+{
+  const mmd = new URLSearchParams(location.search).get("mmd");
+  if (mmd) docContext.mermaidScriptURL = mmd;
+}
 
 /* ---------- 模式（FR-2.2） ---------- */
 

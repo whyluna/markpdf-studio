@@ -43,8 +43,19 @@ final class MarkdownExportSession {
     }
     var appPage = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)
     // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）；lang：内核界面文案语言
-    //（导出 fallback 标题等也走内核文案，与主编辑器一致注入）
-    appPage?.query = "app=1&lang=\(SettingsStore.launchWebLocale)"
+    //（导出 fallback 标题等也走内核文案，与主编辑器一致注入）；
+    // mmd：mermaid 懒加载脚本供给地址（与主编辑器同款，P1-4）
+    var queryItems = [
+      URLQueryItem(name: "app", value: "1"),
+      URLQueryItem(name: "lang", value: SettingsStore.launchWebLocale),
+    ]
+    if let mmd = Bundle.main.url(forResource: "mermaid-render", withExtension: "js", subdirectory: "dist") {
+      var comps = URLComponents()
+      comps.scheme = LocalFileSchemeHandler.scheme
+      comps.path = mmd.path
+      queryItems.append(URLQueryItem(name: "mmd", value: comps.url?.absoluteString))
+    }
+    appPage?.queryItems = queryItems
     webView.loadFileURL(appPage?.url ?? pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
   }
 
@@ -56,9 +67,13 @@ final class MarkdownExportSession {
   func exportHTML(text: String, baseURL: URL?, workspaceRoot: URL? = nil, completion: @escaping (String?, String?) -> Void) {
     Self.retain(self)
     completionHandler = completion
-    // 与主编辑器同口径的路径围栏（工作区根 / 文档目录内可读）
+    // 与主编辑器同口径的路径围栏（工作区根 / 文档目录内可读）+ mermaid 脚本单文件
     schemeHandler.allowedRoots = {
-      [workspaceRoot, baseURL].compactMap { $0 }
+      var roots = [workspaceRoot, baseURL].compactMap { $0 }
+      if let mmd = Bundle.main.url(forResource: "mermaid-render", withExtension: "js", subdirectory: "dist") {
+        roots.append(mmd)
+      }
+      return roots
     }
     // 就绪看门狗：内核页面缺失/加载失败/JS 异常导致 ready 永不发出时，
     // completion 永不被调且会话永久滞留存活池（连同 webView 一并泄漏）——

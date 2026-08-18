@@ -46,6 +46,17 @@ $$
 4. 第四项
 
 H~2~O 与 x^2^，:smile: 与 :not_in_table:，时间 10:30:45
+
+> [!NOTE]
+> GitHub 风格提示块
+
+> [!tip]+ 自定义标题
+> Obsidian 风格 **提示**
+
+\`\`\`mermaid
+graph TD
+  A --> B
+\`\`\`
 `;
 
 function collectReplaces(deco) {
@@ -92,6 +103,9 @@ describe("wysiwyg 装饰层（FR-2.4 扩展语法集成）", () => {
     expect(census.ListNumWidget).toBe(2);
     // emoji：:smile: 命中码表；:not_in_table: 与时间串 :30: 查无 → 源码原样（无 widget）
     expect(census.EmojiWidget).toBe(1);
+    // P1：callout 徽章（GitHub NOTE + Obsidian tip 自定义标题）、mermaid 块整体替换
+    expect(census.CalloutBadgeWidget).toBe(2);
+    expect(census.MermaidWidget).toBe(1);
   });
 
   it("wysiwyg 模式：逐行落光标重渲染后 replace 均无重叠", () => {
@@ -246,5 +260,95 @@ describe("列表、上下标、emoji 与段落空行装饰", () => {
     const fenceInnerBlank = 11;
     expect(sepLines).not.toContain(fenceInnerBlank);
     expect(sepLines).toEqual(blankLineNumbers.filter((n) => n !== fenceInnerBlank));
+  });
+});
+
+// P1：callout 行着色/自定义标题、表格单元格公式、mermaid 懒加载边界
+describe("P1 装饰：callout、表格单元格公式、mermaid", () => {
+  const DOC4 = [
+    "> [!WARNING]",
+    "> 警告内容 **加粗**",
+    "",
+    "> [!success] 通过",
+    "> 成功块",
+    "",
+    "> 普通引用",
+    "",
+    "| 公式 | 高亮 |",
+    "| --- | --- |",
+    "| $a+b$ | ==重点== |",
+    "| 纯文本 | `code` |",
+    "",
+    "```mermaid",
+    "pie",
+    "  \"A\": 60",
+    "  \"B\": 40",
+    "```",
+    "",
+    "```mermaid",
+    "这不是合法图表",
+    "```",
+  ].join("\n");
+  const field4 = wysiwyg(true);
+  const state4 = EditorState.create({
+    doc: DOC4,
+    extensions: [markdown({ base: markdownLanguage }), field4],
+  });
+
+  it("callout：徽章类型折叠正确（WARNING→warning；success→tip）+ 行类着色；普通引用不受影响", () => {
+    const badges = [];
+    const lineClasses = {};
+    state4.field(field4).between(0, 1e9, (from, _t, v) => {
+      const w = v.spec?.widget;
+      if (v.isReplace && w?.constructor?.name === "CalloutBadgeWidget") badges.push({ type: w.type, title: w.title });
+      if (!v.isReplace && v.spec?.class?.startsWith("cm-callout ")) {
+        const n = state4.doc.lineAt(from).number;
+        lineClasses[n] = v.spec.class;
+      }
+    });
+    expect(badges).toEqual([
+      { type: "warning", title: null }, // 无自定义标题 → 默认
+      { type: "tip", title: "通过" }, // success 折叠到 tip + 自定义标题
+    ]);
+    expect(lineClasses[1]).toContain("cm-callout-warning");
+    expect(lineClasses[2]).toContain("cm-callout-last");
+    expect(lineClasses[4]).toContain("cm-callout-tip");
+    // 普通引用（第 7 行）不得带 callout 类
+    expect(lineClasses[7]).toBeUndefined();
+  });
+
+  it("表格单元格：行内公式进 model（math 段），高亮叠加 hl 标记", () => {
+    let tableWidget = null;
+    state4.field(field4).between(0, 1e9, (_f, _t, v) => {
+      const w = v.spec?.widget;
+      if (v.isReplace && w?.constructor?.name === "TableWidget") tableWidget = w;
+    });
+    expect(tableWidget).not.toBeNull();
+    const segs = tableWidget.model.rows.flat(2); // rows → 行 → 单元格 → 片段，需两层展开
+    const mathSeg = segs.find((s) => s.math);
+    const hlSeg = segs.find((s) => s.hl);
+    expect(mathSeg?.latex).toBe("a+b");
+    expect(hlSeg?.text).toBe("重点");
+    // 行内代码不受影响
+    expect(segs.some((s) => s.marks.includes("c") && s.text === "code")).toBe(true);
+  });
+
+  it("mermaid：离块替换为 widget，wysiwyg 模式光标进入显露源码", () => {
+    const fieldW = wysiwyg(false); // reading 模式永不显源码，光标交互用 wysiwyg 模式验证
+    const stateW = EditorState.create({
+      doc: DOC4,
+      extensions: [markdown({ base: markdownLanguage }), fieldW],
+    });
+    const countWidget = (st) => {
+      let c = 0;
+      st.field(fieldW).between(0, 1e9, (_f, _t, v) => {
+        if (v.isReplace && v.spec?.widget?.constructor?.name === "MermaidWidget") c++;
+      });
+      return c;
+    };
+    expect(countWidget(stateW)).toBe(2); // 合法与非法定义都先替换（渲染失败由 toDOM 降级）
+    const mermaidLine = stateW.doc.line(15).from; // 第二个 mermaid 块内
+    const s5 = stateW.update({ selection: { anchor: mermaidLine } }).state;
+    expect(countWidget(s5)).toBe(1); // 光标所在块显露源码，另一个仍是图表
   });
 });

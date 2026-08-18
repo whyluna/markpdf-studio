@@ -62,6 +62,27 @@ body{display:flex;flex-direction:column}
   border-left:3px solid var(--text3);background:transparent;
   color:var(--text2);padding-left:14px;
 }
+/* Callout 高亮块（P1-2）：按行着色（行首尾圆角拼成整块），保留块内富文本渲染。
+   色系对齐 GitHub Alerts（蓝/绿/紫/琥珀/红）+ 引用灰；tint 用 color-mix 保证明暗两态可用 */
+.cm-callout{
+  border-left:3px solid var(--callout,#0a84ff);
+  background:color-mix(in srgb,var(--callout,#0a84ff) 7%,transparent);
+  padding-left:12px;padding-right:10px;
+}
+.cm-callout-first{border-radius:8px 8px 0 0;padding-top:8px}
+.cm-callout-last{border-radius:0 0 8px 8px;padding-bottom:8px}
+.cm-callout.cm-callout-first.cm-callout-last{border-radius:8px}
+.cm-callout-note{--callout:#0a84ff}
+.cm-callout-tip{--callout:#32a356}
+.cm-callout-important{--callout:#8250df}
+.cm-callout-warning{--callout:#d4a72c}
+.cm-callout-caution{--callout:#e5534b}
+.cm-callout-quote{--callout:var(--text3)}
+.cm-callout-badge{font-weight:650;color:var(--text)}
+/* Mermaid 图表（P1-4）：块级替换 widget；加载/错误态样式 */
+.cm-mermaid{padding:10px 0;text-align:center;overflow-x:auto;cursor:default}
+.cm-mermaid svg{max-width:100%;height:auto}
+.cm-mermaid-error{color:var(--text2);font-size:13px;text-align:left;white-space:pre-wrap;font-family:var(--mono)}
 /* 代码块：四周描边 + 浅灰底（对齐表格边框风格）。
    底色必须半透明：不透明底色会盖住 drawSelection 选层高亮（框内看不到选区） */
 .cm-codeblock-line{

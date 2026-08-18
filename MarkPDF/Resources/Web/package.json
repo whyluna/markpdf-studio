@@ -28,7 +28,8 @@
     "@codemirror/state": "6.7.1",
     "@codemirror/view": "6.43.6",
     "@lezer/highlight": "1.2.3",
-    "katex": "0.18.1"
+    "katex": "0.18.1",
+    "mermaid": "^11.16.1"
   },
   "devDependencies": {
     "esbuild": "0.28.1",

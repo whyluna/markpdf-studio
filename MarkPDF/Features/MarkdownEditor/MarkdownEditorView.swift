@@ -128,6 +128,11 @@ struct MarkdownEditorView: NSViewRepresentable {
       var roots: [URL] = []
       if let root = parent.workspaceRoot { roots.append(root) }
       if let dir = parent.documentID?.deletingLastPathComponent() { roots.append(dir) }
+      // mermaid 懒加载脚本经本协议供给（P1-4）：file:// 页面动态 <script> 加载本地
+      // 资源被 WebKit 拦截，白名单精确到这一个文件
+      if let mmd = Bundle.main.url(forResource: "mermaid-render", withExtension: "js", subdirectory: "dist") {
+        roots.append(mmd)
+      }
       return roots
     }
     configuration.setURLSchemeHandler(context.coordinator.schemeHandler, forURLScheme: LocalFileSchemeHandler.scheme)
@@ -179,9 +184,20 @@ struct MarkdownEditorView: NSViewRepresentable {
       Logger.editor.fault("缺少内核页面 index.html（先执行 npm run build，并确认 Web/dist 已加入 target）")
       return webView
     }
-    // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）；lang：内核界面文案语言
+    // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）；lang：内核界面文案语言；
+    // mmd：mermaid 懒加载脚本经 markpdf-file:// 协议供给的地址（file:// 动态 script 被拦，P1-4）
     var appPage = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)
-    appPage?.query = "app=1&lang=\(SettingsStore.launchWebLocale)"
+    var queryItems = [
+      URLQueryItem(name: "app", value: "1"),
+      URLQueryItem(name: "lang", value: SettingsStore.launchWebLocale),
+    ]
+    if let mmd = Bundle.main.url(forResource: "mermaid-render", withExtension: "js", subdirectory: "dist") {
+      var comps = URLComponents()
+      comps.scheme = LocalFileSchemeHandler.scheme
+      comps.path = mmd.path
+      queryItems.append(URLQueryItem(name: "mmd", value: comps.url?.absoluteString))
+    }
+    appPage?.queryItems = queryItems
     webView.loadFileURL(appPage?.url ?? pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
     return webView
   }
