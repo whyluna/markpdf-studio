@@ -91,6 +91,7 @@ struct MarkdownTabView: View {
       fontCSS: settings.editorFont.cssFontStack ?? "",
       fontSize: settings.editorFontSize,
       lineHeight: settings.editorLineHeight,
+      paraGap: settings.editorParaGap,
       // FR-2.10：打字机/专注模式
       typewriter: settings.typewriterMode,
       focusMode: settings.focusMode,

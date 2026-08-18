@@ -115,6 +115,18 @@ body{display:flex;flex-direction:column}
   vertical-align:-2px;cursor:pointer;
 }
 .cm-hr{display:block;width:100%;border-top:1px solid var(--border);height:0;padding-top:4px}
+/* 列表标记（美化第二阶段）：bullet 按层级轮换 •/◦/▪，次级色对齐 GitHub 渲染；
+   有序序号保留源码文本，tabular-nums 保持多位数纵向对齐 */
+.cm-list-bullet{color:var(--text2);font-weight:600}
+.cm-list-num{color:var(--text2);font-variant-numeric:tabular-nums;font-weight:500}
+/* 上下标（GFM 扩展语法渲染）：定界符已隐藏，内容整体升降 */
+.cm-sub{vertical-align:sub;font-size:.72em}
+.cm-sup{vertical-align:super;font-size:.72em}
+/* emoji shortcode 渲染（:smile:→😄）：原字符替换，无需额外样式（类名供主题定制） */
+.cm-emoji{}
+/* 段落间距体系（美化第二阶段）：块间空行行高可调（设置「段距」推送 --editor-para-gap；
+   回退 1.0 = GitHub 式紧凑节奏，一行行高约一个字号） */
+.cm-sep-line{line-height:var(--editor-para-gap,1)}
 /* 查找面板（⌘F）：美化为 macOS 风格，向 PDF 查找栏观感对齐（FR-3.4 一致性）；命中高亮保持 */
 .cm-panels{background:var(--code-bg);color:var(--text);border-bottom:1px solid var(--border)}
 .cm-panels .cm-search{padding:8px 36px 8px 12px;position:relative}

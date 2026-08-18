@@ -72,6 +72,13 @@ struct SettingsView: View {
             .monospacedDigit()
             .frame(width: 36, alignment: .trailing)
         }
+        HStack {
+          Text("段距")
+          Slider(value: $settings.editorParaGap, in: 0.5...2.0, step: 0.1)
+          Text("\(settings.editorParaGap, specifier: "%.1f")")
+            .monospacedDigit()
+            .frame(width: 36, alignment: .trailing)
+        }
       }
       Section("阅读") {
         Picker("PDF 默认视图", selection: $settings.pdfViewMode) {

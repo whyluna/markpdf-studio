@@ -289,11 +289,13 @@ Bridge.onMessage("editor.setTheme", (p) => {
   document.documentElement.dataset.theme = p.theme === "dark" ? "dark" : "light";
 });
 
-// 编辑器排版（FR-7.2）：字体/字号/行高 → CSS 变量，即时生效
+// 编辑器排版（FR-7.2）：字体/字号/行高/段距 → CSS 变量，即时生效
 Bridge.onMessage("editor.setTypography", (p) => {
   const style = document.documentElement.style;
   if (typeof p.fontSize === "number") style.setProperty("--editor-font-size", `${p.fontSize}px`);
   if (typeof p.lineHeight === "number") style.setProperty("--editor-line-height", String(p.lineHeight));
+  // 段距（美化第二阶段）：块间空行行高系数
+  if (typeof p.paraGap === "number") style.setProperty("--editor-para-gap", String(p.paraGap));
   // fontCSS 为空串时移除变量，回退到样式表默认字体栈
   if (typeof p.fontCSS === "string") style.setProperty("--editor-font", p.fontCSS);
 });

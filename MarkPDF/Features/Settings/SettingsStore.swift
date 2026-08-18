@@ -66,6 +66,10 @@ final class SettingsStore: ObservableObject {
   @Published var editorLineHeight: Double {
     didSet { defaults.set(editorLineHeight, forKey: Key.lineHeight) }
   }
+  /// 段距（美化第二阶段）：块间空行行高系数，1.0 = GitHub 式紧凑节奏
+  @Published var editorParaGap: Double {
+    didSet { defaults.set(editorParaGap, forKey: Key.paraGap) }
+  }
   @Published var pdfViewMode: PDFViewMode {
     didSet { defaults.set(pdfViewMode.rawValue, forKey: Key.pdfViewMode) }
   }
@@ -208,6 +212,7 @@ final class SettingsStore: ObservableObject {
     static let font = "settings.editorFont"
     static let fontSize = "settings.editorFontSize"
     static let lineHeight = "settings.editorLineHeight"
+    static let paraGap = "settings.editorParaGap"
     static let pdfViewMode = "settings.pdfViewMode"
     static let typewriterMode = "settings.typewriterMode"
     static let focusMode = "settings.focusMode"
@@ -219,6 +224,7 @@ final class SettingsStore: ObservableObject {
   /// 默认值（与内核 baseTheme 一致）
   static let defaultFontSize = 15.5
   static let defaultLineHeight = 1.8
+  static let defaultParaGap = 1.0
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
@@ -227,6 +233,8 @@ final class SettingsStore: ObservableObject {
     editorFontSize = fontSize > 0 ? fontSize : Self.defaultFontSize
     let lineHeight = defaults.double(forKey: Key.lineHeight)
     editorLineHeight = lineHeight > 0 ? lineHeight : Self.defaultLineHeight
+    let paraGap = defaults.double(forKey: Key.paraGap)
+    editorParaGap = paraGap > 0 ? paraGap : Self.defaultParaGap
     pdfViewMode = PDFViewMode(rawValue: defaults.string(forKey: Key.pdfViewMode) ?? "") ?? .continuous
     // 迁移：独立 PDF 阅读主题已并入全局外观——老用户存过「夜间」且没选过外观的，
     // 首次升级直接落深色，夜间阅读习惯不打断

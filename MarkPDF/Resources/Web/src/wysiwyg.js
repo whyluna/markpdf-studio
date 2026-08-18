@@ -8,6 +8,7 @@ import katex from "katex";
 import { docContext } from "./doccontext.js";
 import { t } from "./strings.js";
 import { scanExtended } from "./extended.js";
+import { EMOJI_MAP } from "./emoji-map.js";
 
 /* ---------- 小部件 ---------- */
 
@@ -180,6 +181,71 @@ class HRWidget extends WidgetType {
     const el = document.createElement("span");
     el.className = "cm-hr";
     return el;
+  }
+}
+
+// 无序列表标记（渲染美化第二阶段）：-/+/→ 按嵌套层级轮换 •/◦/▪（经典三级节奏，
+// 与 Typora/GitHub 渲染一致）；替换的是源码 mark 本身，随后的空格保留原位
+class ListBulletWidget extends WidgetType {
+  constructor(depth) {
+    super();
+    this.depth = depth;
+  }
+  eq(o) {
+    return o.depth === this.depth;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-list-bullet";
+    el.textContent = ["•", "◦", "▪"][this.depth % 3];
+    return el;
+  }
+}
+
+// 有序列表标记：保留源码序号文本（1./1)）——所见即所得下序号即真实源码，
+// 不重排；样式走 CSS（tabular-nums 对齐）
+class ListNumWidget extends WidgetType {
+  constructor(text) {
+    super();
+    this.text = text;
+  }
+  eq(o) {
+    return o.text === this.text;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-list-num";
+    el.textContent = this.text;
+    return el;
+  }
+}
+
+// emoji shortcode（:smile: → 😄，GitHub gemoji 全表）：码表查无此名（如时间 10:30:45
+// 的 :30:）时不生成 widget，源码原样显示。双击落光标显露源码（与行内公式一致）
+class EmojiWidget extends WidgetType {
+  constructor(char, name) {
+    super();
+    this.char = char;
+    this.name = name;
+  }
+  eq(o) {
+    return o.char === this.char && o.name === this.name;
+  }
+  toDOM(view) {
+    const el = document.createElement("span");
+    el.className = "cm-emoji";
+    el.textContent = this.char;
+    el.title = `:${this.name}:`;
+    el.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      const pos = view.posAtDOM(el);
+      view.dispatch({ selection: { anchor: pos } });
+      view.focus();
+    });
+    return el;
+  }
+  ignoreEvent() {
+    return false;
   }
 }
 
@@ -678,9 +744,17 @@ function buildDecorations(state, alwaysRender, ext) {
     }
   }
 
+  // 代码块范围（下方空行压缩判定用；iterate 内收集）
+  const codeRanges = [];
+
   syntaxTree(state).iterate({
     enter(node) {
       const { name, from, to } = node;
+
+      // 代码块范围收集（段落空行压缩需跳过：代码区内的空行是内容，行高不可变）
+      if (name === "FencedCode" || name === "IndentedCode") {
+        codeRanges.push({ from, to });
+      }
 
       // 落在扩展语法 replace 范围内的节点不再装饰（避免 replace 重叠）
       for (const r of extReplaces) {
@@ -707,6 +781,53 @@ function buildDecorations(state, alwaysRender, ext) {
         case "CodeMark":
         case "StrikethroughMark": {
           if (!isLineActive(from)) addHide(from, to);
+          return false;
+        }
+
+        case "ListMark": {
+          // 列表标记渲染（美化第二阶段）：任务项的 - 连同尾随空格整体隐藏
+          //（复选框自带间距，Typora 同款无前置符号）；普通项替换为 bullet/序号样式 widget。
+          // 光标在本行显露源码
+          if (isLineActive(from)) return false;
+          const rest = state.doc.sliceString(to, state.doc.lineAt(to).to);
+          if (/^\s*\[[ xX]\]/.test(rest)) {
+            const end = rest[0] === " " ? to + 1 : to;
+            addHide(from, end);
+            return false;
+          }
+          const listNode = node.node.parent?.parent; // ListMark → ListItem → BulletList/OrderedList
+          if (listNode?.name === "OrderedList") {
+            addWidgetReplace(from, to, new ListNumWidget(state.doc.sliceString(from, to)));
+          } else {
+            let depth = 0;
+            for (let p = node.node.parent; p; p = p.parent) {
+              if (p.name === "ListItem") depth++;
+            }
+            addWidgetReplace(from, to, new ListBulletWidget(depth - 1));
+          }
+          return false;
+        }
+
+        case "Subscript":
+        case "Superscript": {
+          // 上下标（GFM 扩展，lezer 默认解析）：内容整体上/下标样式，定界符 ~ ^ 隐藏
+          addMark(from, to, name === "Subscript" ? "cm-sub" : "cm-sup");
+          if (!isLineActive(from)) {
+            for (let c = node.node.firstChild; c; c = c.nextSibling) {
+              if (c.name === name + "Mark") addHide(c.from, c.to);
+            }
+          }
+          return false;
+        }
+
+        case "Emoji": {
+          // emoji shortcode（:smile: → 😄，GitHub gemoji 全表）；码表查无（如时间串 :30:）
+          // 不生成 widget，源码原样。光标在场显露源码
+          if (!isLineActive(from)) {
+            const short = state.doc.sliceString(from + 1, to - 1);
+            const char = EMOJI_MAP.get(short);
+            if (char) addWidgetReplace(from, to, new EmojiWidget(char, short));
+          }
           return false;
         }
 
@@ -834,6 +955,19 @@ function buildDecorations(state, alwaysRender, ext) {
       }
     },
   });
+
+  // 段落间距体系（美化第二阶段）：块之间的空行行高走 --editor-para-gap
+  //（GitHub/Typora 式紧凑节奏，设置面板「段距」可调）。代码块/公式块内的空行
+  // 是内容不参与；被块级 widget 整体替换的范围（表格等）内也无空行，无需排除
+  const inBlockContent = (pos) =>
+    codeRanges.some((r) => pos >= r.from && pos < r.to) ||
+    extReplaces.some((r) => pos >= r.from && pos < r.to);
+  for (let n = 1; n <= state.doc.lines; n++) {
+    const line = state.doc.line(n);
+    if (line.text.trim() === "" && !inBlockContent(line.from)) {
+      addLine(line.from, "cm-sep-line");
+    }
+  }
 
   decos.sort((a, b) => a.from - b.from || a.deco.startSide - b.deco.startSide);
   const builder = new RangeSetBuilder();

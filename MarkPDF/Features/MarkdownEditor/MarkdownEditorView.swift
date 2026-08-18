@@ -45,6 +45,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   let fontCSS: String
   let fontSize: Double
   let lineHeight: Double
+  /// 段距（美化第二阶段）：块间空行行高系数
+  let paraGap: Double
   /// 打字机/专注模式（FR-2.10）
   let typewriter: Bool
   let focusMode: Bool
@@ -75,6 +77,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     fontCSS: String = "",
     fontSize: Double = SettingsStore.defaultFontSize,
     lineHeight: Double = SettingsStore.defaultLineHeight,
+    paraGap: Double = SettingsStore.defaultParaGap,
     typewriter: Bool = false,
     focusMode: Bool = false,
     onContentChanged: ((String) -> Void)? = nil,
@@ -96,6 +99,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.fontCSS = fontCSS
     self.fontSize = fontSize
     self.lineHeight = lineHeight
+    self.paraGap = paraGap
     self.typewriter = typewriter
     self.focusMode = focusMode
     self.onContentChanged = onContentChanged
@@ -235,6 +239,7 @@ extension MarkdownEditorView {
       var fontCSS: String
       var fontSize: Double
       var lineHeight: Double
+      var paraGap: Double
       var typewriter: Bool
       var focusMode: Bool
     }
@@ -298,11 +303,12 @@ extension MarkdownEditorView {
         bridge.notify(.setTheme, payload: ["theme": parent.theme.rawValue])
         lastPushedTheme = parent.theme
       }
-      // FR-7.2：排版（字号/行高/字体任一变化即推送）；FR-2.10：打字机/专注模式
+      // FR-7.2：排版（字号/行高/段距/字体任一变化即推送）；FR-2.10：打字机/专注模式
       let typography = Typography(
         fontCSS: parent.fontCSS,
         fontSize: parent.fontSize,
         lineHeight: parent.lineHeight,
+        paraGap: parent.paraGap,
         typewriter: parent.typewriter,
         focusMode: parent.focusMode
       )
@@ -312,6 +318,7 @@ extension MarkdownEditorView {
           "fontCSS": typography.fontCSS,
           "fontSize": typography.fontSize,
           "lineHeight": typography.lineHeight,
+          "paraGap": typography.paraGap,
         ])
         bridge.notify(.setTypewriter, payload: ["enabled": typography.typewriter])
         bridge.notify(.setFocusMode, payload: ["enabled": typography.focusMode])
