@@ -47,6 +47,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   let lineHeight: Double
   /// 段距（美化第二阶段）：块间空行行高系数
   let paraGap: Double
+  /// 版心宽度（P2-3）：正文内容区最大宽度（pt）
+  let pageWidth: Double
   /// 打字机/专注模式（FR-2.10）
   let typewriter: Bool
   let focusMode: Bool
@@ -78,6 +80,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     fontSize: Double = SettingsStore.defaultFontSize,
     lineHeight: Double = SettingsStore.defaultLineHeight,
     paraGap: Double = SettingsStore.defaultParaGap,
+    pageWidth: Double = SettingsStore.defaultPageWidth,
     typewriter: Bool = false,
     focusMode: Bool = false,
     onContentChanged: ((String) -> Void)? = nil,
@@ -100,6 +103,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.fontSize = fontSize
     self.lineHeight = lineHeight
     self.paraGap = paraGap
+    self.pageWidth = pageWidth
     self.typewriter = typewriter
     self.focusMode = focusMode
     self.onContentChanged = onContentChanged
@@ -184,20 +188,11 @@ struct MarkdownEditorView: NSViewRepresentable {
       Logger.editor.fault("缺少内核页面 index.html（先执行 npm run build，并确认 Web/dist 已加入 target）")
       return webView
     }
-    // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）；lang：内核界面文案语言；
-    // mmd：mermaid 懒加载脚本经 markpdf-file:// 协议供给的地址（file:// 动态 script 被拦，P1-4）
+    // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）；lang：内核界面文案语言。
+    // 页面 query 必须保持原始形态：P1 曾把 mermaid 供给地址放 ?mmd=，file:// 页面的
+    // query 变化会让 WebKit 间歇丢弃 markpdf-file:// 图片请求——动态参数一律走桥消息
     var appPage = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)
-    var queryItems = [
-      URLQueryItem(name: "app", value: "1"),
-      URLQueryItem(name: "lang", value: SettingsStore.launchWebLocale),
-    ]
-    if let mmd = Bundle.main.url(forResource: "mermaid-render", withExtension: "js", subdirectory: "dist") {
-      var comps = URLComponents()
-      comps.scheme = LocalFileSchemeHandler.scheme
-      comps.path = mmd.path
-      queryItems.append(URLQueryItem(name: "mmd", value: comps.url?.absoluteString))
-    }
-    appPage?.queryItems = queryItems
+    appPage?.query = "app=1&lang=\(SettingsStore.launchWebLocale)"
     webView.loadFileURL(appPage?.url ?? pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
     return webView
   }
@@ -256,6 +251,7 @@ extension MarkdownEditorView {
       var fontSize: Double
       var lineHeight: Double
       var paraGap: Double
+      var pageWidth: Double
       var typewriter: Bool
       var focusMode: Bool
     }
@@ -294,6 +290,15 @@ extension MarkdownEditorView {
         }
         pendingInserts = []
       }
+      // mermaid 懒加载脚本供给地址（P1-4）：经桥传入 markpdf-file:// 协议地址
+      if let mmd = Bundle.main.url(forResource: "mermaid-render", withExtension: "js", subdirectory: "dist") {
+        var comps = URLComponents()
+        comps.scheme = LocalFileSchemeHandler.scheme
+        comps.path = mmd.path
+        if let url = comps.url?.absoluteString {
+          bridge.notify(.setMermaidURL, payload: ["url": url])
+        }
+      }
     }
 
     /// setContent 载荷：文本 + 文档基准目录（图片相对路径解析，FR-2.3）+ 恢复编辑行（FR-1.6）
@@ -325,6 +330,7 @@ extension MarkdownEditorView {
         fontSize: parent.fontSize,
         lineHeight: parent.lineHeight,
         paraGap: parent.paraGap,
+        pageWidth: parent.pageWidth,
         typewriter: parent.typewriter,
         focusMode: parent.focusMode
       )
@@ -335,6 +341,7 @@ extension MarkdownEditorView {
           "fontSize": typography.fontSize,
           "lineHeight": typography.lineHeight,
           "paraGap": typography.paraGap,
+          "pageWidth": typography.pageWidth,
         ])
         bridge.notify(.setTypewriter, payload: ["enabled": typography.typewriter])
         bridge.notify(.setFocusMode, payload: ["enabled": typography.focusMode])

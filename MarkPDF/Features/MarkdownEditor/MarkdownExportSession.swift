@@ -43,19 +43,9 @@ final class MarkdownExportSession {
     }
     var appPage = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)
     // ?app=1：隐藏内核页面的开发调试工具栏（见 index.html）；lang：内核界面文案语言
-    //（导出 fallback 标题等也走内核文案，与主编辑器一致注入）；
-    // mmd：mermaid 懒加载脚本供给地址（与主编辑器同款，P1-4）
-    var queryItems = [
-      URLQueryItem(name: "app", value: "1"),
-      URLQueryItem(name: "lang", value: SettingsStore.launchWebLocale),
-    ]
-    if let mmd = Bundle.main.url(forResource: "mermaid-render", withExtension: "js", subdirectory: "dist") {
-      var comps = URLComponents()
-      comps.scheme = LocalFileSchemeHandler.scheme
-      comps.path = mmd.path
-      queryItems.append(URLQueryItem(name: "mmd", value: comps.url?.absoluteString))
-    }
-    appPage?.queryItems = queryItems
+    //（导出 fallback 标题等也走内核文案，与主编辑器一致注入）。
+    // 导出不传 mermaid 地址（异步渲染赶不上导出快照，源码降级）
+    appPage?.query = "app=1&lang=\(SettingsStore.launchWebLocale)"
     webView.loadFileURL(appPage?.url ?? pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
   }
 

@@ -1,5 +1,6 @@
 import UniformTypeIdentifiers
 import WebKit
+import os
 
 /// 本地文件协议处理器（FR-2.3 图片内联显示）。
 /// WKWebView 沙盒无法直接读取工作区文件，内核把图片相对路径解析为
@@ -29,6 +30,7 @@ final class LocalFileSchemeHandler: NSObject, WKURLSchemeHandler {
     // markpdf-file:///abs/path → 本地绝对路径（URL.path 已百分号解码）
     let fileURL = URL(fileURLWithPath: url.path)
     guard Self.isAllowed(fileURL, roots: allowedRoots()) else {
+      Logger.scheme.error("markpdf-file 围栏拒绝: \(fileURL.path, privacy: .public)")
       task.didFailWithError(URLError(.fileDoesNotExist))
       return
     }
@@ -46,6 +48,7 @@ final class LocalFileSchemeHandler: NSObject, WKURLSchemeHandler {
       task.didReceive(data)
       task.didFinish()
     } catch {
+      Logger.scheme.error("markpdf-file 读盘失败: \(fileURL.path, privacy: .public) → \(error.localizedDescription, privacy: .public)")
       task.didFailWithError(error)
     }
   }

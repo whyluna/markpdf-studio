@@ -352,3 +352,72 @@ describe("P1 装饰：callout、表格单元格公式、mermaid", () => {
     expect(countWidget(s5)).toBe(1); // 光标所在块显露源码，另一个仍是图表
   });
 });
+
+// P2：图片尺寸语法、TOC 目录块
+describe("P2 装饰：图片尺寸与 TOC 目录", () => {
+  const DOC5 = [
+    "# 主标题",
+    "",
+    "[TOC]",
+    "",
+    "## 第一节",
+    "",
+    "### 嵌套节",
+    "",
+    "![alt|300](a.png)",
+    "",
+    "![说明|320x240](b.png)",
+    "",
+    "![cap](c.png)",
+    "",
+    "[[TOC]]",
+  ].join("\n");
+  const field5 = wysiwyg(true);
+  const state5 = EditorState.create({
+    doc: DOC5,
+    extensions: [markdown({ base: markdownLanguage }), field5],
+  });
+
+  const widgets = () => {
+    const list = [];
+    state5.field(field5).between(0, 1e9, (_f, _t, v) => {
+      if (v.isReplace && v.spec?.widget) list.push(v.spec.widget);
+    });
+    return list;
+  };
+
+  it("图片尺寸：Obsidian |W / |WxH 解析入 widget，alt 剥离尺寸尾巴（Typora =WxH 带空格不符合 CommonMark，lezer 不解析为图片，不支持）", () => {
+    const imgs = widgets().filter((w) => w.constructor?.name === "ImageWidget");
+    expect(imgs).toHaveLength(3);
+    expect(imgs[0].width).toBe(300);
+    expect(imgs[0].height).toBeUndefined();
+    expect(imgs[0].alt).toBe("alt");
+    expect(imgs[1].width).toBe(320);
+    expect(imgs[1].height).toBe(240);
+    expect(imgs[1].alt).toBe("说明");
+    expect(imgs[2].width).toBeUndefined(); // 无尺寸语法保持原尺寸
+  });
+
+  it("TOC：[TOC] 与 [[TOC]] 行都替换为目录块，标题层级完整", () => {
+    const tocs = widgets().filter((w) => w.constructor?.name === "TocWidget");
+    expect(tocs).toHaveLength(2);
+    const levels = tocs[0].headings.map((h) => h.level);
+    expect(levels).toEqual([1, 2, 3]);
+    expect(tocs[0].headings[0].text).toBe("主标题");
+  });
+
+  it("光标进入 TOC 行 → 显露源码（widget 消失）", () => {
+    const fieldW = wysiwyg(false);
+    const stateW = EditorState.create({
+      doc: DOC5,
+      extensions: [markdown({ base: markdownLanguage }), fieldW],
+    });
+    const tocLine = 3;
+    const active = stateW.update({ selection: { anchor: stateW.doc.line(tocLine).from } }).state;
+    let count = 0;
+    active.field(fieldW).between(0, 1e9, (_f, _t, v) => {
+      if (v.isReplace && v.spec?.widget?.constructor?.name === "TocWidget") count++;
+    });
+    expect(count).toBe(1); // [[TOC]] 行仍是 widget，[TOC] 行显露
+  });
+});

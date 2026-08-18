@@ -132,12 +132,13 @@ import { matchHeadingLine } from "./extended.js";
 // 取值口径与 strings.js currentLang() 一致（currentLang 未导出，同源复述勿漂移）
 document.documentElement.lang = new URLSearchParams(location.search).get("lang") === "en" ? "en" : "zh";
 
-// mermaid 懒加载脚本供给地址（P1-4）：App 内由 native 经 ?mmd= 传入 markpdf-file://
-// 协议地址（file:// 页面动态 <script> 被拦）；浏览器调试缺省走相对路径
-{
-  const mmd = new URLSearchParams(location.search).get("mmd");
-  if (mmd) docContext.mermaidScriptURL = mmd;
-}
+// mermaid 懒加载脚本供给地址（P1-4）：App 内经桥消息传入 markpdf-file:// 协议地址
+//（file:// 页面动态 <script> 被拦）。曾用 ?mmd= query 传递——file:// 页面的 query
+// 变化会让 WebKit 对 markpdf-file:// 图片请求的放行变得不稳定（间歇丢弃），
+// 页面 query 必须保持原始形态，一切动态参数走桥。浏览器调试缺省走相对路径
+Bridge.onMessage("editor.setMermaidURL", (p) => {
+  if (typeof p.url === "string" && p.url) docContext.mermaidScriptURL = p.url;
+});
 
 /* ---------- 模式（FR-2.2） ---------- */
 
@@ -213,7 +214,8 @@ const baseTheme = EditorView.theme({
   "&": { backgroundColor: "var(--win-bg)", color: "var(--text)", height: "100%" },
   ".cm-scroller": { fontFamily: "var(--editor-font)", overflow: "auto" },
   ".cm-content": {
-    maxWidth: "780px",
+    // 版心宽度（P2-3）：走 CSS 变量，设置「版心」推送；回退值与 SettingsStore 默认一致
+    maxWidth: "var(--editor-content-width, 780px)",
     margin: "0 auto",
     padding: "38px 52px 140px",
     // 字号/行高走 CSS 变量（FR-7.2 设置即时生效），回退值与 SettingsStore 默认一致
@@ -355,19 +357,24 @@ Bridge.onMessage("editor.getContent", (_p, id) => {
 Bridge.onMessage("editor.setMode", (p) => {
   const mode = ["wysiwyg", "source", "reading"].includes(p.mode) ? p.mode : "wysiwyg";
   view.dispatch({ effects: modeConf.reconfigure(modeExtension(mode)) });
+  // 阅读模式标记：挂 documentElement（CM 会重建 view.dom.className），供 CSS 区分
+  // 交互形态——如图片光标在阅读模式为 zoom-in（点击放大），编辑模式保持默认
+  document.documentElement.classList.toggle("cm-reading", mode === "reading");
 });
 
 Bridge.onMessage("editor.setTheme", (p) => {
   document.documentElement.dataset.theme = p.theme === "dark" ? "dark" : "light";
 });
 
-// 编辑器排版（FR-7.2）：字体/字号/行高/段距 → CSS 变量，即时生效
+// 编辑器排版（FR-7.2）：字体/字号/行高/段距/版心 → CSS 变量，即时生效
 Bridge.onMessage("editor.setTypography", (p) => {
   const style = document.documentElement.style;
   if (typeof p.fontSize === "number") style.setProperty("--editor-font-size", `${p.fontSize}px`);
   if (typeof p.lineHeight === "number") style.setProperty("--editor-line-height", String(p.lineHeight));
   // 段距（美化第二阶段）：块间空行行高系数
   if (typeof p.paraGap === "number") style.setProperty("--editor-para-gap", String(p.paraGap));
+  // 版心宽度（P2-3）
+  if (typeof p.pageWidth === "number") style.setProperty("--editor-content-width", `${p.pageWidth}px`);
   // fontCSS 为空串时移除变量，回退到样式表默认字体栈
   if (typeof p.fontCSS === "string") style.setProperty("--editor-font", p.fontCSS);
 });

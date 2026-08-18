@@ -63,21 +63,32 @@ struct SettingsView: View {
           Slider(value: $settings.editorFontSize, in: 13...20, step: 0.5)
           Text("\(settings.editorFontSize, specifier: "%.1f")")
             .monospacedDigit()
-            .frame(width: 36, alignment: .trailing)
+            .lineLimit(1)
+            .frame(width: 44, alignment: .trailing)
         }
         HStack {
           Text("行高")
           Slider(value: $settings.editorLineHeight, in: 1.4...2.2, step: 0.1)
           Text("\(settings.editorLineHeight, specifier: "%.1f")")
             .monospacedDigit()
-            .frame(width: 36, alignment: .trailing)
+            .lineLimit(1)
+            .frame(width: 44, alignment: .trailing)
         }
         HStack {
           Text("段距")
           Slider(value: $settings.editorParaGap, in: 0.5...2.0, step: 0.1)
           Text("\(settings.editorParaGap, specifier: "%.1f")")
             .monospacedDigit()
-            .frame(width: 36, alignment: .trailing)
+            .lineLimit(1)
+            .frame(width: 44, alignment: .trailing)
+        }
+        HStack {
+          Text("版心")
+          Slider(value: $settings.editorPageWidth, in: 600...1200, step: 10)
+          Text("\(Int(settings.editorPageWidth))")
+            .monospacedDigit()
+            .lineLimit(1)
+            .frame(width: 44, alignment: .trailing)
         }
       }
       Section("阅读") {

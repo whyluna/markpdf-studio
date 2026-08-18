@@ -83,6 +83,28 @@ body{display:flex;flex-direction:column}
 .cm-mermaid{padding:10px 0;text-align:center;overflow-x:auto;cursor:default}
 .cm-mermaid svg{max-width:100%;height:auto}
 .cm-mermaid-error{color:var(--text2);font-size:13px;text-align:left;white-space:pre-wrap;font-family:var(--mono)}
+/* 图片放大查看（P2-1b）：全屏遮罩、居中图、滚轮缩放；caption 悬浮在底部 */
+/* 阅读模式：图片 hover 显示放大光标（点击弹 lightbox）；编辑模式保持默认光标 */
+.cm-reading .cm-rendered-image{cursor:zoom-in}
+.cm-lightbox{
+  position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+  flex-direction:column;gap:12px;background:rgba(0,0,0,.78);cursor:zoom-out;
+  animation:cm-lightbox-in .16s ease;
+}
+@keyframes cm-lightbox-in{from{opacity:0}to{opacity:1}}
+.cm-lightbox img{
+  max-width:92vw;max-height:88vh;object-fit:contain;border-radius:4px;
+  cursor:default;transition:transform .08s ease;user-select:none;-webkit-user-drag:none;
+}
+.cm-lightbox-caption{color:rgba(255,255,255,.85);font-size:13px;max-width:70vw;text-align:center;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 文内目录块（P2-2）：层级缩进、hover 反馈、点击跳转 */
+.cm-toc{padding:6px 0 8px}
+.cm-toc-item{
+  font-size:14px;color:var(--text2);line-height:27px;cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:4px;
+}
+.cm-toc-item:hover{color:var(--text);background:var(--sel)}
 /* 代码块：四周描边 + 浅灰底（对齐表格边框风格）。
    底色必须半透明：不透明底色会盖住 drawSelection 选层高亮（框内看不到选区） */
 .cm-codeblock-line{

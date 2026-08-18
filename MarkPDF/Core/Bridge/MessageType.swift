@@ -10,6 +10,8 @@ enum BridgeMessageType: String {
   case setTheme = "editor.setTheme"
   case insertAtCursor = "editor.insertAtCursor"
   case scrollToLine = "editor.scrollToLine"
+  /// mermaid 懒加载脚本供给地址（P1-4：file:// 动态 script 被拦，走 markpdf-file:// 协议）
+  case setMermaidURL = "editor.setMermaidURL"
   /// 编辑器排版（FR-7.2：字体/字号/行高）
   case setTypography = "editor.setTypography"
   /// 打字机模式开关（FR-2.10）

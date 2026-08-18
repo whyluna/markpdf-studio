@@ -401,15 +401,20 @@ class FootnoteBackRefWidget extends WidgetType {
   }
 }
 
-// 渲染态图片（FR-2.3）：光标不在行内时把 ![alt](src) 替换为真实图片；双击进入源码编辑
+// 渲染态图片（FR-2.3）：光标不在行内时把 ![alt](src) 替换为真实图片；双击进入源码编辑。
+// 尺寸语法（P2-1）：Obsidian `![alt|300](a.png)` / `![alt|300x200](…)` 与
+// Typora `![alt](a.png =300x200)`（=300 宽、=x200 高）——解析层在 Image 节点处理，
+// 此处只收解析结果。单击 → lightbox 放大查看（见 toDOM）
 class ImageWidget extends WidgetType {
-  constructor(src, alt) {
+  constructor(src, alt, width, height) {
     super();
-    this.src = src; // 已解析为 markpdf-file:// 绝对地址
+    this.src = src; // 已解析为 markpdf-file:// 绝对地址（尺寸后缀已剥离）
     this.alt = alt;
+    this.width = width; // 数值 pt 或 undefined（保持原始尺寸）
+    this.height = height;
   }
   eq(o) {
-    return o.src === this.src && o.alt === this.alt;
+    return o.src === this.src && o.alt === this.alt && o.width === this.width && o.height === this.height;
   }
   toDOM(view) {
     let el;
@@ -422,15 +427,33 @@ class ImageWidget extends WidgetType {
       el.className = "cm-rendered-image";
       el.src = this.src;
       el.alt = this.alt;
+      if (this.width != null) el.style.width = `${this.width}px`;
+      if (this.height != null) el.style.height = `${this.height}px`;
       // 加载完成后让 CM 重测行高：异步加载前按单行估计、加载后图片撑高行，
       // CM 的 ResizeObserver 不感知内容高度变化，不主动重测会留下高度差（滚动跳变）
       el.onload = () => view.requestMeasure();
       el.onerror = () => {
+        // WKWebView 偶发丢弃 markpdf-file:// 的首次子资源请求（换档重渲染后必成功
+        // 的实测结论）：自动重发一次，仍失败才降级提示
+        if (!el.dataset.retried) {
+          el.dataset.retried = "1";
+          const src = el.src;
+          el.src = "";
+          setTimeout(() => {
+            el.src = src;
+          }, 250);
+          return;
+        }
         const span = document.createElement("span");
         span.className = "cm-image-broken";
         span.textContent = `🖼 ${t("imageLoadFailed")}${this.alt || this.src}`;
         el.replaceWith(span);
       };
+      // 单击 → lightbox 放大（P2-1b）；alt 里有尺寸语法时 caption 显示剥离后的文本
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        openLightbox(this.src, this.alt);
+      });
     }
     // 双击 → 光标落到图片语法处，显露源码进入编辑（位置由 posAtDOM 实时解析，不怕上文编辑偏移）
     el.addEventListener("dblclick", (e) => {
@@ -444,6 +467,117 @@ class ImageWidget extends WidgetType {
   ignoreEvent() {
     return false;
   }
+}
+
+// 图片放大查看（P2-1b）：全屏遮罩 + 居中原尺寸，滚轮缩放（0.2–5×），
+// 点遮罩/ESC 关闭。挂在 body 上（脱离编辑器 DOM，不受 CM 重建影响）；
+// 导出的静态 HTML 只有 innerHTML 快照，监听器不随行——交互属 App 内体验
+let lightboxEl = null;
+let lightboxScale = 1;
+function openLightbox(src, alt) {
+  closeLightbox();
+  const overlay = document.createElement("div");
+  overlay.className = "cm-lightbox";
+  const img = document.createElement("img");
+  img.src = src;
+  img.alt = alt ?? "";
+  img.draggable = false;
+  const caption = alt ? document.createElement("div") : null;
+  if (caption) {
+    caption.className = "cm-lightbox-caption";
+    caption.textContent = alt;
+  }
+  lightboxScale = 1;
+  overlay.append(img);
+  if (caption) overlay.append(caption);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay || e.target === caption) closeLightbox();
+  });
+  overlay.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    // 缩放步进按事件来源分档：鼠标滚轮一格明显步进；触控板捏合（ctrl+wheel，
+    // 高频小步事件）用更细步长，用户定档：滚轮 6%、捏合 5%
+    const perEvent = e.ctrlKey ? 1.05 : 1.06;
+    const step = e.deltaY < 0 ? perEvent : 1 / perEvent;
+    lightboxScale = Math.min(5, Math.max(0.2, lightboxScale * step));
+    img.style.transform = `scale(${lightboxScale})`;
+  }, { passive: false });
+  // 双击图片：复位到 1×
+  img.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    lightboxScale = 1;
+    img.style.transform = "scale(1)";
+  });
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeLightbox();
+    }
+  };
+  overlay.addEventListener("keydown", onKey);
+  document.body.append(overlay);
+  overlay.tabIndex = -1;
+  overlay.focus();
+  lightboxEl = overlay;
+}
+function closeLightbox() {
+  if (lightboxEl) {
+    lightboxEl.remove();
+    lightboxEl = null;
+  }
+}
+
+// 文内目录块（P2-2）：单独成行的 [TOC] / [[TOC]]（大小写不敏感）→ 目录 widget：
+// 标题按层级缩进，点击滚动到对应标题。目录内容随文档变化重建（key 为标题签名）
+class TocWidget extends WidgetType {
+  constructor(headings, key) {
+    super();
+    this.headings = headings; // [{level, text, line}]
+    this.key = key; // 标题签名（eq 判据：标题增删改都会重建目录）
+  }
+  eq(o) {
+    return o.key === this.key;
+  }
+  get estimatedHeight() {
+    return this.headings.length * 27 + 18;
+  }
+  toDOM(view) {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-toc";
+    for (const h of this.headings) {
+      const item = document.createElement("div");
+      item.className = "cm-toc-item";
+      item.style.paddingLeft = `${Math.max(0, h.level - 1) * 15}px`;
+      item.textContent = h.text;
+      item.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        jumpToLine(view, h.line);
+      });
+      wrap.appendChild(item);
+    }
+    return wrap;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
+// 标题收集（与 main.js collectOutline 同口径：ATX/Setext → level/text/line）
+function collectHeadingsForToc(state) {
+  const items = [];
+  syntaxTree(state).iterate({
+    enter(node) {
+      const m = /^(?:ATXHeading([1-6])|SetextHeading([12]))$/.exec(node.name);
+      if (!m) return;
+      const line = state.doc.lineAt(node.from);
+      let text = line.text.replace(/^#{1,6}\s*/, "");
+      if (m[1]) text = text.replace(/\s+#+\s*$/, "");
+      text = text.trim();
+      if (text) items.push({ level: m[1] ? Number(m[1]) : Number(m[2]), text, line: line.number });
+      return false;
+    },
+  });
+  return items;
 }
 
 // 渲染态表格（FR-2.3）：光标在表格外时整体替换为 HTML 表格；点击进入源码编辑
@@ -645,11 +779,12 @@ class MermaidWidget extends WidgetType {
           el.innerHTML = svg;
           el.classList.add("cm-mermaid-done");
           view.requestMeasure(); // SVG 真实高度替代估计
-        } catch {
-          // 语法错误：GitHub 同款处置——显示错误提示 + 源码可读
+        } catch (err) {
+          // 语法错误：GitHub 同款处置——友好文案 + 错误详情（pre-wrap 换行显示，
+          // 便于用户报障时直接带出真实原因）
           if (!el.isConnected) return;
           el.classList.add("cm-mermaid-error");
-          el.textContent = "⚠️ 图表语法错误（点击进入源码编辑）";
+          el.textContent = `⚠️ 图表语法错误（点击进入源码编辑）\n${(err && err.message) || err}`;
         }
       })
       .catch(() => {
@@ -942,6 +1077,25 @@ function buildDecorations(state, alwaysRender, ext) {
   // 代码块范围（下方空行压缩判定用；iterate 内收集）
   const codeRanges = [];
 
+  // [TOC] / [[TOC]] 目录块（P2-2）：需在树遍历前处理——`[TOC]` 被 lezer 解析为
+  // Link（两 LinkMark），整行 block replace 与其隐藏装饰相交是 CM 禁止项，
+  // 先登记 extReplaces 抑制。文档无标题时保持源码不渲染
+  const tocHeadings = collectHeadingsForToc(state);
+  if (tocHeadings.length > 0) {
+    const tocKey = tocHeadings.map((h) => `${h.level}:${h.text}@${h.line}`).join("|");
+    const tocRe = /^\s*\[?\[TOC\]\]?\s*$/i;
+    for (let n = 1; n <= state.doc.lines; n++) {
+      const line = state.doc.line(n);
+      if (!tocRe.test(line.text) || isLineActive(line.from)) continue;
+      decos.push({
+        from: line.from,
+        to: line.to,
+        deco: Decoration.replace({ widget: new TocWidget(tocHeadings, tocKey), block: true }),
+      });
+      extReplaces.push({ from: line.from, to: line.to });
+    }
+  }
+
   syntaxTree(state).iterate({
     enter(node) {
       const { name, from, to } = node;
@@ -1059,8 +1213,23 @@ function buildDecorations(state, alwaysRender, ext) {
             }
             if (src) {
               const raw = state.doc.sliceString(from, to);
-              const alt = (/^!\[([^\]]*)\]/.exec(raw) || [])[1] ?? "";
-              addWidgetReplace(from, to, new ImageWidget(resolveImageURL(src), alt));
+              let alt = (/^!\[([^\]]*)\]/.exec(raw) || [])[1] ?? "";
+              // 尺寸语法（P2-1）：先剥 Typora 的 URL 尾缀 ` =WxH`，再剥 Obsidian 的 alt 尾缀 `|W[xH]`
+              let width;
+              let height;
+              const tm = /\s+=\s*(\d+)?x?(\d+)?\s*$/.exec(src);
+              if (tm) {
+                src = src.slice(0, tm.index);
+                if (tm[1]) width = Number(tm[1]);
+                if (tm[2]) height = Number(tm[2]);
+              }
+              const om = /\|(\d+)(?:x(\d+))?\s*$/.exec(alt);
+              if (om) {
+                alt = alt.slice(0, om.index).trimEnd();
+                width = Number(om[1]);
+                if (om[2]) height = Number(om[2]);
+              }
+              addWidgetReplace(from, to, new ImageWidget(resolveImageURL(src), alt, width, height));
               return false;
             }
           }
