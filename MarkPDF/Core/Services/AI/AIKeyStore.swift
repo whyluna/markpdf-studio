@@ -14,7 +14,12 @@ protocol AIKeyStorage {
 /// Keychain 实现：generic password，service 固定、account = Provider rawValue。
 /// 不加 kSecAttrAccessible 限定（默认 unlocked-when-unlocked，本机可读）。
 struct KeychainAIKeyStorage: AIKeyStorage {
-  private let service = "com.whyluna.markpdf.ai"
+  private let service: String
+
+  /// service 可注入：测试用一次性随机名在真实钥匙串上验证行为，不碰用户条目
+  init(service: String = "com.whyluna.markpdf.ai") {
+    self.service = service
+  }
 
   func string(for account: String) -> String? {
     let query: [String: Any] = [
@@ -56,22 +61,39 @@ struct KeychainAIKeyStorage: AIKeyStorage {
       return true
     }
     let data = Data(value.utf8)
-    let status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-    if status == errSecItemNotFound {
+    /// 删旧重建：新条目由当前二进制创建，ACL 立即匹配（旧条目在重签名后可能
+    /// 「更新被放行、读取被拒绝」——2026-08-19 现场，删除重建是唯一自愈路径）
+    func addFresh() -> Bool {
+      SecItemDelete(base as CFDictionary)
       var item = base
       item[kSecValueData as String] = data
       let addStatus = SecItemAdd(item as CFDictionary, nil)
       guard addStatus == errSecSuccess else {
-        Logger.ai.error("API Key 写入钥匙串失败（add）: \(addStatus)")
+        Logger.ai.error("API Key 写入钥匙串失败（重建 add=\(addStatus)）")
         return false
       }
       return true
     }
-    // notFound 以外的错误（锁屏 errSecInteractionNotAllowed 等）不得静默吞：
-    // 否则上层把 account 标成「已配置」，请求时取不出 Key，用户看到矛盾的「未配置」
-    guard status == errSecSuccess else {
-      Logger.ai.error("API Key 写入钥匙串失败（update）: \(status)")
+    let status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+    switch status {
+    case errSecSuccess, errSecItemNotFound:
+      if status == errSecItemNotFound, !addFresh() { return false }
+    case errSecAuthFailed, errSecMissingEntitlement:
+      // ad-hoc 签名每次构建二进制指纹变化，旧条目 ACL 不认当前二进制 → 删旧重建。
+      // 锁屏（errSecInteractionNotAllowed）等其他错误不删条目（保住旧值），直接失败
+      if !addFresh() { return false }
+    default:
+      Logger.ai.error("API Key 写入钥匙串失败（update=\(status)）")
       return false
+    }
+    // 后置条件：返回 true 即「当前二进制可读」。写成功但读不回（ACL 只拒读）→
+    // 删旧重建一次；重建后仍读不回属于环境级拒绝，如实报失败
+    if string(for: account) != value {
+      Logger.ai.notice("API Key 条目写后读不回，删旧重建（签名更新自愈）: \(account, privacy: .public)")
+      guard addFresh(), string(for: account) == value else {
+        Logger.ai.error("API Key 钥匙串条目重建后仍不可读（update=\(status)）")
+        return false
+      }
     }
     return true
   }
@@ -87,9 +109,11 @@ final class AIKeyStore: ObservableObject {
 
   private let storage: AIKeyStorage
 
-  init(storage: AIKeyStorage = KeychainAIKeyStorage()) {
+  /// 默认走混合存储（容器文件为主、钥匙串只读兼容——2026-08-19 钥匙串弹窗问题的根治，
+  /// 见 HybridAIKeyStorage 注释）；测试注入内存/纯文件实现
+  init(storage: AIKeyStorage = HybridAIKeyStorage()) {
     self.storage = storage
-    // 启动只查存在性不读明文（读明文会在 ad-hoc 签名下每次 build 后弹钥匙串授权）
+    // 启动只查存在性（混合存储的存在性检查不读钥匙串明文，不弹授权窗）
     configuredAccounts = Set(AIProviderKind.allCases.map(\.rawValue).filter { storage.exists(for: $0) })
   }
 
@@ -107,6 +131,14 @@ final class AIKeyStore: ObservableObject {
     let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
     guard storage.set(trimmed, for: account) else {
       lastError = String(localized: "API Key 未能写入系统钥匙串（可能处于锁屏状态），请解锁后重试。")
+      return false
+    }
+    // 写后读回校验：钥匙串存在「写成功但读不出」（ACL 拒绝旧条目）状态——
+    // 不校验会出现「显示已配置、请求报未配置」的矛盾（2026-08-19 现场）。
+    // 读不回即删掉刚写的不可用条目（草稿保留在输入框，用户重粘即可）
+    if !trimmed.isEmpty, storage.string(for: account) != trimmed {
+      storage.set(nil, for: account)
+      lastError = String(localized: "API Key 已写入但系统拒绝本应用读取（应用重新签名后会出现一次）。请重新粘贴并再点一次「保存」；若仍失败，请在「钥匙串访问」中删除 MarkPDF 的条目后重试。")
       return false
     }
     // 空串在存储层视为删除，状态集合同步口径

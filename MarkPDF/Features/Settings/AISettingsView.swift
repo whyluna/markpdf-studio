@@ -61,7 +61,7 @@ struct AISettingsView: View {
         Toggle("检索工作区其他文件", isOn: settingsBinding(\.contextIncludeWorkspace))
       }
       Section {
-        Text("AI 功能仅在你显式发起请求时，将所选内容发送至你配置的第三方服务；API Key 保存在系统钥匙串。")
+        Text("AI 功能仅在你显式发起请求时，将所选内容发送至你配置的第三方服务；API Key 保存在本机应用容器内。")
           .font(.footnote)
           .foregroundStyle(.secondary)
       }
@@ -175,7 +175,14 @@ struct AISettingsView: View {
         let elapsed = try await service.testConnection(kind: kind, config: config, model: config.models.first ?? "")
         testStates[kind.rawValue] = .success(String(format: String(localized: "连接正常（%.1fs）"), elapsed))
       } catch {
-        testStates[kind.rawValue] = .failure(error.localizedDescription)
+        // 「已配置」却报未配置 = 钥匙串旧条目 ACL 拒绝当前二进制（重新签名后出现）：
+        // 重新保存一次即可触发条目重建自愈（KeychainAIKeyStorage.set）
+        if case AIServiceError.missingAPIKey = error, aiKeys.configuredAccounts.contains(kind.rawValue) {
+          testStates[kind.rawValue] = .failure(
+            String(localized: "Key 无法读取：请重新粘贴并点「保存」一次以完成迁移"))
+        } else {
+          testStates[kind.rawValue] = .failure(error.localizedDescription)
+        }
       }
     }
   }

@@ -17,7 +17,7 @@ enum AIPrivacyGate {
     alert.informativeText = String(localized: """
       AI 功能会将你选中的文本或文档内容，发送到你自行配置的第三方 AI 服务（OpenAI、DeepSeek、Claude 等）。
 
-      MarkPDF 自身不经过任何服务器、不收集遥测；API Key 仅保存在系统钥匙串。
+      MarkPDF 自身不经过任何服务器、不收集遥测；API Key 仅保存在本机（应用沙盒容器内）。
       """)
     alert.alertStyle = .informational
     alert.addButton(withTitle: String(localized: "我已知晓，继续使用"))
