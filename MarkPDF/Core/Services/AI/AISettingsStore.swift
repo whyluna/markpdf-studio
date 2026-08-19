@@ -63,13 +63,18 @@ struct AISettings: Codable, Equatable {
   var contextIncludeWorkspace = false
   /// AI 助手回复长度上限（max_tokens，用户设定；FR-AI.2 v1.3）
   var chatMaxReplyTokens = 8192
+  /// 写作模式回复上限（v2.1 用户决策：与问答分开单独设）——工具调用里的文件
+  /// 内容也占 max_tokens，写作需要独立且更大的额度
+  var writingMaxReplyTokens = 16_384
+  /// 自定义 Provider 清单（v2.1）
+  var customProviders: [AICustomProvider] = []
 
   init() {}
 
   private enum CodingKeys: String, CodingKey {
     case providers, chatModel, translationEngine, translationModel, targetLanguage
     case autoTranslateOnSelection, contextIncludeSelection, contextIncludeDocument, contextIncludeWorkspace
-    case chatMaxReplyTokens
+    case chatMaxReplyTokens, writingMaxReplyTokens, customProviders
     // 旧版仅 Provider 粒度的选择字段（迁移用）
     case chatProvider, translationProvider
   }
@@ -95,6 +100,8 @@ struct AISettings: Codable, Equatable {
     contextIncludeDocument = try container.decodeIfPresent(Bool.self, forKey: .contextIncludeDocument) ?? true
     contextIncludeWorkspace = try container.decodeIfPresent(Bool.self, forKey: .contextIncludeWorkspace) ?? false
     chatMaxReplyTokens = try container.decodeIfPresent(Int.self, forKey: .chatMaxReplyTokens) ?? 8192
+    writingMaxReplyTokens = try container.decodeIfPresent(Int.self, forKey: .writingMaxReplyTokens) ?? 16_384
+    customProviders = try container.decodeIfPresent([AICustomProvider].self, forKey: .customProviders) ?? []
   }
 
   func encode(to encoder: Encoder) throws {
@@ -109,6 +116,8 @@ struct AISettings: Codable, Equatable {
     try container.encode(contextIncludeDocument, forKey: .contextIncludeDocument)
     try container.encode(contextIncludeWorkspace, forKey: .contextIncludeWorkspace)
     try container.encode(chatMaxReplyTokens, forKey: .chatMaxReplyTokens)
+    try container.encode(writingMaxReplyTokens, forKey: .writingMaxReplyTokens)
+    try container.encode(customProviders, forKey: .customProviders)
   }
 }
 
@@ -154,6 +163,51 @@ final class AISettingsStore: ObservableObject {
     settings.providers[kind.rawValue] ?? kind.defaultConfig
   }
 
+  // MARK: - 统一身份（内置 + 自定义，v2.1）
+
+  /// 全部 Provider 身份：内置在前，自定义在后（模型选择器/回落遍历用）
+  func allIdentities() -> [AIProviderIdentity] {
+    AIProviderKind.allCases.map(\.identity) + settings.customProviders.map(\.identity)
+  }
+
+  func identity(for id: String) -> AIProviderIdentity? {
+    allIdentities().first { $0.id == id }
+  }
+
+  /// 按统一身份取配置（自定义 = 用户填写的 baseURL/模型清单合成）
+  func config(for identity: AIProviderIdentity) -> AIProviderConfig {
+    if let kind = AIProviderKind(rawValue: identity.id) {
+      return config(for: kind)
+    }
+    return settings.customProviders.first { $0.id == identity.id }?.config
+      ?? AIProviderConfig(isEnabled: false, baseURL: "", models: [])
+  }
+
+  /// 新增自定义 Provider（返回新增项供 UI 展开编辑）
+  @discardableResult
+  func addCustomProvider() -> AICustomProvider {
+    var provider = AICustomProvider()
+    provider.name = String(localized: "自定义")
+    update { $0.customProviders.append(provider) }
+    return provider
+  }
+
+  func updateCustomProvider(_ id: String, _ mutate: (inout AICustomProvider) -> Void) {
+    update { settings in
+      guard let index = settings.customProviders.firstIndex(where: { $0.id == id }) else { return }
+      mutate(&settings.customProviders[index])
+    }
+  }
+
+  /// 删除自定义 Provider（选择引用一并清除，回落链自动接管；Key 由 UI 层清）
+  func removeCustomProvider(_ id: String) {
+    update { settings in
+      settings.customProviders.removeAll { $0.id == id }
+      if settings.chatModel?.provider == id { settings.chatModel = nil }
+      if settings.translationModel?.provider == id { settings.translationModel = nil }
+    }
+  }
+
   func updateConfig(_ kind: AIProviderKind, _ mutate: (inout AIProviderConfig) -> Void) {
     update { settings in
       var config = settings.providers[kind.rawValue] ?? kind.defaultConfig
@@ -162,9 +216,9 @@ final class AISettingsStore: ObservableObject {
     }
   }
 
-  /// 解析后的可用模型（kind + 配置 + 模型名 + 用户设定窗口），供请求链直接使用
+  /// 解析后的可用模型（统一身份 + 配置 + 模型名 + 用户设定窗口），供请求链直接使用
   struct ResolvedModel: Equatable {
-    let kind: AIProviderKind
+    let provider: AIProviderIdentity
     let config: AIProviderConfig
     let model: String
     /// 上下文窗口（tokens，用户设定；未配置回退保守值）
@@ -182,27 +236,28 @@ final class AISettingsStore: ObservableObject {
   }
 
   private func resolve(_ choice: AIModelChoice?) -> ResolvedModel? {
-    func resolved(_ kind: AIProviderKind, _ config: AIProviderConfig, _ model: String) -> ResolvedModel {
+    func resolved(_ identity: AIProviderIdentity, _ config: AIProviderConfig, _ model: String) -> ResolvedModel {
       ResolvedModel(
-        kind: kind,
+        provider: identity,
         config: config,
         model: model,
         contextTokens: config.spec(for: model)?.contextTokens ?? AIModelContext.conservativeTokens
       )
     }
-    if let choice, let kind = AIProviderKind(rawValue: choice.provider) {
-      let config = config(for: kind)
+    // 显式选择：内置或自定义 id 均可命中
+    if let choice, let identity = identity(for: choice.provider) {
+      let config = config(for: identity)
       if config.isEnabled, !config.models.isEmpty {
         // 所选模型仍在列表内用之；被删掉则回落该 Provider 首模型（空串迁移形态同此）
         let model = config.models.contains(choice.model) ? choice.model : config.models[0]
-        return resolved(kind, config, model)
+        return resolved(identity, config, model)
       }
     }
-    // 回落：第一个已启用且有模型的 Provider
-    for kind in AIProviderKind.allCases {
-      let config = config(for: kind)
+    // 回落：第一个已启用且有模型的 Provider（内置在前、自定义在后）
+    for identity in allIdentities() {
+      let config = config(for: identity)
       if config.isEnabled, let first = config.models.first {
-        return resolved(kind, config, first)
+        return resolved(identity, config, first)
       }
     }
     return nil

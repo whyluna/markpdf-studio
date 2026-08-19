@@ -60,6 +60,45 @@ enum AIProviderKind: String, Codable, CaseIterable, Identifiable {
   }
 }
 
+/// 统一 Provider 身份（v2.1）：内置 6 家与用户自定义共用同一身份结构——
+/// id 兼作钥匙串账号与模型选择的 provider 键
+struct AIProviderIdentity: Equatable, Identifiable {
+  let id: String
+  let title: String
+  let family: AIProtocolFamily
+}
+
+extension AIProviderKind {
+  var identity: AIProviderIdentity {
+    AIProviderIdentity(id: rawValue, title: title, family: family)
+  }
+}
+
+/// 自定义 Provider（v2.1 用户需求）：任意添加 OpenAI 兼容 / Anthropic 端点，
+/// 名称、Base URL、协议族、模型清单全部自行配置
+struct AICustomProvider: Codable, Equatable, Identifiable {
+  /// 稳定 id：作钥匙串账号与 AIModelChoice.provider 键
+  var id = "custom-\(UUID().uuidString.prefix(8))"
+  var name = ""
+  /// AIProtocolFamily.rawValue
+  var familyRaw = AIProtocolFamily.openAICompatible.rawValue
+  var baseURL = ""
+  var modelSpecs: [AIModelSpec] = []
+  var isEnabled = true
+
+  var family: AIProtocolFamily {
+    AIProtocolFamily(rawValue: familyRaw) ?? .openAICompatible
+  }
+
+  var identity: AIProviderIdentity {
+    AIProviderIdentity(id: id, title: name.isEmpty ? String(localized: "自定义") : name, family: family)
+  }
+
+  var config: AIProviderConfig {
+    AIProviderConfig(isEnabled: isEnabled, baseURL: baseURL, modelSpecs: modelSpecs)
+  }
+}
+
 /// 模型规格（FR-AI.2 v1.3）：上下文窗口由用户配置（不猜测；新增时按模型名预填建议值）
 struct AIModelSpec: Codable, Equatable, Hashable {
   /// 稳定身份（行删除后列表下标复用也不会串行：编辑器绑定与焦点键用）；

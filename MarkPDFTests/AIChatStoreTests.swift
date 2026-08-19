@@ -1386,3 +1386,84 @@ final class AIParallelRunTests: XCTestCase {
     XCTAssertTrue(aDone, "在别的线程点停止不影响 A 的运行")
   }
 }
+
+/// 写作模式独立 max_tokens（v2.1 用户决策）：与问答分开，写大文件不被问答额度截断
+@MainActor
+final class AIWritingTokensTests: XCTestCase {
+  private var suiteName = "AIWritingTokensTests"
+  private var defaults: UserDefaults!
+
+  override func setUp() {
+    super.setUp()
+    defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+  }
+
+  override func tearDown() {
+    removeTestDefaultsSuite(suiteName, using: defaults)
+    super.tearDown()
+  }
+
+  private func sse(_ text: String) -> Data {
+    Data("data: {\"choices\":[{\"delta\":{\"content\":\"\(text)\"}}]}\n\n".utf8)
+  }
+
+  private var sseDone: Data { Data("data: [DONE]\n\n".utf8) }
+
+  func testWritingModeUsesDedicatedTokenBudget() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("WritingTokens-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let settings = AISettingsStore(defaults: defaults)
+    settings.privacyNoticeAcknowledged = true
+    settings.updateConfig(.kimi) { config in
+      config.isEnabled = true
+      // 大窗口模型：避免独立额度被「窗口一半」夹取，验证设置值直达请求
+      config.modelSpecs = [AIModelSpec(name: "moonshot-v1-8k", contextTokens: 64_000)]
+    }
+    settings.update { $0.chatMaxReplyTokens = 3_000; $0.writingMaxReplyTokens = 9_999 }
+    let keys = AIKeyStore(storage: InMemoryAIKeyStorage())
+    keys.save("sk-t", for: AIProviderKind.kimi.rawValue)
+    var bodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      bodies.append(request.httpBody ?? Data())
+      return AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.yield(self.sseDone)
+        continuation.finish()
+      }
+    })
+    let store = AIChatStore(settings: settings, service: AIService(transport: transport, keys: keys), repository: AISessionRepository())
+    store.contextSources.workspaceFiles = { (root: root, files: []) }
+
+    // 写作模式：用独立额度
+    store.isWritingMode = true
+    store.send("写")
+    _ = await { () -> Bool in
+      let deadline = Date().addingTimeInterval(5)
+      while Date() < deadline {
+        if store.phase == .idle, store.messages.count == 2 { return true }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+      }
+      return false
+    }()
+    let writingBody = String(decoding: bodies.last ?? Data(), as: UTF8.self)
+    XCTAssertTrue(writingBody.contains("9999"), "写作模式送 writingMaxReplyTokens：\(writingBody.prefix(200))")
+
+    // 问答模式：用普通额度
+    store.isWritingMode = false
+    store.send("问")
+    _ = await { () -> Bool in
+      let deadline = Date().addingTimeInterval(5)
+      while Date() < deadline {
+        if store.messages.count == 4 { return true }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+      }
+      return false
+    }()
+    let chatBody = String(decoding: bodies.last ?? Data(), as: UTF8.self)
+    XCTAssertTrue(chatBody.contains("3000"), "问答送 chatMaxReplyTokens")
+  }
+}

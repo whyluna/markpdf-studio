@@ -8,6 +8,8 @@ struct AISettingsView: View {
 
   @State private var keyDrafts: [String: String] = [:]
   @State private var testStates: [String: ConnectionTestState] = [:]
+  /// 展开编辑中的自定义 Provider id
+  @State private var expandedCustomID: String?
   /// 模型名/窗口框焦点（回车与点击背景显式退出，光标不再滞留闪烁）
   @FocusState private var focusedModelField: String?
 
@@ -22,6 +24,16 @@ struct AISettingsView: View {
       Section("服务 Provider") {
         ForEach(AIProviderKind.allCases) { kind in
           providerRow(kind)
+        }
+      }
+      Section("自定义 Provider") {
+        ForEach(aiSettings.settings.customProviders) { provider in
+          customProviderRow(provider)
+        }
+        Button {
+          expandedCustomID = aiSettings.addCustomProvider().id
+        } label: {
+          Label("添加自定义 Provider", systemImage: "plus.circle")
         }
       }
       Section("划词翻译") {
@@ -55,7 +67,13 @@ struct AISettingsView: View {
           value: settingsBinding(\.chatMaxReplyTokens),
           format: .number.grouping(.never)
         )
-        .help("请求的 max_tokens；超过模型窗口时自动夹取到窗口一半")
+        .help("问答请求的 max_tokens；超过模型窗口时自动夹取到窗口一半")
+        TextField(
+          "写作上限（tokens）",
+          value: settingsBinding(\.writingMaxReplyTokens),
+          format: .number.grouping(.never)
+        )
+        .help("写作模式专用的 max_tokens（与问答分开）：提案里的文件内容占同一额度，写大文件需要更大上限；超过模型窗口时自动夹取到窗口一半")
         Toggle("提问时附带选中文本", isOn: settingsBinding(\.contextIncludeSelection))
         Toggle("附带当前文档全文", isOn: settingsBinding(\.contextIncludeDocument))
         Toggle("检索工作区其他文件", isOn: settingsBinding(\.contextIncludeWorkspace))
@@ -95,7 +113,7 @@ struct AISettingsView: View {
       HStack {
         SecureField(
           aiKeys.configuredAccounts.contains(kind.rawValue) ? String(localized: "API Key（已保存，输入以更换）") : String(localized: "API Key"),
-          text: keyDraftBinding(for: kind)
+          text: keyDraftBinding(for: kind.rawValue)
         )
         Button("保存") {
           let key = keyDrafts[kind.rawValue] ?? ""
@@ -114,7 +132,7 @@ struct AISettingsView: View {
       }
       HStack(spacing: 8) {
         Button("连接测试") {
-          testConnection(kind)
+          testConnection(kind.identity)
         }
         .disabled(!aiKeys.configuredAccounts.contains(kind.rawValue) || testStates[kind.rawValue] == .testing)
         switch testStates[kind.rawValue] {
@@ -139,14 +157,167 @@ struct AISettingsView: View {
     }
   }
 
+  // MARK: - 自定义 Provider 行（v2.1）
+
+  /// 自定义 Provider：名称 / 协议族 / Base URL / Key / 模型清单 / 删除
+  @ViewBuilder
+  private func customProviderRow(_ provider: AICustomProvider) -> some View {
+    DisclosureGroup(isExpanded: Binding(
+      get: { expandedCustomID == provider.id },
+      set: { expandedCustomID = $0 ? provider.id : nil }
+    )) {
+      TextField("名称", text: customBinding(provider.id, \.name, default: ""))
+      Picker("协议", selection: customBinding(provider.id, \.familyRaw, default: AIProtocolFamily.openAICompatible.rawValue)) {
+        Text("OpenAI 兼容").tag(AIProtocolFamily.openAICompatible.rawValue)
+        Text("Anthropic").tag(AIProtocolFamily.anthropic.rawValue)
+      }
+      TextField("Base URL", text: customBinding(provider.id, \.baseURL, default: ""))
+        .font(.system(size: 12, design: .monospaced))
+      HStack {
+        SecureField(
+          aiKeys.configuredAccounts.contains(provider.id) ? String(localized: "API Key（已保存，输入以更换）") : String(localized: "API Key"),
+          text: keyDraftBinding(for: provider.id)
+        )
+        Button("保存") {
+          let key = keyDrafts[provider.id] ?? ""
+          guard !key.isEmpty else { return }
+          if aiKeys.save(key, for: provider.id) {
+            keyDrafts[provider.id] = ""
+          }
+        }
+        .disabled((keyDrafts[provider.id] ?? "").isEmpty)
+        if aiKeys.configuredAccounts.contains(provider.id) {
+          Button("清除") {
+            aiKeys.remove(for: provider.id)
+          }
+        }
+      }
+      customModelSpecsEditor(provider)
+      HStack(spacing: 8) {
+        Button("连接测试") {
+          testConnection(provider.identity)
+        }
+        .disabled(!aiKeys.configuredAccounts.contains(provider.id)
+          || aiSettings.config(for: provider.identity).models.isEmpty
+          || testStates[provider.id] == .testing)
+        switch testStates[provider.id] {
+        case .testing:
+          ProgressView().controlSize(.small)
+        case .success(let message):
+          Text(message).foregroundStyle(.green).font(.callout)
+        case .failure(let message):
+          Text(message).foregroundStyle(.red).font(.callout).lineLimit(2)
+        case nil:
+          EmptyView()
+        }
+      }
+      Button(role: .destructive) {
+        aiKeys.remove(for: provider.id)
+        aiSettings.removeCustomProvider(provider.id)
+      } label: {
+        Label("删除该 Provider", systemImage: "trash")
+      }
+    } label: {
+      Toggle(provider.name.isEmpty ? String(localized: "自定义") : provider.name, isOn: customBinding(provider.id, \.isEnabled, default: true))
+    }
+  }
+
+  /// 自定义 Provider 的字段绑定（写入 aiSettings.updateCustomProvider；
+  /// default 仅在渲染瞬间找不到条目时兜底。baseURL 即时清洗粘贴的空白/换行
+  private func customBinding<T>(
+    _ id: String, _ keyPath: WritableKeyPath<AICustomProvider, T>, default fallback: T
+  ) -> Binding<T> {
+    Binding(
+      get: {
+        aiSettings.settings.customProviders.first { $0.id == id }?[keyPath: keyPath] ?? fallback
+      },
+      set: { newValue in
+        aiSettings.updateCustomProvider(id) { provider in
+          if keyPath == \.baseURL, let text = newValue as? String {
+            provider.baseURL = text.trimmingCharacters(in: .whitespacesAndNewlines)
+          } else {
+            provider[keyPath: keyPath] = newValue
+          }
+        }
+      }
+    )
+  }
+
+  /// 自定义 Provider 的模型清单编辑（同内置 modelSpecsEditor 的交互，写入路径不同）
+  @ViewBuilder
+  private func customModelSpecsEditor(_ provider: AICustomProvider) -> some View {
+    let specs = aiSettings.settings.customProviders.first { $0.id == provider.id }?.modelSpecs ?? []
+    ForEach(specs, id: \.id) { spec in
+      LabeledContent {
+        HStack(spacing: 6) {
+          TextField("", text: customSpecBinding(provider.id, spec.id, \.name, default: ""), prompt: Text("如 gpt-4o"))
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .frame(width: 140)
+          Text("窗口").font(.callout).foregroundStyle(.secondary).fixedSize()
+          TextField("", value: customSpecBinding(provider.id, spec.id, \.contextTokens, default: AIModelContext.conservativeTokens), format: .number.grouping(.never))
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .frame(width: 64)
+            .multilineTextAlignment(.trailing)
+          Text("tokens").font(.callout).foregroundStyle(.secondary).fixedSize()
+          Button {
+            aiSettings.updateCustomProvider(provider.id) {
+              $0.modelSpecs.removeAll { $0.id == spec.id }
+            }
+          } label: {
+            Image(systemName: "minus.circle")
+          }
+          .buttonStyle(.plain)
+          .controlSize(.small)
+          .help("删除该模型")
+        }
+      } label: {
+        Text("模型名")
+      }
+    }
+    Button {
+      aiSettings.updateCustomProvider(provider.id) {
+        $0.modelSpecs.append(AIModelSpec(name: "", contextTokens: AIModelContext.conservativeTokens))
+      }
+    } label: {
+      Label("添加模型", systemImage: "plus.circle")
+        .font(.callout)
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func customSpecBinding<T>(
+    _ providerID: String, _ specID: UUID, _ keyPath: WritableKeyPath<AIModelSpec, T>, default fallback: T
+  ) -> Binding<T> {
+    Binding(
+      get: {
+        let specs = aiSettings.settings.customProviders.first { $0.id == providerID }?.modelSpecs ?? []
+        return specs.first { $0.id == specID }?[keyPath: keyPath] ?? fallback
+      },
+      set: { newValue in
+        aiSettings.updateCustomProvider(providerID) { provider in
+          guard let index = provider.modelSpecs.firstIndex(where: { $0.id == specID }) else { return }
+          let wasEmptyName = provider.modelSpecs[index].name.isEmpty
+          provider.modelSpecs[index][keyPath: keyPath] = newValue
+          if keyPath == \.name, wasEmptyName,
+            provider.modelSpecs[index].contextTokens == AIModelContext.conservativeTokens
+          {
+            provider.modelSpecs[index].contextTokens = AIModelContext.suggestedTokens(forModel: newValue as? String ?? "")
+          }
+        }
+      }
+    )
+  }
+
   // MARK: - 模型选择（对话 / 翻译共用：全部启用 Provider × 模型列表）
 
   @ViewBuilder
   private func modelPicker(title: String, selection: Binding<AIModelChoice?>, nilLabel: String) -> some View {
-    let choices: [AIModelChoice] = AIProviderKind.allCases.flatMap { kind -> [AIModelChoice] in
-      let config = aiSettings.config(for: kind)
+    let choices: [AIModelChoice] = aiSettings.allIdentities().flatMap { identity -> [AIModelChoice] in
+      let config = aiSettings.config(for: identity)
       guard config.isEnabled else { return [] }
-      return config.models.map { AIModelChoice(provider: kind.rawValue, model: $0) }
+      return config.models.map { AIModelChoice(provider: identity.id, model: $0) }
     }
     if choices.isEmpty {
       Text("先在上方启用并配置至少一个 Provider")
@@ -155,7 +326,7 @@ struct AISettingsView: View {
       Picker(title, selection: selection) {
         Text(nilLabel).tag(AIModelChoice?.none)
         ForEach(choices, id: \.self) { choice in
-          Text("\(AIProviderKind(rawValue: choice.provider)?.title ?? choice.provider) · \(choice.model)")
+          Text("\(aiSettings.identity(for: choice.provider)?.title ?? choice.provider) · \(choice.model)")
             .tag(choice as AIModelChoice?)
         }
       }
@@ -164,24 +335,24 @@ struct AISettingsView: View {
 
   // MARK: - 连接测试
 
-  private func testConnection(_ kind: AIProviderKind) {
+  private func testConnection(_ identity: AIProviderIdentity) {
     // 首次联网前隐私告知（FR-AI.4）；取消则不发任何请求
     guard AIPrivacyGate.ensureAcknowledged(store: aiSettings) else { return }
-    testStates[kind.rawValue] = .testing
-    let config = aiSettings.config(for: kind)
+    testStates[identity.id] = .testing
+    let config = aiSettings.config(for: identity)
     let service = AIService(keys: aiKeys)
     Task { @MainActor in
       do {
-        let elapsed = try await service.testConnection(kind: kind, config: config, model: config.models.first ?? "")
-        testStates[kind.rawValue] = .success(String(format: String(localized: "连接正常（%.1fs）"), elapsed))
+        let elapsed = try await service.testConnection(provider: identity, config: config, model: config.models.first ?? "")
+        testStates[identity.id] = .success(String(format: String(localized: "连接正常（%.1fs）"), elapsed))
       } catch {
         // 「已配置」却报未配置 = 钥匙串旧条目 ACL 拒绝当前二进制（重新签名后出现）：
         // 重新保存一次即可触发条目重建自愈（KeychainAIKeyStorage.set）
-        if case AIServiceError.missingAPIKey = error, aiKeys.configuredAccounts.contains(kind.rawValue) {
-          testStates[kind.rawValue] = .failure(
+        if case AIServiceError.missingAPIKey = error, aiKeys.configuredAccounts.contains(identity.id) {
+          testStates[identity.id] = .failure(
             String(localized: "Key 无法读取：请重新粘贴并点「保存」一次以完成迁移"))
         } else {
-          testStates[kind.rawValue] = .failure(error.localizedDescription)
+          testStates[identity.id] = .failure(error.localizedDescription)
         }
       }
     }
@@ -312,10 +483,10 @@ struct AISettingsView: View {
     )
   }
 
-  private func keyDraftBinding(for kind: AIProviderKind) -> Binding<String> {
+  private func keyDraftBinding(for account: String) -> Binding<String> {
     Binding(
-      get: { keyDrafts[kind.rawValue] ?? "" },
-      set: { keyDrafts[kind.rawValue] = $0 }
+      get: { keyDrafts[account] ?? "" },
+      set: { keyDrafts[account] = $0 }
     )
   }
 }

@@ -203,9 +203,11 @@ enum AIRequestBuilder {
 }
 
 private extension AIProviderConfig {
-  /// 去掉全部尾部 / 的 baseURL，供拼接端点路径（`https://x.com/v1//` 不再拼出双斜杠）
+  /// 端点拼接源：清洗粘贴污染（首尾空白/换行——URL(string:) 遇空格即解析失败，
+  /// 2026-08-19 用户实测「Base URL 无法解析」）+ 去掉全部尾部 /（`https://x.com/v1//` 不再拼出双斜杠）
   var endpoint: String {
-    baseURL.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
+    let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
   }
 }
 

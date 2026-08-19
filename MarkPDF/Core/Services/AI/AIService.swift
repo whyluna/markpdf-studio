@@ -107,14 +107,14 @@ final class AIService {
   /// 联通性测试（设置页「连接测试」）：发最小消息，信封结构完整即通过
   /// （不验正文非空——always-thinking 模型小配额下正文为空属正常），返回往返耗时（秒）
   @discardableResult
-  func testConnection(kind: AIProviderKind, config: AIProviderConfig, model: String) async throws -> TimeInterval {
+  func testConnection(provider: AIProviderIdentity, config: AIProviderConfig, model: String) async throws -> TimeInterval {
     let start = Date()
-    let request = try makeRequest(kind: kind, config: config, model: model, messages: [.user("ping")], stream: false, maxTokens: 128)
+    let request = try makeRequest(provider: provider, config: config, model: model, messages: [.user("ping")], stream: false, maxTokens: 128)
     let (data, http) = try await transport.send(request)
     guard (200..<300).contains(http.statusCode) else {
       throw AIServiceError.httpStatus(http.statusCode, String(decoding: data, as: UTF8.self).truncated(to: 200))
     }
-    switch kind.family {
+    switch provider.family {
     case .openAICompatible:
       try AIResponseDecoder.openAICompletionIsWellFormed(data)
     case .anthropic:
@@ -125,18 +125,18 @@ final class AIService {
 
   /// 非流式对话：一次性返回全文（划词翻译等短任务用）
   func complete(
-    kind: AIProviderKind,
+    provider: AIProviderIdentity,
     config: AIProviderConfig,
     model: String,
     messages: [AIChatMessage],
     maxTokens: Int = 4096
   ) async throws -> String {
-    let request = try makeRequest(kind: kind, config: config, model: model, messages: messages, stream: false, maxTokens: maxTokens)
+    let request = try makeRequest(provider: provider, config: config, model: model, messages: messages, stream: false, maxTokens: maxTokens)
     let (data, http) = try await transport.send(request)
     guard (200..<300).contains(http.statusCode) else {
       throw AIServiceError.httpStatus(http.statusCode, String(decoding: data, as: UTF8.self).truncated(to: 200))
     }
-    switch kind.family {
+    switch provider.family {
     case .openAICompatible:
       return try AIResponseDecoder.openAIMessage(from: data)
     case .anthropic:
@@ -147,7 +147,7 @@ final class AIService {
   /// 流式对话：文本增量实时 yield，工具调用在流结束时整体 yield（AI 助手 agent 循环用）；
   /// 取消消费方即断流
   func stream(
-    kind: AIProviderKind,
+    provider: AIProviderIdentity,
     config: AIProviderConfig,
     model: String,
     messages: [AIChatMessage],
@@ -157,14 +157,14 @@ final class AIService {
     AsyncThrowingStream { continuation in
       let task = Task { [transport] in
         do {
-          let request = try makeRequest(kind: kind, config: config, model: model, messages: messages, stream: true, maxTokens: maxTokens, tools: tools)
+          let request = try makeRequest(provider: provider, config: config, model: model, messages: messages, stream: true, maxTokens: maxTokens, tools: tools)
           let chunks = try await transport.stream(request)
           var parser = AISSEParser()
           var openAIAccumulator = AIToolCallAccumulator.OpenAI()
           var anthropicAccumulator = AIToolCallAccumulator.Anthropic()
 
           func process(_ event: AISSEParser.Event) throws {
-            switch kind.family {
+            switch provider.family {
             case .openAICompatible:
               guard let outcome = try AIChunkDecoder.openAIChunk(from: event.data) else { return }
               if let text = outcome.text, !text.isEmpty {
@@ -194,7 +194,7 @@ final class AIService {
           for event in parser.finish() {
             try process(event)
           }
-          let calls = kind.family == .openAICompatible
+          let calls = provider.family == .openAICompatible
             ? openAIAccumulator.finalize()
             : anthropicAccumulator.finalize()
           if !calls.isEmpty {
@@ -212,7 +212,7 @@ final class AIService {
   // MARK: - 私有
 
   private func makeRequest(
-    kind: AIProviderKind,
+    provider: AIProviderIdentity,
     config: AIProviderConfig,
     model: String,
     messages: [AIChatMessage],
@@ -220,13 +220,13 @@ final class AIService {
     maxTokens: Int,
     tools: [AITool]? = nil
   ) throws -> URLRequest {
-    guard let apiKey = keys.apiKey(for: kind.rawValue), !apiKey.isEmpty else {
+    guard let apiKey = keys.apiKey(for: provider.id), !apiKey.isEmpty else {
       throw AIServiceError.missingAPIKey
     }
     // 日志只记 Provider 与条数，不落消息正文（开发规范 §6/§10）
-    Logger.ai.debug("AI 请求: \(kind.rawValue) stream=\(stream) 消息 \(messages.count) 条")
+    Logger.ai.debug("AI 请求: \(provider.id, privacy: .public) stream=\(stream) 消息 \(messages.count) 条")
     return try AIRequestBuilder.chatRequest(
-      family: kind.family,
+      family: provider.family,
       config: config,
       apiKey: apiKey,
       model: model,
@@ -241,5 +241,35 @@ final class AIService {
 private extension String {
   func truncated(to limit: Int) -> String {
     count > limit ? String(prefix(limit)) + "…" : self
+  }
+}
+
+// MARK: - 内置 Provider 兼容重载（v2.1：参数统一为身份结构，内置枚举直传转发）
+
+extension AIService {
+  @discardableResult
+  func testConnection(kind: AIProviderKind, config: AIProviderConfig, model: String) async throws -> TimeInterval {
+    try await testConnection(provider: kind.identity, config: config, model: model)
+  }
+
+  func complete(
+    kind: AIProviderKind,
+    config: AIProviderConfig,
+    model: String,
+    messages: [AIChatMessage],
+    maxTokens: Int = 4096
+  ) async throws -> String {
+    try await complete(provider: kind.identity, config: config, model: model, messages: messages, maxTokens: maxTokens)
+  }
+
+  func stream(
+    kind: AIProviderKind,
+    config: AIProviderConfig,
+    model: String,
+    messages: [AIChatMessage],
+    maxTokens: Int = 4096,
+    tools: [AITool]? = nil
+  ) -> AsyncThrowingStream<AIStreamEvent, Error> {
+    stream(provider: kind.identity, config: config, model: model, messages: messages, maxTokens: maxTokens, tools: tools)
   }
 }

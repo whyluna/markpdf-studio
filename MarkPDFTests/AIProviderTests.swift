@@ -382,3 +382,24 @@ final class AIProviderTests: XCTestCase {
     }
   }
 }
+
+/// baseURL 粘贴污染（首尾空白/换行/尾斜杠）不导致「无法解析」（2026-08-19 用户现场）
+final class AIBaseURLSanitizeTests: XCTestCase {
+  func testPastedBaseURLWithWhitespaceAndSlashesBuilds() throws {
+    let config = AIProviderConfig(
+      isEnabled: true,
+      baseURL: " https://open.bigmodel.cn/api/v1/ \n",
+      models: ["glm-4.6"]
+    )
+    let request = try AIRequestBuilder.chatRequest(
+      family: .openAICompatible,
+      config: config,
+      apiKey: "sk-t",
+      model: "glm-4.6",
+      messages: [.user("hi")],
+      stream: false,
+      maxTokens: 64
+    )
+    XCTAssertEqual(request.url?.absoluteString, "https://open.bigmodel.cn/api/v1/chat/completions")
+  }
+}

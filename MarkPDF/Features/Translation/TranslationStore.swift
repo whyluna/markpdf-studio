@@ -212,7 +212,7 @@ final class TranslationStore: ObservableObject {
       phase = .failure(String(localized: "未启用任何 AI Provider，请到 设置 → AI 配置并启用"))
       return
     }
-    engineTitle = selection.kind.title
+    engineTitle = selection.provider.title
     // AI 引擎输入截断（FR-AI.1 口径 2000 字）：长选区译文会超 maxTokens 被静默掐断，
     // 先截输入并在气泡注明；系统翻译引擎无此处理
     let input = String(text.prefix(Self.maxAIInputCharacters))
@@ -224,7 +224,7 @@ final class TranslationStore: ObservableObject {
     Task {
       do {
         let translated = try await service.complete(
-          kind: selection.kind,
+          provider: selection.provider,
           config: selection.config,
           model: selection.model,
           messages: messages,

@@ -82,7 +82,7 @@ final class AIChatStore: ObservableObject {
   /// 面板头部徽标（Provider · 模型）；无可用 Provider 为空串
   var providerBadge: String {
     guard let selection = settings.chatSelection else { return "" }
-    return "\(selection.kind.title) · \(selection.model)"
+    return "\(selection.provider.title) · \(selection.model)"
   }
 
   var contextSources = AIContextSources()
@@ -457,7 +457,7 @@ final class AIChatStore: ObservableObject {
       }
       do {
         let summary = try await self.service.complete(
-          kind: resolved.kind,
+          provider: resolved.provider,
           config: resolved.config,
           model: resolved.model,
           messages: AIContextBuilder.compactionMessages(existingSummary: existing, turns: toCompact),
@@ -495,9 +495,16 @@ final class AIChatStore: ObservableObject {
     // 写工具随「AI 写作」面板开关（2026-08-19 重设计：意图开关而非全局配置，
     // 且需开着工作区——没有工作区无处落盘）
     let readToolsEnabled = settings.settings.contextIncludeWorkspace
-    // 上下文预算（v1.3）：窗口与回复上限均为用户设定值
+    // 上下文预算（v1.3）：窗口与回复上限均为用户设定值。
+    // 写作模式用独立的更大额度（v2.1 用户决策：工具调用里的文件内容占同一
+    // max_tokens，问答 8192 会把大文件提案拦腰截断）
+    let workspace = contextSources.workspaceFiles()
+    let writeEnabled = isWritingMode && workspace.root != nil
+    let tokenSetting = writeEnabled
+      ? settings.settings.writingMaxReplyTokens
+      : settings.settings.chatMaxReplyTokens
     let replyTokens = AIModelContext.effectiveReplyTokens(
-      userSetting: settings.settings.chatMaxReplyTokens,
+      userSetting: tokenSetting,
       contextTokens: resolved.contextTokens
     )
     let documentBudget = AIModelContext.documentCharBudget(
@@ -554,8 +561,6 @@ final class AIChatStore: ObservableObject {
     // 组装 outgoing：system(+工具指引) + L2 摘要 + L1 历史原文 + 当轮 user
     let thread = threads[key] ?? Thread()
     var systemPrompt = AIContextBuilder.systemPrompt()
-    let workspace = contextSources.workspaceFiles()
-    let writeEnabled = isWritingMode && workspace.root != nil
     if readToolsEnabled {
       systemPrompt += "\n\n" + AIWorkspaceTools.systemHint(fileNames: workspace.files.map(\.lastPathComponent))
     }
@@ -644,7 +649,7 @@ final class AIChatStore: ObservableObject {
         if var state = runBuffers[key] { state.buffer = ""; runBuffers[key] = state }
         runBuffers[key] = runBuffers[key] ?? (buffer: "", flushScheduled: false)
         let stream = service.stream(
-          kind: resolved.kind,
+          provider: resolved.provider,
           config: resolved.config,
           model: resolved.model,
           messages: outgoing,
@@ -765,7 +770,7 @@ final class AIChatStore: ObservableObject {
   ) async -> (text: String, note: String)? {
     do {
       let reply = try await service.complete(
-        kind: resolved.kind,
+        provider: resolved.provider,
         config: resolved.config,
         model: resolved.model,
         messages: AISectionRouter.routingMessages(
