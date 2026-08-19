@@ -752,6 +752,65 @@ final class AIChatStoreTests: XCTestCase {
     XCTAssertEqual(assistant?.toolActivities.first?.isRunning, false)
   }
 
+  /// FR-AI.5：写工具产提案——循环内入队不落盘，结束封存挂卡片；写作纪律入 system
+  func testWriteToolProducesSealedChangeSet() async throws {
+    let workspace = try makeWorkspace()
+    defer { try? FileManager.default.removeItem(at: workspace.root) }
+
+    // 参数按 OpenAI 流式形态整段给出（accumulator 支持单块到达）；
+    // 嵌入外层 SSE JSON 前先转义反斜杠再转义引号（内层 \n 保持字面量）
+    let args = "{\"path\":\"ai-note.md\",\"content\":\"# AI 笔记\\n\\n- [p.1] 摘录\"}"
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
+    let writeToolChunks: [Data] = [
+      Data("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_w\",\"function\":{\"name\":\"workspace_write_file\",\"arguments\":\"\(args)\"}}]}}]}\n\n".utf8),
+      Data("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n".utf8),
+      Data("data: [DONE]\n\n".utf8),
+    ]
+
+    var requestBodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      requestBodies.append(request.httpBody ?? Data())
+      return AsyncThrowingStream { continuation in
+        if requestBodies.count == 1 {
+          for chunk in writeToolChunks { continuation.yield(chunk) }
+        } else {
+          continuation.yield(self.sse("已提案"))
+          continuation.yield(self.sseDone)
+        }
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport) { settings in
+      settings.update { $0.contextIncludeWorkspace = true }
+    }
+    store.isWritingMode = true
+    store.contextSources.workspaceFiles = { (root: workspace.root, files: workspace.files) }
+
+    store.send("帮我写一份笔记")
+    let done = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    XCTAssertTrue(done)
+
+    // 写作纪律 + 方言速查入 system；写工具定义送出
+    let first = String(decoding: requestBodies[0], as: UTF8.self)
+    XCTAssertTrue(first.contains("workspace_write_file"), "写工具定义送出")
+    XCTAssertTrue(first.contains("WRITE MODE is ON"), "写作模式指令入 system")
+    XCTAssertTrue(first.contains("Never invent image paths"), "图片存在性规则入 system")
+    XCTAssertTrue(first.contains("[TOC]"), "方言速查入 system")
+
+    // 工具结果 = 已入待审清单（未落盘）
+    let second = String(decoding: requestBodies[1], as: UTF8.self)
+    XCTAssertTrue(second.contains("Queued for review"), "提案入队回执回传模型")
+
+    // 文件未落盘；提案封存并挂到 assistant 消息
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: workspace.root.appendingPathComponent("ai-note.md").path),
+      "审查前绝不写盘")
+    XCTAssertEqual(store.changeStore.sealedSets.count, 1)
+    XCTAssertEqual(store.changeStore.sealedSets.first?.set.changes.first?.path, "ai-note.md")
+    XCTAssertEqual(store.messages.last?.changeSetID, store.changeStore.sealedSets.first?.id, "卡片挂到最后一条 assistant")
+  }
+
   /// 「工作区」开关关闭：请求不带 tools
   func testWorkspaceOffSendsNoTools() async {
     var requestBodies: [Data] = []
@@ -1109,5 +1168,221 @@ final class AIChatStoreTests: XCTestCase {
       merged?.messages.map(\.content),
       ["b 的旧问题", "a 的问题", "答"],
       "改名冲突：目标文件的原有会话不得丢失")
+  }
+}
+
+/// 写作模式门控（2026-08-19 重设计）：写工具只在面板开关打开时下发；
+/// 写作模式下零提案的口头幻觉被显式标记
+@MainActor
+final class AIWritingModeTests: XCTestCase {
+  private var suiteName = "AIWritingModeTests"
+  private var defaults: UserDefaults!
+
+  override func setUp() {
+    super.setUp()
+    defaults = UserDefaults(suiteName: suiteName)
+    defaults.removePersistentDomain(forName: suiteName)
+  }
+
+  override func tearDown() {
+    removeTestDefaultsSuite(suiteName, using: defaults)
+    super.tearDown()
+  }
+
+  private func makeStore(transport: AIServiceTests.MockAITransport) -> AIChatStore {
+    let settings = AISettingsStore(defaults: defaults)
+    settings.privacyNoticeAcknowledged = true
+    settings.updateConfig(.kimi) { $0.isEnabled = true }
+    let keys = AIKeyStore(storage: InMemoryAIKeyStorage())
+    keys.save("sk-test", for: AIProviderKind.kimi.rawValue)
+    return AIChatStore(settings: settings, service: AIService(transport: transport, keys: keys), repository: AISessionRepository())
+  }
+
+  private func sse(_ text: String) -> Data {
+    Data("data: {\"choices\":[{\"delta\":{\"content\":\"\(text)\"}}]}\n\n".utf8)
+  }
+
+  private var sseDone: Data { Data("data: [DONE]\n\n".utf8) }
+
+  private func waitUntil(
+    timeout: TimeInterval = 3, _ condition: @escaping () -> Bool
+  ) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if condition() { return true }
+      try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+    return condition()
+  }
+
+  /// 模式关：有工作区也不下发写工具（纯问答）
+  func testWriteToolsAbsentWhenModeOff() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("WriteModeOff-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    var bodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      bodies.append(request.httpBody ?? Data())
+      return AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("答"))
+        continuation.yield(self.sseDone)
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)
+    store.isWritingMode = false
+    store.contextSources.workspaceFiles = { (root: root, files: []) }
+    store.send("写个笔记")
+    _ = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    let body = String(decoding: bodies.first ?? Data(), as: UTF8.self)
+    XCTAssertFalse(body.contains("workspace_write_file"), "模式关 = 写工具不下发")
+  }
+
+  /// 写作模式开、模型纯文字作答（幻觉「已提交」）：消息被显式标记零提案
+  func testWritingModeTextOnlyAnswerFlagged() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("WriteModeHallu-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let transport = AIServiceTests.MockAITransport(streamHandler: { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(self.sse("我已重新提出修改，请批准"))
+        continuation.yield(self.sseDone)
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)
+    store.isWritingMode = true
+    store.contextSources.workspaceFiles = { (root: root, files: []) }
+    store.send("重新提交修改")
+    let done = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    XCTAssertTrue(done)
+    XCTAssertEqual(store.messages.last?.writingNoProposal, true, "零提案的口头声明被标记")
+    XCTAssertNil(store.messages.last?.changeSetID)
+  }
+}
+
+/// 多文档并行运行（2026-08-19 用户需求）：切文档不取消在途运行；
+/// 两个文档各自提问各自完成，互不干扰
+@MainActor
+final class AIParallelRunTests: XCTestCase {
+  private var suiteName = "AIParallelRunTests"
+  private var defaults: UserDefaults!
+
+  override func setUp() {
+    super.setUp()
+    defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+  }
+
+  override func tearDown() {
+    removeTestDefaultsSuite(suiteName, using: defaults)
+    super.tearDown()
+  }
+
+  private func makeStore(transport: AIServiceTests.MockAITransport) -> AIChatStore {
+    let settings = AISettingsStore(defaults: defaults)
+    settings.privacyNoticeAcknowledged = true
+    settings.updateConfig(.kimi) { $0.isEnabled = true }
+    let keys = AIKeyStore(storage: InMemoryAIKeyStorage())
+    keys.save("sk-t", for: AIProviderKind.kimi.rawValue)
+    return AIChatStore(settings: settings, service: AIService(transport: transport, keys: keys), repository: AISessionRepository())
+  }
+
+  private func sse(_ text: String) -> Data {
+    Data("data: {\"choices\":[{\"delta\":{\"content\":\"\(text)\"}}]}\n\n".utf8)
+  }
+
+  private var sseDone: Data { Data("data: [DONE]\n\n".utf8) }
+
+  private func waitUntil(
+    timeout: TimeInterval = 5, _ condition: @escaping () -> Bool
+  ) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if condition() { return true }
+      try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+    return condition()
+  }
+
+  func testSwitchingTabsDoesNotCancelAndRunsAreParallel() async throws {
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+      return AsyncThrowingStream { continuation in
+        if body.contains("问题A") {
+          // A 延迟应答：给切文档 + B 提问留出时间窗
+          Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            continuation.yield(self.sse("A 的回答"))
+            continuation.yield(self.sseDone)
+            continuation.finish()
+          }
+        } else {
+          continuation.yield(self.sse("B 的回答"))
+          continuation.yield(self.sseDone)
+          continuation.finish()
+        }
+      }
+    })
+    let store = makeStore(transport: transport)
+    let docA = URL(fileURLWithPath: "/tmp/parallel/a.md")
+    let docB = URL(fileURLWithPath: "/tmp/parallel/b.md")
+
+    store.bindDocument(docA)
+    store.send("问题A")
+    XCTAssertEqual(store.phase, .streaming)
+
+    // A 在跑时切到 B：不取消，A 的消息不再显示
+    store.bindDocument(docB)
+    XCTAssertTrue(store.messages.isEmpty, "B 是新线程")
+    XCTAssertEqual(store.phase, .idle, "B 没有运行，面板空闲可提问")
+
+    // B 提问（与 A 并行），B 立即回答
+    store.send("问题B")
+    let bDone = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+    XCTAssertTrue(bDone)
+    XCTAssertEqual(store.messages.last?.content, "B 的回答")
+
+    // 切回 A：后台运行的 A 已完成并写回原线程
+    store.bindDocument(docA)
+    let aDone = await waitUntil { store.messages.count == 2 && store.messages.last?.content == "A 的回答" }
+    XCTAssertTrue(aDone, "切走不取消，A 的回答照常写回")
+    XCTAssertEqual(store.messages.first?.content, "问题A")
+  }
+
+  func testStopOnlyCancelsActiveThreadRun() async throws {
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+      return AsyncThrowingStream { continuation in
+        if body.contains("问题A") {
+          Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            continuation.yield(self.sse("A 的回答"))
+            continuation.yield(self.sseDone)
+            continuation.finish()
+          }
+        } else {
+          continuation.yield(self.sse("B 的回答"))
+          continuation.yield(self.sseDone)
+          continuation.finish()
+        }
+      }
+    })
+    let store = makeStore(transport: transport)
+    let docA = URL(fileURLWithPath: "/tmp/parallel2/a.md")
+    let docB = URL(fileURLWithPath: "/tmp/parallel2/b.md")
+
+    store.bindDocument(docA)
+    store.send("问题A")
+    store.bindDocument(docB)
+    // B 上没有运行：cancel 是空操作，不影响 A
+    store.cancel()
+    store.bindDocument(docA)
+    let aDone = await waitUntil { store.messages.count == 2 && store.messages.last?.content == "A 的回答" }
+    XCTAssertTrue(aDone, "在别的线程点停止不影响 A 的运行")
   }
 }

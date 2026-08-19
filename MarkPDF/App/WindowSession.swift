@@ -1,6 +1,7 @@
 import AppKit
 import PDFKit
 import SwiftUI
+import os
 
 /// 单窗口的状态容器（v1.5 多窗口）：每个窗口一套独立的工作区/标签/阅读/AI 状态，
 /// 跨 store 接线（原 ContentView.onAppear 闭包总线）收口在 wireUp。
@@ -178,6 +179,7 @@ final class WindowSession: ObservableObject, Identifiable {
     }
     backlinksStore.setWorkspaceRoot(workspaceStore.root?.id)
     wireAIContextSources()
+    wireAIChangeEnvironment()
   }
 
   /// 外部打开路由接线（v1.5①：首窗承接，保持单窗口时代行为；②改窗口感知路由）
@@ -256,5 +258,70 @@ final class WindowSession: ObservableObject, Identifiable {
         .map(\.id) ?? []
       return (root: self?.workspaceStore.root?.id, files: files)
     }
+  }
+
+  /// AI 写提案应用环境（FR-AI.5）：文件开着（本窗口优先，再查其他窗口）走内核，
+  /// 未开走磁盘；新建走独立创建并开标签
+  private func wireAIChangeEnvironment() {
+    aiChatStore.liveTextProvider = { [weak self] url in
+      self?.findEditorStore(for: url)?.text
+    }
+    aiChatStore.changeStore.applierEnvironment = AIChangeApplier.Environment(
+      findEditorStore: { [weak self] url in
+        self?.findEditorStore(for: url)
+      },
+      applyViaKernel: { store, text, completion in
+        store.applyEdits(text, completion: completion)
+      },
+      // 内核不活（后台标签/桥未就绪）：以 store 内存文本应用后直接落盘，
+      // 标签重新激活时新视图按 store.text 整文载入，不会停在旧内容
+      persistViaStore: { store, text in
+        store.contentDidChange(text)
+        store.flushPendingSave()
+      },
+      workspaceRoot: { [weak self] in
+        self?.workspaceStore.root?.id
+      },
+      highlightApplied: { [weak self] url, ranges, firstLine in
+        self?.findEditorStore(for: url)?.highlightAIChanges(ranges, scrollTo: firstLine)
+      },
+      openTab: { [weak self] url in
+        self?.tabStore.open(url: url)
+      },
+      refreshTree: { [weak self] in
+        self?.workspaceStore.refresh()
+      },
+      trashFile: { url in
+        var resultingItem: NSURL?
+        do {
+          try FileManager.default.trashItem(at: url, resultingItemURL: &resultingItem)
+          return true
+        } catch {
+          Logger.workspace.error("AI 撤销入废纸篓失败 \(url.lastPathComponent, privacy: .public)")
+          return false
+        }
+      },
+      notifyTrashed: { [weak self] url in
+        self?.tabStore.fileWasTrashed(url)
+      }
+    )
+  }
+
+  /// 跨窗口查找打开中文件的编辑状态（符号链接归一同口径；本窗口优先）
+  private func findEditorStore(for url: URL) -> EditorStore? {
+    let key = WindowCoordinator.normalize(url)
+    for group in tabStore.groups {
+      for tab in group.tabs where tab.url.map(WindowCoordinator.normalize) == key {
+        return group.editorStores[tab.id]
+      }
+    }
+    for session in coordinator?.sessions ?? [] where session !== self {
+      for group in session.tabStore.groups {
+        for tab in group.tabs where tab.url.map(WindowCoordinator.normalize) == key {
+          return group.editorStores[tab.id]
+        }
+      }
+    }
+    return nil
   }
 }

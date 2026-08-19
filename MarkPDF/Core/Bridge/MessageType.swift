@@ -22,6 +22,11 @@ enum BridgeMessageType: String {
   case getSelection = "editor.getSelection"
   /// 替换选区（FR-AI.2；带 id 请求-响应，应答 {replaced}；空选区拒绝不落改动）
   case replaceSelection = "editor.replaceSelection"
+  /// AI 写作提案应用（FR-AI.5；带 id 请求-响应，应答 {applied}）：
+  /// 整文替换并单事务入撤销栈（与 setContent「换档重置历史」的语义区分，⌘Z 一步回）
+  case applyEdits = "editor.applyEdits"
+  /// AI 应用后高亮改动行（FR-AI.6；fire-and-forget）：任何文档变更即清除（继续输入淡出）
+  case highlightLines = "editor.highlightLines"
 
   // web → native
   case ready = "editor.ready"

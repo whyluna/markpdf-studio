@@ -48,17 +48,23 @@ enum AIContextBuilder {
     """
   }
 
-  /// 组装当轮 user 消息：`[Selection]`/`[Document: xxx]` 标签块 + `[Question]`。
+  /// 组装当轮 user 消息：`[Selection]`/`[Document: xxx]`/`[File changes]` 标签块 + `[Question]`。
   /// documentBudget 按所选模型动态传入（AIModelContext.documentCharBudget）
   static func buildUserMessage(
     question: String,
     selection: String?,
     document: (name: String, text: String)?,
     documentBudget: Int = AIContextBuilder.documentBudget,
-    documentAnnotation: String? = nil
+    documentAnnotation: String? = nil,
+    changeOutcome: String? = nil
   ) -> BuiltContext {
     var blocks: [String] = []
     var summaryParts: [String] = []
+
+    // 上轮变更集审查结果（FR-AI.5）：应用/拒绝/撤销的真实落盘状态——模型据实回答
+    if let changeOutcome, !changeOutcome.isEmpty {
+      blocks.append("[File changes]\n\(changeOutcome)")
+    }
 
     if let selection, !selection.isEmpty {
       let clipped = String(selection.prefix(selectionBudget))

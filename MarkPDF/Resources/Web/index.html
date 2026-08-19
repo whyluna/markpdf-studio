@@ -220,6 +220,11 @@ body{display:flex;flex-direction:column}
 /* 专注模式（FR-2.10）：非当前行压暗，当前行正常；过渡柔和 */
 .cm-focus-mode .cm-line{opacity:.35;transition:opacity .18s ease}
 .cm-focus-mode .cm-line.cm-focus-line{opacity:1}
+/* AI 应用后改动行高亮（FR-AI.6）：继续输入（任何文档变更）即淡出 */
+.cm-line.cm-ai-change {
+  background: color-mix(in srgb, var(--accent, #4c8bf5) 14%, transparent);
+  transition: background-color 0.6s ease;
+}
 </style>
 <!-- KaTeX 样式（esbuild 由 src/main.js 的 CSS import 自动拆出） -->
 <link rel="stylesheet" href="dist/editor.css">

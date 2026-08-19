@@ -12,7 +12,7 @@ struct AIAssistantPanelView: View {
   @State private var draft = ""
   @State private var toast: String?
   @FocusState private var inputFocused: Bool
-  /// ⌘↵ 发送监听（TextEditor 内 onKeyPress 拿不到修饰键，走 AppKit 通道）
+  /// 回车发送 / ⌘↵ 换行监听（TextEditor 内 onKeyPress 拿不到修饰键，走 AppKit 通道）
   @State private var sendKeyMonitor: Any?
   /// 视口是否贴着底部（流式自动滚动仅贴底时生效）
   @State private var isPinnedToBottom = true
@@ -51,15 +51,20 @@ struct AIAssistantPanelView: View {
     }
     .background(.background)
     .onAppear {
+      // 交互约定（2026-08-19 用户决策）：回车发送；⌘↵ 在光标处换行（TextEditor
+      // 默认不响应 cmd+return，须手动向响应者插入）
       sendKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
-        if event.keyCode == 36,
-          event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
-          inputFocused
-        {
-          sendDraft()
-          return nil
+        guard event.keyCode == 36, inputFocused else { return event }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command) {
+          if let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
+            textView.insertText("\n")
+            return nil
+          }
+          return event
         }
-        return event
+        sendDraft()
+        return nil
       }
     }
     .onDisappear {
@@ -85,13 +90,34 @@ struct AIAssistantPanelView: View {
             .lineLimit(1)
         }
         Spacer()
+        // AI 写作开关（2026-08-19）：带文字胶囊，状态与作用一眼可辨
+        Button {
+          chat.isWritingMode.toggle()
+        } label: {
+          HStack(spacing: 3) {
+            Image(systemName: "pencil.line")
+              .font(.system(size: 9, weight: .semibold))
+            Text("写作")
+              .font(.caption2.weight(.medium))
+          }
+          .padding(.horizontal, 7)
+          .padding(.vertical, 3)
+          .background(
+            chat.isWritingMode ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06),
+            in: Capsule()
+          )
+          .foregroundStyle(chat.isWritingMode ? Color.accentColor : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(chat.isWritingMode ? "AI 写作已开：提问将产出文件变更提案（点击关闭）" : "AI 写作已关：仅问答（点击开启写作）")
         Button {
           chat.newSession()
         } label: {
-          Image(systemName: "square.and.pencil")
+          Image(systemName: "arrow.counterclockwise")
+            .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
-        .help("新会话")
+        .help("清空当前会话，重新开始")
         .disabled(chat.messages.isEmpty)
         Button {
           workspaceStore.isAIAssistantPresented = false
@@ -157,6 +183,20 @@ struct AIAssistantPanelView: View {
         guard isPinnedToBottom else { return }
         proxy.scrollTo(bottomAnchorID)
       }
+      // 首次出现与切换文档线程（activeDocName 变化 = 换了会话）时回到最新消息：
+      // 历史消息列表重建后 ScrollView 停在顶部，需主动滚底
+      .onAppear {
+        isPinnedToBottom = true
+        DispatchQueue.main.async {
+          proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+        }
+      }
+      .onChange(of: chat.activeDocName) { _, _ in
+        isPinnedToBottom = true
+        DispatchQueue.main.async {
+          proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+        }
+      }
     }
   }
 
@@ -169,7 +209,7 @@ struct AIAssistantPanelView: View {
       AIChatMessageRow(
         message: message,
         isBusy: chat.phase == .streaming,
-        actions: messageActions
+        changeStore: chat.changeStore
       )
       .id(message.id)
     }
@@ -229,7 +269,7 @@ struct AIAssistantPanelView: View {
       contextChips
       HStack(alignment: .bottom, spacing: 8) {
         // TextEditor：长文超出自动内滚（TextField 长文不滚动的实测反馈）；
-        // ⌘↵ 发送、回车换行（长输入场景更合理）
+        // 回车发送、⌘↵ 换行（2026-08-19 用户决策）
         ZStack(alignment: .topLeading) {
           TextEditor(text: $draft)
             .font(.system(size: 14))
@@ -238,7 +278,7 @@ struct AIAssistantPanelView: View {
             .frame(minHeight: 56, maxHeight: .infinity)
             .focused($inputFocused)
           if draft.isEmpty {
-            Text("向 AI 提问…（⌘↵ 发送）")
+            Text(chat.isWritingMode ? "描述要写或要改的文件…（回车发送，⌘↵ 换行）" : "向 AI 提问…（回车发送，⌘↵ 换行）")
               .font(.system(size: 14))
               .foregroundStyle(.tertiary)
               // 实测对齐（textprobe）：TextEditor 内部 textContainerInset=(0,0)、
@@ -326,56 +366,6 @@ struct AIAssistantPanelView: View {
     chat.send(question)
   }
 
-  // MARK: - 五动作接线（FR-AI.2）
-
-  private var messageActions: AIMessageActions {
-    var actions = AIMessageActions()
-    actions.canInsert = { [weak tabStore] in
-      guard let store = tabStore?.activeEditorStore else { return false }
-      return store.mode != .reading  // 阅读模式内核只读
-    }
-    actions.insertAtCursor = { [weak tabStore] text in
-      tabStore?.activeEditorStore?.enqueue(.insertAtCursor(text))
-    }
-    actions.replaceSelection = { [weak tabStore] text in
-      tabStore?.activeEditorStore?.replaceSelection(text) { replaced in
-        if !replaced { showToast(String(localized: "编辑器中没有选中内容")) }
-      }
-    }
-    actions.canSaveNote = { [weak workspaceStore] in workspaceStore?.root != nil }
-    actions.saveAsNote = { [weak workspaceStore, weak tabStore] text in
-      guard let root = workspaceStore?.root?.id else { return }
-      if let url = workspaceStore?.createMarkdown(
-        in: root, content: text, baseName: String(localized: "AI 笔记"), undo: nil
-      ) {
-        tabStore?.open(url: url)
-      }
-    }
-    actions.canQuote = { [weak tabStore] in
-      tabStore?.activeGroup.activeTab?.kind == .pdf && tabStore?.activeGroup.activeTab?.url != nil
-    }
-    actions.copyAsQuote = { [weak tabStore, weak workspaceStore, weak pdfStore] text in
-      guard let pdfURL = tabStore?.activeGroup.activeTab?.url else { return }
-      let quote = PDFQuoteExporter.quoteText(
-        text: text,
-        pdfURL: pdfURL,
-        page: pdfStore?.currentPage ?? 1,
-        workspaceRoot: workspaceStore?.root?.id
-      )
-      let pasteboard = NSPasteboard.general
-      pasteboard.clearContents()
-      pasteboard.setString(quote, forType: .string)
-      showToast(String(localized: "已复制带回链的引用"))
-    }
-    return actions
-  }
-
-  private func showToast(_ message: String) {
-    toast = message
-    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-      if toast == message { toast = nil }
-    }
-  }
 }
 
 /// 输入区上下分栏容器：系统 NSSplitView 原生分隔条（与左右边栏同一套连续拖动）。

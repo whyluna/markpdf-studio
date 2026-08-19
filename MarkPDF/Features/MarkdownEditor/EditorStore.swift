@@ -24,6 +24,8 @@ final class EditorStore: ObservableObject {
   @Published var outline: [Heading] = []
   /// 请求内核滚动到指定行（大纲跳转）；由 MarkdownEditorView 消费后清零
   @Published private(set) var pendingScrollLine: Int?
+  /// AI 应用后改动行高亮（FR-AI.6）：[[起行, 止行]]（1 起、闭区间）；视图消费后清空
+  @Published private(set) var pendingAIHighlight: [[Int]]?
 
   /// 内核命令请求（FR-AI.2 编辑器动作）：桥活在 MarkdownEditorView.Coordinator，
   /// Store 不持桥——沿 pendingScrollLine 同款模式经 @Published 队列送达活体视图
@@ -34,6 +36,8 @@ final class EditorStore: ObservableObject {
     case replaceSelection(String, (Bool) -> Void)
     /// 取当前选区文本（无选区回 ""；桥超时/未就绪回 nil）
     case fetchSelection((String?) -> Void)
+    /// AI 写作提案应用（FR-AI.5）：整文替换为应用后文本，单事务入撤销栈
+    case applyEdits(String, (Bool) -> Void)
   }
 
   /// 待内核消费的命令队列（MarkdownEditorView.updateNSView 逐条派发后清空）
@@ -50,6 +54,9 @@ final class EditorStore: ObservableObject {
     case .fetchSelection(let completion):
       let box = OneShotCallback(completion)
       pendingKernelRequests.append(.fetchSelection(box.fire))
+    case .applyEdits(let text, let completion):
+      let box = OneShotCallback(completion)
+      pendingKernelRequests.append(.applyEdits(text, box.fire))
     }
   }
 
@@ -82,6 +89,7 @@ final class EditorStore: ObservableObject {
         switch request {
         case .fetchSelection(let completion): completion(nil)
         case .replaceSelection(_, let completion): completion(false)
+        case .applyEdits(_, let completion): completion(false)
         case .insertAtCursor: break
         }
       }
@@ -98,6 +106,18 @@ final class EditorStore: ObservableObject {
   func replaceSelection(_ text: String, completion: @escaping (Bool) -> Void) {
     guard kernelConsumerAlive else { return completion(false) }
     enqueue(.replaceSelection(text, completion))
+  }
+
+  /// AI 写作提案应用（FR-AI.5）：整文替换（单事务入撤销栈）；内核不活/失败回调 false，
+  /// 调用方（AIChangeApplier）据此走「内存应用 + 直接落盘」回退。
+  /// 失败回调异步派发：同步回调会让 apply 全链路在调用方栈内一气跑完，
+  /// 后续 @Published 写入与视图事务重入（2026-08-19 卡死现场之一）
+  func applyEdits(_ newText: String, completion: @escaping (Bool) -> Void) {
+    guard kernelConsumerAlive else {
+      DispatchQueue.main.async { completion(false) }
+      return
+    }
+    enqueue(.applyEdits(newText, completion))
   }
 
   /// MarkdownEditorView 消费队列后调用（异步清空，避免视图更新途中改 @Published）
@@ -159,9 +179,25 @@ final class EditorStore: ObservableObject {
     pendingScrollLine = line
   }
 
+  /// AI 应用后：高亮改动行并滚到首个改动（FR-AI.6；继续输入即淡出）。
+  /// 延迟到下一 runloop：本方法常在 apply 链路内被同步调用，立即写 @Published
+  /// 会与 SwiftUI 更新事务重入卡死（2026-08-19 采样实锤主线程停在 setter）
+  func highlightAIChanges(_ lineRanges: [[Int]], scrollTo firstLine: Int?) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.pendingAIHighlight = lineRanges.isEmpty ? nil : lineRanges
+      if let firstLine { self.pendingScrollLine = firstLine }
+    }
+  }
+
   /// 内核已消费滚动请求
   func didHandleScroll() {
     pendingScrollLine = nil
+  }
+
+  /// 内核已消费高亮请求
+  func didHandleAIHighlight() {
+    pendingAIHighlight = nil
   }
 
   /// 光标行变化回调（FR-1.6 编辑位置记忆；参数为文件 URL 与 1 起行号）

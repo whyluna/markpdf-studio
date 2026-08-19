@@ -24,15 +24,28 @@ enum AISessionStore {
     var wasCancelled: Bool?
     /// 工具活动摘要（v1.3 agent 循环；旧文件缺省 decodeIfPresent 兼容）
     var toolActivities: [StoredToolActivity]?
+    /// 本条回复挂的变更提案卡片（FR-AI.5/6；UUID 字符串；旧文件缺省兼容）
+    var changeSetID: String?
 
-    init(role: String, content: String, contextSummary: String?, promptQuestion: String?, wasCancelled: Bool?, toolActivities: [StoredToolActivity]? = nil) {
+    init(role: String, content: String, contextSummary: String?, promptQuestion: String?, wasCancelled: Bool?, toolActivities: [StoredToolActivity]? = nil, changeSetID: String? = nil) {
       self.role = role
       self.content = content
       self.contextSummary = contextSummary
       self.promptQuestion = promptQuestion
       self.wasCancelled = wasCancelled
       self.toolActivities = toolActivities
+      self.changeSetID = changeSetID
     }
+  }
+
+  /// 变更提案卡片落盘形态（2026-08-19 持久化）：审查视图（变更段/勾选/状态）随会话
+  /// 保存——重启后卡片与「当时改了什么」回看可用；检查点不落盘（撤销时按审查基准重建）
+  struct StoredChangeSet: Codable, Equatable {
+    var id: String
+    var changeSet: AIChangeSet
+    var status: AIChangeStore.Status
+    /// AIFileChange.id → 审查数据
+    var reviews: [String: AIChangeStore.FileReview]
   }
 
   struct StoredSession: Codable, Equatable {
@@ -44,13 +57,16 @@ enum AISessionStore {
     var rollingSummary: String?
     /// 已并入摘要的消息前缀条数
     var summarizedCount: Int?
+    /// 本线程消息引用的变更提案卡片（FR-AI.5/6；旧文件缺省兼容）
+    var changes: [StoredChangeSet]?
 
-    init(docPath: String?, messages: [StoredMessage], updatedAt: Date, rollingSummary: String? = nil, summarizedCount: Int? = nil) {
+    init(docPath: String?, messages: [StoredMessage], updatedAt: Date, rollingSummary: String? = nil, summarizedCount: Int? = nil, changes: [StoredChangeSet]? = nil) {
       self.docPath = docPath
       self.messages = messages
       self.updatedAt = updatedAt
       self.rollingSummary = rollingSummary
       self.summarizedCount = summarizedCount
+      self.changes = changes
     }
   }
 

@@ -1,22 +1,14 @@
 import SwiftUI
 
-/// AI 助手回复的编辑器动作条（FR-AI.2 五动作）：由面板组装闭包，流式中整体禁用
-struct AIMessageActions {
-  var canInsert: () -> Bool = { false }
-  var insertAtCursor: (String) -> Void = { _ in }
-  var replaceSelection: (String) -> Void = { _ in }
-  var canSaveNote: () -> Bool = { false }
-  var saveAsNote: (String) -> Void = { _ in }
-  var canQuote: () -> Bool = { false }
-  var copyAsQuote: (String) -> Void = { _ in }
-}
-
-/// 单条消息行：user 右对齐气泡 + 上下文摘要；assistant 渲染 + 动作条 + 流式指示
+/// 单条消息行：user 右对齐气泡 + 上下文摘要；assistant 渲染 + 变更卡片 + 复制 + 流式指示
+///（原五动作中插入/替换/存笔记已由 AI 写作提案流取代，2026-08-19 用户决策只留复制）
 struct AIChatMessageRow: View {
   let message: AIChatStore.ChatMessage
   let isBusy: Bool
-  let actions: AIMessageActions
+  /// 写提案审查状态机（FR-AI.5 变更卡片渲染与操作）
+  let changeStore: AIChangeStore
   @State private var isHovering = false
+  @State private var copyFeedback = false
 
   var body: some View {
     switch message.role {
@@ -50,6 +42,14 @@ struct AIChatMessageRow: View {
         toolActivityChips
       }
       AIMessageTextView(markdown: message.content)
+      if let setID = message.changeSetID, let sealed = changeStore.changeSet(id: setID) {
+        AIChangeCardView(sealed: sealed, store: changeStore, isBusy: isBusy)
+      }
+      if message.writingNoProposal {
+        Label("写作模式：本轮没有产生任何提案（模型只是文字描述）", systemImage: "exclamationmark.triangle")
+          .font(.caption)
+          .foregroundStyle(.orange)
+      }
       HStack(spacing: 10) {
         if message.isStreaming {
           ProgressView()
@@ -60,16 +60,16 @@ struct AIChatMessageRow: View {
             .font(.caption2)
             .foregroundStyle(.tertiary)
         }
-        // 动作条常驻（淡显），悬停变实—— hover 才出现时鼠标移向按钮的
+        // 复制按钮常驻（淡显），悬停变实—— hover 才出现时鼠标移向按钮的
         // 途中会穿过非悬停间隙，按钮在用户点击前消失（实测反馈）
         if !message.isStreaming, !message.content.isEmpty {
-          actionBar
-            .opacity(isHovering && !isBusy ? 1.0 : 0.3)
+          copyButton
+            .opacity(isHovering && !isBusy ? 1.0 : 0.35)
             .disabled(isBusy)
             .animation(.easeInOut(duration: 0.15), value: isHovering)
         }
       }
-      .frame(height: 18)
+      .frame(height: 20)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .contentShape(Rectangle())
@@ -109,48 +109,32 @@ struct AIChatMessageRow: View {
     case "workspace_list_documents": action = String(localized: "列出文档")
     case "workspace_get_outline": action = String(localized: "查看大纲")
     case "workspace_read_section": action = String(localized: "读取章节")
+    case "workspace_write_file": action = String(localized: "提议新建文件")
+    case "workspace_edit_file": action = String(localized: "提议修改文件")
+    case "workspace_create_folder": action = String(localized: "提议新建文件夹")
     default: action = activity.name
     }
     return activity.argsSummary.isEmpty ? action : "\(action)：\(activity.argsSummary)"
   }
 
-  /// 五动作（FR-AI.2）：插入光标 / 替换选区 / 复制 / 存为新笔记 / 转回链引用块
-  private var actionBar: some View {
-    HStack(spacing: 8) {
-      actionButton("text.insert", help: String(localized: "插入到光标处")) {
-        actions.insertAtCursor(message.content)
-      }
-      .disabled(!actions.canInsert())
-      actionButton("arrow.2.squarepath", help: String(localized: "替换编辑器选区")) {
-        actions.replaceSelection(message.content)
-      }
-      .disabled(!actions.canInsert())
-      actionButton("doc.on.doc", help: String(localized: "复制回复")) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(message.content, forType: .string)
-      }
-      actionButton("square.and.pencil", help: String(localized: "存为新笔记")) {
-        actions.saveAsNote(message.content)
-      }
-      .disabled(!actions.canSaveNote())
-      actionButton("quote.opening", help: String(localized: "复制为带回链的引用（当前页）")) {
-        actions.copyAsQuote(message.content)
-      }
-      .disabled(!actions.canQuote())
-    }
-  }
-
-  private func actionButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      Image(systemName: symbol)
-        .font(.system(size: 11))
-        .foregroundStyle(.secondary)
-        .frame(width: 20, height: 18)
+  /// 复制回复（唯一保留动作）：圆形底衬按钮，点击后图标短暂变对勾反馈
+  private var copyButton: some View {
+    Button {
+      let pasteboard = NSPasteboard.general
+      pasteboard.clearContents()
+      pasteboard.setString(message.content, forType: .string)
+      copyFeedback = true
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copyFeedback = false }
+    } label: {
+      Image(systemName: copyFeedback ? "checkmark" : "doc.on.doc.fill")
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(copyFeedback ? Color.green : Color.secondary)
+        .frame(width: 22, height: 20)
+        .background(Color.primary.opacity(0.06), in: Capsule())
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .help(help)
+    .help(String(localized: "复制回复"))
   }
 }
 
@@ -163,12 +147,12 @@ struct AIChatMessageRow: View {
         return m
       }(),
       isBusy: false,
-      actions: AIMessageActions()
+      changeStore: AIChangeStore()
     )
     AIChatMessageRow(
       message: AIChatStore.ChatMessage(role: .assistant, content: "核心论点是 **注意力机制** 可以替代循环结构。"),
       isBusy: false,
-      actions: AIMessageActions()
+      changeStore: AIChangeStore()
     )
   }
   .padding()

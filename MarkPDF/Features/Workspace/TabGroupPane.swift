@@ -81,6 +81,7 @@ struct MarkdownTabView: View {
       mode: store.mode,
       theme: colorScheme == .dark ? .dark : .light,
       scrollToLine: store.pendingScrollLine,
+      aiHighlightRanges: store.pendingAIHighlight,
       // FR-AI.2：AI 助手编辑器动作（插入/替换/取选区）经队列送达活体桥
       kernelRequests: store.pendingKernelRequests,
       // FR-1.6：载入即恢复上次编辑行；光标变化经内核防抖上报回存
@@ -104,6 +105,9 @@ struct MarkdownTabView: View {
       },
       onScrollHandled: {
         store.didHandleScroll()
+      },
+      onAIHighlightHandled: {
+        store.didHandleAIHighlight()
       },
       onKernelRequestsHandled: {
         store.didHandleKernelRequests()

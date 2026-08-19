@@ -35,6 +35,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   let theme: EditorTheme
   /// 请求内核滚动到指定行（FR-2.6 大纲跳转）；消费后经 `onScrollHandled` 清零
   let scrollToLine: Int?
+  /// AI 应用后改动行高亮（FR-AI.6）：[[起行, 止行]]（1 起闭区间）；消费后清空
+  let aiHighlightRanges: [[Int]]?
   /// 内核命令队列（FR-AI.2 编辑器动作）；消费后经 `onKernelRequestsHandled` 清空
   let kernelRequests: [EditorStore.KernelRequest]
   /// 载入文档时恢复的上次编辑行（FR-1.6 编辑位置记忆）；nil 不跳转
@@ -58,6 +60,8 @@ struct MarkdownEditorView: NSViewRepresentable {
   var onOutlineChanged: (([Heading]) -> Void)?
   /// 滚动请求已消费回调
   var onScrollHandled: (() -> Void)?
+  /// AI 高亮请求已消费回调
+  var onAIHighlightHandled: (() -> Void)?
   /// 内核命令队列已消费回调
   var onKernelRequestsHandled: (() -> Void)?
   /// 活体内核视图挂载/拆除回调（AI 动作的无活体兜底，防回调型请求悬挂）
@@ -73,6 +77,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     mode: EditorMode = .wysiwyg,
     theme: EditorTheme = .light,
     scrollToLine: Int? = nil,
+    aiHighlightRanges: [[Int]]? = nil,
     kernelRequests: [EditorStore.KernelRequest] = [],
     initialLine: Int? = nil,
     workspaceRoot: URL? = nil,
@@ -86,6 +91,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     onContentChanged: ((String) -> Void)? = nil,
     onOutlineChanged: (([Heading]) -> Void)? = nil,
     onScrollHandled: (() -> Void)? = nil,
+    onAIHighlightHandled: (() -> Void)? = nil,
     onKernelRequestsHandled: (() -> Void)? = nil,
     onKernelConsumerChanged: ((Bool) -> Void)? = nil,
     onCursorMoved: ((Int) -> Void)? = nil,
@@ -96,6 +102,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.mode = mode
     self.theme = theme
     self.scrollToLine = scrollToLine
+    self.aiHighlightRanges = aiHighlightRanges
     self.kernelRequests = kernelRequests
     self.initialLine = initialLine
     self.workspaceRoot = workspaceRoot
@@ -109,6 +116,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     self.onContentChanged = onContentChanged
     self.onOutlineChanged = onOutlineChanged
     self.onScrollHandled = onScrollHandled
+    self.onAIHighlightHandled = onAIHighlightHandled
     self.onKernelRequestsHandled = onKernelRequestsHandled
     self.onKernelConsumerChanged = onKernelConsumerChanged
     self.onCursorMoved = onCursorMoved
@@ -210,6 +218,13 @@ struct MarkdownEditorView: NSViewRepresentable {
       context.coordinator.scrollTo(line: line)
       DispatchQueue.main.async {
         self.onScrollHandled?()
+      }
+    }
+    // AI 应用后改动行高亮（FR-AI.6）：消费后异步清空
+    if let ranges = aiHighlightRanges {
+      context.coordinator.highlightLines(ranges)
+      DispatchQueue.main.async {
+        self.onAIHighlightHandled?()
       }
     }
     // 内核命令队列（FR-AI.2 编辑器动作）：逐条派发后异步清空
@@ -366,6 +381,12 @@ extension MarkdownEditorView {
       parent.onOutlineChanged?(items)
     }
 
+    /// AI 应用后改动行高亮（FR-AI.6）：行区间送内核做行装饰（继续输入即淡出）
+    func highlightLines(_ ranges: [[Int]]) {
+      guard isReady else { return }
+      bridge.notify(.highlightLines, payload: ["ranges": ranges])
+    }
+
     /// 大纲跳转（FR-2.6）：通知内核滚动到指定行；内核未就绪则排队，就绪后补发
     func scrollTo(line: Int) {
       guard isReady else {
@@ -395,6 +416,12 @@ extension MarkdownEditorView {
         bridge.request(.getSelection) { result in
           let text = (try? result.get())?["text"] as? String
           Task { @MainActor in completion(text) }
+        }
+      case .applyEdits(let text, let completion):
+        guard isReady else { return completion(false) }
+        bridge.request(.applyEdits, payload: ["text": text]) { result in
+          let applied = (try? result.get())?["applied"] as? Bool ?? false
+          Task { @MainActor in completion(applied) }
         }
       }
     }

@@ -1,8 +1,8 @@
 // MarkPDF Markdown 编辑器内核入口（FR-2.1 / FR-2.2 / FR-2.7）
-import { EditorState, Compartment, StateField, Transaction } from "@codemirror/state";
+import { EditorState, Compartment, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { t as uiText } from "./strings.js";
 import { EditorView, keymap, placeholder, drawSelection, Decoration } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab, isolateHistory } from "@codemirror/commands";
 import { search, searchKeymap, getSearchQuery } from "@codemirror/search";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage, syntaxTree } from "@codemirror/language";
@@ -146,6 +146,34 @@ const modeConf = new Compartment();
 
 // 撤销历史放 Compartment：切换文档时整体重置——单 WebView 换档架构下，
 // 跨文档 ⌘Z 会把上一文件的内容写进当前文件/清空文件（恶性数据丢失）
+// AI 应用后改动行高亮（FR-AI.6）：行装饰；任何文档变更（用户继续输入/AI 再应用）
+// 即清除——applyEdits 自身的 dispatch 先清一次，随后本消息重设新范围
+const aiHighlightEffect = StateEffect.define();
+const aiHighlightField = StateField.define({
+  create: () => Decoration.none,
+  update(value, tr) {
+    if (tr.docChanged) return Decoration.none;
+    if (!tr.effects.some((e) => e.is(aiHighlightEffect))) return value;
+    // 行装饰要求零长区间：区间内逐行各挂一个（挂在行首）
+    const decos = [];
+    for (const effect of tr.effects) {
+      if (!effect.is(aiHighlightEffect)) continue;
+      for (const [from, to] of effect.value.ranges) {
+        let pos = from;
+        while (pos <= to) {
+          const line = tr.state.doc.lineAt(pos);
+          decos.push(Decoration.line({ class: "cm-ai-change" }).range(line.from));
+          pos = line.to + 1;
+        }
+      }
+    }
+    return Decoration.set(decos, true);
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+// ranges 为 [起, 止) 行号数组（1 起，半开区间）
+
+
 const historyConf = new Compartment();
 
 // 打字机/专注模式（FR-2.10）：默认关，native 推送开关
@@ -255,10 +283,24 @@ const view = new EditorView({
     doc: "",
     extensions: [
       historyConf.of(history()),
+      aiHighlightField,
       // 自绘光标/选区：替代 WebKit 原生光标（原生按 line-height 1.8 的行框绘制，显得过长）
       drawSelection(),
       search({ top: true }),
-      keymap.of([...searchKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+      keymap.of([
+        // Esc 清除 AI 应用后的改动行高亮（FR-AI.6；返回 false 不拦截其它 Esc 行为）
+        {
+          key: "Escape",
+          run: (v) => {
+            v.dispatch({ effects: aiHighlightEffect.of({ ranges: [] }) });
+            return false;
+          },
+        },
+        ...searchKeymap,
+        ...defaultKeymap,
+        ...historyKeymap,
+        indentWithTab,
+      ]),
       ...baseExtensions(),
       placeholder(uiText("placeholder")),
       modeConf.of(modeExtension("wysiwyg")),
@@ -418,6 +460,29 @@ Bridge.onMessage("editor.replaceSelection", (p, id) => {
   }
   view.dispatch(view.state.replaceSelection(p.text ?? ""));
   Bridge.respond(id, { replaced: true });
+});
+
+// AI 写作提案应用（FR-AI.5）：整文单事务替换。与 setContent（换档，重置历史）不同，
+// 这里照常入撤销栈——⌘Z 一步回到应用前文本。基准文本由 native 侧以编辑器内存为准计算
+Bridge.onMessage("editor.applyEdits", (p, id) => {
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: p.text ?? "" },
+    // 独立成撤销步：不与相邻的用户输入合并（否则应用前刚打完字的输入会被 ⌘Z 一起带走）
+    annotations: isolateHistory.of("full"),
+  });
+  Bridge.respond(id, { applied: true });
+});
+
+Bridge.onMessage("editor.highlightLines", (p) => {
+  const ranges = (p.ranges ?? [])
+    .map(([a, b]) => [Math.max(1, a), Math.max(1, b)])
+    .filter(([a, b]) => a <= b && b <= view.state.doc.lines)
+    .map(([a, b]) => [
+      view.state.doc.line(a).from,
+      view.state.doc.line(b).to,
+    ]);
+  if (!ranges.length) return;
+  view.dispatch({ effects: aiHighlightEffect.of({ ranges }) });
 });
 
 // 导出独立 HTML（FR-2.9）：阅读模式离屏重渲染，应答 {title, html}

@@ -207,3 +207,60 @@ describe("AI 助手桥消息（getSelection / replaceSelection）", () => {
     expect(view.state.doc.toString()).toBe("aXYef");
   });
 });
+
+// FR-AI.5：AI 写作提案应用（applyEdits）——整文单事务替换，⌘Z 一步回应用前
+describe("AI 写作提案应用（applyEdits）", () => {
+  const handler = (type) =>
+    Bridge.onMessage.mock.calls.find(([t]) => t === type)?.[1];
+
+  it("整文替换并应答 applied；undo 一步回到应用前（历史不重置）", async () => {
+    Bridge.respond.mockClear();
+    const before = "# 旧文档\n\n中文内容 😀";
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: before } });
+    handler("editor.applyEdits")({ text: "# 新文档\n\nAI 改写后" }, "req-ae1");
+    expect(Bridge.respond).toHaveBeenCalledWith("req-ae1", { applied: true });
+    expect(view.state.doc.toString()).toBe("# 新文档\n\nAI 改写后");
+    const { undo } = await import("@codemirror/commands");
+    expect(undo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(before);
+  });
+
+  it("缺 text 载荷按空文档处理（native 侧恒传 text，防御性口径）", () => {
+    Bridge.respond.mockClear();
+    handler("editor.applyEdits")({}, "req-ae2");
+    expect(Bridge.respond).toHaveBeenCalledWith("req-ae2", { applied: true });
+    expect(view.state.doc.toString()).toBe("");
+  });
+});
+
+// FR-AI.6：AI 应用后改动行高亮——行装饰；任何文档变更即清除（继续输入淡出）
+describe("AI 应用后改动行高亮（highlightLines）", () => {
+  const handler = (type) =>
+    Bridge.onMessage.mock.calls.find(([t]) => t === type)?.[1];
+
+  it("设置指定行的高亮装饰；用户输入后清除", () => {
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "一\n二\n三\n四\n五" } });
+    handler("editor.highlightLines")({ ranges: [[2, 3]] });
+    const domLines = [...view.dom.querySelectorAll(".cm-line.cm-ai-change")];
+    expect(domLines).toHaveLength(2);
+
+    view.dispatch({ changes: { from: 0, insert: "新" } });
+    const after = [...view.dom.querySelectorAll(".cm-line.cm-ai-change")];
+    expect(after).toHaveLength(0);
+  });
+
+  it("越界行号被忽略，不抛错", () => {
+    expect(() => handler("editor.highlightLines")({ ranges: [[0, 99]] })).not.toThrow();
+  });
+
+  it("按 Esc 清除高亮（不影响内容）", () => {
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "行一\n行二\n行三" } });
+    handler("editor.highlightLines")({ ranges: [[1, 3]] });
+    expect(view.dom.querySelectorAll(".cm-line.cm-ai-change")).toHaveLength(3);
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+    );
+    expect(view.dom.querySelectorAll(".cm-line.cm-ai-change")).toHaveLength(0);
+    expect(view.state.doc.toString()).toBe("行一\n行二\n行三");
+  });
+});
