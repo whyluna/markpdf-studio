@@ -15,11 +15,27 @@ final class LocalFileSchemeHandler: NSObject, WKURLSchemeHandler {
 
   /// 路径是否在任一允许根之内（纯函数可单测）：标准化 + 符号链接归一后按路径组件边界判定
   static func isAllowed(_ fileURL: URL, roots: [URL]) -> Bool {
-    let path = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+    let path = resolvedPath(fileURL)
     return roots.contains { root in
-      let rootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
+      let rootPath = resolvedPath(root)
       return path == rootPath || path.hasPrefix(rootPath + "/")
     }
+  }
+
+  /// 符号链接归一的稳定口径：目标文件可能尚不存在（如仅被引用未落盘的图片），
+  /// 新版 macOS 的 resolvingSymlinksInPath 对「存在的符号链接 + 不存在的尾段」
+  /// 不再解析链接段（实测 darwin 25.6 回归）——退到最近的存在祖先解析后拼回尾巴
+  static func resolvedPath(_ fileURL: URL) -> String {
+    let standardized = fileURL.standardizedFileURL
+    var current = standardized
+    var tail: [String] = []
+    while current.path != "/" && !FileManager.default.fileExists(atPath: current.path) {
+      tail.insert(current.lastPathComponent, at: 0)
+      current = current.deletingLastPathComponent()
+    }
+    let base = current.standardizedFileURL.resolvingSymlinksInPath().path
+    guard !tail.isEmpty else { return base }
+    return tail.reduce(into: base) { $0 += "/" + $1 }
   }
 
   func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
