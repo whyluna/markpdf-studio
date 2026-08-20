@@ -85,6 +85,19 @@ final class AIChangeApplierTests: XCTestCase {
     XCTAssertEqual(diskText("a.md"), "已有", "不覆盖既有文件")
   }
 
+  func testCreateFolderFailsWhenTargetAppearedBeforeApproval() async {
+    let folder = root.appendingPathComponent("用户目录")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try? "用户内容".write(
+      to: folder.appendingPathComponent("keep.md"), atomically: true, encoding: .utf8)
+
+    let result = await AIChangeApplier.apply(
+      change(.createFolder, "用户目录"), environment: makeEnvironment())
+
+    XCTAssertTrue(result.isFailure, "已存在的最终目录不能被误报为本批新建")
+    XCTAssertEqual(diskText("用户目录/keep.md"), "用户内容")
+  }
+
   // MARK: - 编辑：未打开（磁盘分支）
 
   func testEditUnopenedFileWritesDisk() async {
@@ -145,10 +158,15 @@ final class AIChangeApplierTests: XCTestCase {
     ])
     let createChange = change(.createFile, "笔记/新文件.md", content: "新内容")
 
-    var checkpoint = await AIChangeApplier.checkpoint(for: editChange, environment: environment)
-    checkpoint.merge(await AIChangeApplier.checkpoint(for: createChange, environment: environment))
-    _ = await AIChangeApplier.apply(editChange, environment: environment)
-    _ = await AIChangeApplier.apply(createChange, environment: environment)
+    var checkpoint = AIChangeApplier.BatchCheckpoint()
+    var editCheckpoint = await AIChangeApplier.checkpoint(for: editChange, environment: environment)
+    let editResult = await AIChangeApplier.apply(editChange, environment: environment)
+    editCheckpoint.retainAppliedResult(editResult)
+    checkpoint.merge(editCheckpoint)
+    var createCheckpoint = await AIChangeApplier.checkpoint(for: createChange, environment: environment)
+    let createResult = await AIChangeApplier.apply(createChange, environment: environment)
+    createCheckpoint.retainAppliedResult(createResult)
+    checkpoint.merge(createCheckpoint)
     XCTAssertEqual(diskText("exist.md"), "AI 改写")
     XCTAssertNotNil(diskText("笔记/新文件.md"))
 
@@ -160,6 +178,50 @@ final class AIChangeApplierTests: XCTestCase {
         || FileManager.default.fileExists(atPath: trashDir.appendingPathComponent("新文件.md").path)
     )
     XCTAssertEqual(trashedNotifications.count, 1, "入废纸篓联动标签转草稿通知")
+  }
+
+  func testUndoProtectsEditsMadeAfterAIApplication() async {
+    let url = root.appendingPathComponent("later.md")
+    try? "原文".write(to: url, atomically: true, encoding: .utf8)
+    let environment = makeEnvironment()
+    let edit = change(.editFile, "later.md", edits: [
+      AIFileChange.TextEdit(oldText: "原文", newText: "AI 改写"),
+    ])
+    var checkpoint = await AIChangeApplier.checkpoint(for: edit, environment: environment)
+    let result = await AIChangeApplier.apply(edit, environment: environment)
+    checkpoint.retainAppliedResult(result)
+    try? "AI 改写\n用户后续输入".write(to: url, atomically: true, encoding: .utf8)
+
+    let undo = await AIChangeApplier.undo(checkpoint, environment: environment)
+
+    XCTAssertEqual(diskText("later.md"), "AI 改写\n用户后续输入", "撤销不得覆盖应用后的用户编辑")
+    XCTAssertFalse(undo.remainingCheckpoint.isEmpty, "冲突项保留检查点供用户处理后重试")
+    XCTAssertTrue(undo.results.contains(where: \.isFailure))
+  }
+
+  func testUndoDoesNotTrashModifiedCreatedFileOrNonemptyFolder() async {
+    let environment = makeEnvironment()
+    let file = change(.createFile, "new.md", content: "AI 内容")
+    let folder = change(.createFolder, "new-folder")
+    var checkpoint = AIChangeApplier.BatchCheckpoint()
+    var fileCheckpoint = await AIChangeApplier.checkpoint(for: file, environment: environment)
+    let fileResult = await AIChangeApplier.apply(file, environment: environment)
+    fileCheckpoint.retainAppliedResult(fileResult)
+    checkpoint.merge(fileCheckpoint)
+    var folderCheckpoint = await AIChangeApplier.checkpoint(for: folder, environment: environment)
+    let folderResult = await AIChangeApplier.apply(folder, environment: environment)
+    folderCheckpoint.retainAppliedResult(folderResult)
+    checkpoint.merge(folderCheckpoint)
+    try? "用户修改".write(to: root.appendingPathComponent("new.md"), atomically: true, encoding: .utf8)
+    try? "用户文件".write(
+      to: root.appendingPathComponent("new-folder/keep.md"), atomically: true, encoding: .utf8)
+
+    let undo = await AIChangeApplier.undo(checkpoint, environment: environment)
+
+    XCTAssertEqual(diskText("new.md"), "用户修改")
+    XCTAssertEqual(diskText("new-folder/keep.md"), "用户文件")
+    XCTAssertEqual(undo.remainingCheckpoint.createdSnapshots.count, 2)
+    XCTAssertTrue(trashedNotifications.isEmpty, "校验失败前不能先把打开标签转草稿")
   }
 
   // MARK: - 工具

@@ -725,9 +725,8 @@ final class AnnotationToolbarController: NSObject {
           let b = annotation.bounds
           if b.width > 5 {
             contentUnion = contentUnion?.union(b) ?? b
-            // 正文标记只作数据（锚点/范围），显示由覆盖层虚线框承担：就地隐藏
-            if annotation.shouldDisplay {
-              annotation.shouldDisplay = false
+            // 标准 underline 同时是跨阅读器可见的正文指认；旧版曾写 NoView，打开时修复。
+            if PDFAnnotationStore.restorePortableVisibility(of: annotation) {
               migratedPages.insert(page)
             }
           } else if kind == .highlight, b.width < 2, b.height < 2 {
@@ -742,9 +741,8 @@ final class AnnotationToolbarController: NSObject {
         } else if let far = legacyDots.max(by: { $0.bounds.midX * (isLeft ? 1 : -1) < $1.bounds.midX * (isLeft ? 1 : -1) }) {
           anchor = NSPoint(x: far.bounds.midX, y: far.bounds.midY)
         }
-        // 旧数据迁移（内存级，随下次保存落盘）：藏原生图标、清旧点状虚线
-        if marker.shouldDisplay {
-          marker.shouldDisplay = false
+        // 页边卡片覆盖原生图标，但不能把 NoView 写进 PDF；修复旧版隐藏标记。
+        if PDFAnnotationStore.restorePortableVisibility(of: marker) {
           migratedPages.insert(page)
         }
         for dot in legacyDots {
@@ -769,6 +767,8 @@ final class AnnotationToolbarController: NSObject {
       }
       pdfView.setNeedsDisplay(pdfView.bounds)
       migratedPages.removeAll()
+      // 旧版本已经把 NoView 持久化；修复后安排一次正常写回，让第三方阅读器恢复可见。
+      store.markDirty()
     }
     updateCommentCardFrames()
     restackOverlays()
@@ -1027,9 +1027,8 @@ final class AnnotationToolbarController: NSObject {
     marker.color = palette
     marker.userName = groupID
     marker.contents = ""
-    // 原生便签图标不再显示（视觉全部由页边卡片承担）；
-    // shouldDisplay=false 仍参与命中测试，批注列表与导出不受影响
-    marker.shouldDisplay = false
+    // 原生便签保持标准可见性，页边卡片在本 App 内覆盖它；这样导出的 PDF
+    // 在 Preview/Acrobat 中仍有可点击的便签图标。
     store.add(marker, to: page)
     // PDFKit 添加 /Text 会自动补 Popup 伴侣：仅 shouldDisplay=false 仍参与命中测试，
     // PDFView 会给它画带手柄的原生选中框并吃掉那块区域的划词——直接从页面摘除
@@ -1064,7 +1063,6 @@ final class AnnotationToolbarController: NSObject {
         let annotation = PDFAnnotation(bounds: bounds, forType: .underline, withProperties: nil)
         annotation.color = color
         annotation.userName = groupID
-        annotation.shouldDisplay = false
         store.add(annotation, to: page)
         created += 1
       }

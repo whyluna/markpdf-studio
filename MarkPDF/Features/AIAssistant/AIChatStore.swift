@@ -393,6 +393,7 @@ final class AIChatStore: ObservableObject {
   }
 
   func newSession() {
+    let key = activeDocKey
     if let task = runs[activeDocKey] {
       task.cancel()
       runs.removeValue(forKey: activeDocKey)
@@ -402,6 +403,9 @@ final class AIChatStore: ObservableObject {
     compactionTask?.cancel()
     compactionTask = nil
     activeCompactionID = nil
+    // 已调用写工具但尚未走到流收尾的提案属于旧会话；不清会在下一轮 seal 时
+    // 冒充新问题的变更卡。只清当前桶，其他并行文档继续运行。
+    changeStore.discardPending(bucket: key)
     messages = []
     threadFailures[activeDocKey] = nil
     threads[activeDocKey] = Thread()
@@ -537,7 +541,7 @@ final class AIChatStore: ObservableObject {
     guard !Task.isCancelled else { return }
 
     // 上轮变更集的审查结果（应用/拒绝/撤销）回传模型——它需知道真实落盘状态
-    let outcomeNotes = changeStore.consumeOutcomeNotes()
+    let outcomeNotes = changeStore.consumeOutcomeNotes(bucket: key)
     let built = AIContextBuilder.buildUserMessage(
       question: question,
       selection: selectionText,

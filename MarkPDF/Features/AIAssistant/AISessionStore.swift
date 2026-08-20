@@ -39,13 +39,16 @@ enum AISessionStore {
   }
 
   /// 变更提案卡片落盘形态（2026-08-19 持久化）：审查视图（变更段/勾选/状态）随会话
-  /// 保存——重启后卡片与「当时改了什么」回看可用；检查点不落盘（撤销时按审查基准重建）
+  /// 保存——重启后卡片、审查内容与安全撤销检查点均可用。
   struct StoredChangeSet: Codable, Equatable {
     var id: String
     var changeSet: AIChangeSet
     var status: AIChangeStore.Status
     /// AIFileChange.id → 审查数据
     var reviews: [String: AIChangeStore.FileReview]
+    /// 仅记录实际成功应用的项目，并带应用后状态用于撤销前冲突校验。
+    /// 旧会话缺省为 nil，此时不提供不安全的重建式撤销。
+    var checkpoint: AIChangeApplier.BatchCheckpoint?
   }
 
   struct StoredSession: Codable, Equatable {

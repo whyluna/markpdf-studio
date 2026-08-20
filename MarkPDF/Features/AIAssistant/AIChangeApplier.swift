@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import os
 
@@ -7,6 +8,11 @@ import os
 /// 应用时刻对当前文本重新校验：提案后用户手改文件只冲突对应块（跳过并如实报告），
 /// 不整批失败。检查点留内存（AIChangeStore 持有），支撑「撤销」整批回滚。
 enum AIChangeApplier {
+  private enum ExclusiveCreateResult: Equatable {
+    case success
+    case exists
+    case failed
+  }
   /// 应用环境（生产接线在 WindowSession.wireUp；测试注入替身）
   struct Environment {
     /// 文件开着时的编辑状态（跨窗口查找；返回的 store 即应用基准）
@@ -31,6 +37,8 @@ enum AIChangeApplier {
   struct FileResult: Equatable {
     var path: String
     var outcome: Outcome
+    /// 编辑成功后的全文，仅供构造安全撤销检查点；不进入 UI 文案。
+    var resultingText: String? = nil
 
     enum Outcome: Equatable {
       case created
@@ -46,26 +54,67 @@ enum AIChangeApplier {
   }
 
   /// 批级检查点：应用前的现场快照（撤销时整批回滚）
-  struct BatchCheckpoint: Equatable {
+  struct BatchCheckpoint: Equatable, Codable {
     /// 被编辑文件的变更前全文（撤销 = 恢复）
     var editedSnapshots: [EditedSnapshot] = []
-    /// 本批新建的文件/文件夹（撤销 = 入废纸篓）
-    var createdPaths: [URL] = []
+    /// 本批实际成功新建的文件/文件夹（撤销前核验仍保持应用后状态）
+    var createdSnapshots: [CreatedSnapshot] = []
 
-    struct EditedSnapshot: Equatable {
+    struct EditedSnapshot: Equatable, Codable {
       var url: URL
       var beforeText: String
+      /// 应用后的精确全文。当前内容与它不一致时拒绝整文恢复，保护后续用户编辑。
+      var afterText: String?
     }
 
-    var isEmpty: Bool { editedSnapshots.isEmpty && createdPaths.isEmpty }
+    struct CreatedSnapshot: Equatable, Codable {
+      enum Kind: String, Codable {
+        case file
+        case folder
+      }
+
+      var url: URL
+      var kind: Kind
+      /// 新建文件的原始内容；撤销前必须逐字一致。文件夹则为 nil 且必须保持为空。
+      var expectedText: String?
+    }
+
+    var createdPaths: [URL] { createdSnapshots.map(\.url) }
+    var isEmpty: Bool { editedSnapshots.isEmpty && createdSnapshots.isEmpty }
 
     mutating func merge(_ other: BatchCheckpoint) {
       // 同文件多次编辑只留最早快照（恢复到本批开始前的状态）
       for snapshot in other.editedSnapshots where !editedSnapshots.contains(where: { $0.url == snapshot.url }) {
         editedSnapshots.append(snapshot)
       }
-      createdPaths.append(contentsOf: other.createdPaths)
+      for snapshot in other.createdSnapshots
+      where !createdSnapshots.contains(where: { $0.url == snapshot.url }) {
+        createdSnapshots.append(snapshot)
+      }
     }
+
+    /// 预检查点只在对应操作确实成功后进入批检查点；编辑项同时补齐应用后全文。
+    mutating func retainAppliedResult(_ result: FileResult) {
+      guard !result.isFailure else {
+        editedSnapshots = []
+        createdSnapshots = []
+        return
+      }
+      if case .edited = result.outcome {
+        guard let resultingText = result.resultingText else {
+          editedSnapshots = []
+          return
+        }
+        for index in editedSnapshots.indices {
+          editedSnapshots[index].afterText = resultingText
+        }
+      }
+    }
+  }
+
+  struct UndoResult: Equatable {
+    var results: [FileResult]
+    var remainingCheckpoint: BatchCheckpoint
   }
 
   // MARK: - 检查点
@@ -76,19 +125,29 @@ enum AIChangeApplier {
       let resolved = AIToolRegistry.resolveWritePath(change.path, root: root, requireExtension: change.kind == .createFolder ? nil : "md")
     else { return BatchCheckpoint() }
     switch change.kind {
-    case .createFile, .createFolder:
+    case .createFile:
       var point = BatchCheckpoint()
-      point.createdPaths = [resolved.url]
+      point.createdSnapshots = [BatchCheckpoint.CreatedSnapshot(
+        url: resolved.url, kind: .file, expectedText: change.content)]
+      return point
+    case .createFolder:
+      var point = BatchCheckpoint()
+      point.createdSnapshots = [BatchCheckpoint.CreatedSnapshot(
+        url: resolved.url, kind: .folder, expectedText: nil)]
       return point
     case .editFile:
       var point = BatchCheckpoint()
       if let store = environment.findEditorStore(resolved.url) {
-        point.editedSnapshots = [BatchCheckpoint.EditedSnapshot(url: resolved.url, beforeText: store.text)]
+        point.editedSnapshots = [BatchCheckpoint.EditedSnapshot(
+          url: resolved.url, beforeText: store.text, afterText: nil)]
       } else {
         let disk = await Task.detached(priority: .userInitiated) {
           try? String(contentsOf: resolved.url, encoding: .utf8)
         }.value
-        if let disk { point.editedSnapshots = [BatchCheckpoint.EditedSnapshot(url: resolved.url, beforeText: disk)] }
+        if let disk {
+          point.editedSnapshots = [BatchCheckpoint.EditedSnapshot(
+            url: resolved.url, beforeText: disk, afterText: nil)]
+        }
       }
       return point
     }
@@ -115,20 +174,20 @@ enum AIChangeApplier {
   private static func createFile(
     _ change: AIFileChange, at url: URL, relative: String, environment: Environment
   ) async -> FileResult {
-    let fileExists = await Task.detached(priority: .userInitiated) {
-      FileManager.default.fileExists(atPath: url.path)
+    // 父目录链可复用，但目标文件必须以 withoutOverwriting 原子创建：
+    // 「先 fileExists 再 write」有 TOCTOU 窗口，会覆盖审批期间由用户创建的同名文件。
+    let creation = await Task.detached(priority: .userInitiated) {
+      do {
+        try FileManager.default.createDirectory(
+          at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        return createFileExclusively(at: url, data: Data(change.content.utf8))
+      } catch {
+        return ExclusiveCreateResult.failed
+      }
     }.value
-    guard !fileExists else {
-      return FileResult(path: relative, outcome: .failed("文件已存在（应用时被占用）"))
-    }
-    // 父目录链一并创建（提案路径如 笔记/xx.md 允许嵌套）
-    let created: Bool = await Task.detached(priority: .userInitiated) {
-      (try? FileManager.default.createDirectory(
-        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)) != nil
-        && ((try? change.content.write(to: url, atomically: true, encoding: .utf8)) != nil)
-    }.value
-    guard created else {
-      return FileResult(path: relative, outcome: .failed("创建失败（权限或磁盘错误）"))
+    guard creation == .success else {
+      let reason = creation == .exists ? "文件已存在（应用时被占用）" : "创建失败（权限或磁盘错误）"
+      return FileResult(path: relative, outcome: .failed(reason))
     }
     environment.refreshTree()
     environment.openTab(url)
@@ -136,11 +195,54 @@ enum AIChangeApplier {
     return FileResult(path: relative, outcome: .created)
   }
 
+  /// POSIX O_EXCL 保证「目标不存在」检查与创建为同一个原子操作；写失败清理本次
+  /// 刚创建的残片，不会留下一个未进入撤销检查点的半文件。
+  nonisolated private static func createFileExclusively(at url: URL, data: Data) -> ExclusiveCreateResult {
+    url.withUnsafeFileSystemRepresentation { path in
+      guard let path else { return .failed }
+      let descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+      guard descriptor >= 0 else { return errno == EEXIST ? .exists : .failed }
+      var succeeded = true
+      data.withUnsafeBytes { buffer in
+        guard let base = buffer.baseAddress else { return }
+        var offset = 0
+        while offset < buffer.count {
+          let count = Darwin.write(descriptor, base.advanced(by: offset), buffer.count - offset)
+          if count > 0 {
+            offset += count
+          } else if count < 0, errno == EINTR {
+            continue
+          } else {
+            succeeded = false
+            break
+          }
+        }
+      }
+      if close(descriptor) != 0 { succeeded = false }
+      if !succeeded {
+        _ = unlink(path)
+        return .failed
+      }
+      return .success
+    }
+  }
+
   private static func createFolder(
     at url: URL, relative: String, environment: Environment
   ) async -> FileResult {
+    // 中间父目录允许复用，最终目录用 POSIX mkdir 独占创建；FileManager 的
+    // withIntermediateDirectories=true 遇到已存在目标仍返回成功，随后撤销会误删用户目录。
     let created: Bool = await Task.detached(priority: .userInitiated) {
-      (try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)) != nil
+      do {
+        try FileManager.default.createDirectory(
+          at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        return url.withUnsafeFileSystemRepresentation { path in
+          guard let path else { return false }
+          return mkdir(path, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) == 0
+        }
+      } catch {
+        return false
+      }
     }.value
     guard created else {
       return FileResult(path: relative, outcome: .failed("创建失败（权限或磁盘错误）"))
@@ -271,7 +373,10 @@ enum AIChangeApplier {
       if let highlight {
         environment.highlightApplied(url, highlight.ranges, highlight.firstLine)
       }
-      return FileResult(path: relative, outcome: .edited(appliedEdits: appliedEdits, skippedEdits: skippedEdits))
+      return FileResult(
+        path: relative,
+        outcome: .edited(appliedEdits: appliedEdits, skippedEdits: skippedEdits),
+        resultingText: newText)
     }
     let written: Bool = await Task.detached(priority: .userInitiated) {
       (try? newText.write(to: url, atomically: true, encoding: .utf8)) != nil
@@ -281,16 +386,31 @@ enum AIChangeApplier {
     }
     environment.refreshTree()
     Logger.ai.info("AI 变更应用: 编辑 \(url.lastPathComponent, privacy: .public)（\(appliedEdits)/\(appliedEdits + skippedEdits) 块）")
-    return FileResult(path: relative, outcome: .edited(appliedEdits: appliedEdits, skippedEdits: skippedEdits))
+    return FileResult(
+      path: relative,
+      outcome: .edited(appliedEdits: appliedEdits, skippedEdits: skippedEdits),
+      resultingText: newText)
   }
 
   // MARK: - 撤销（整批回滚）
 
-  /// 恢复被编辑文件 → 新建项入废纸篓（深路径先处理：文件先于其父文件夹）
-  static func undo(_ checkpoint: BatchCheckpoint, environment: Environment) async -> [FileResult] {
+  /// 恢复被编辑文件 → 新建项入废纸篓。每一项先核验仍等于 AI 应用后的状态；
+  /// 用户在应用后继续编辑/向新文件夹加入内容时拒绝覆盖或删除，并保留检查点供重试。
+  static func undo(_ checkpoint: BatchCheckpoint, environment: Environment) async -> UndoResult {
     var results: [FileResult] = []
+    var remaining = BatchCheckpoint()
     for snapshot in checkpoint.editedSnapshots {
+      guard let expected = snapshot.afterText else {
+        results.append(FileResult(path: snapshot.url.lastPathComponent, outcome: .failed("缺少安全撤销校验信息")))
+        remaining.editedSnapshots.append(snapshot)
+        continue
+      }
       if let store = environment.findEditorStore(snapshot.url) {
+        guard store.text == expected else {
+          results.append(FileResult(path: snapshot.url.lastPathComponent, outcome: .failed("应用后文件又被编辑，已保护后续内容")))
+          remaining.editedSnapshots.append(snapshot)
+          continue
+        }
         let viaKernel = await withCheckedContinuation { continuation in
           environment.applyViaKernel(store, snapshot.beforeText) { continuation.resume(returning: $0) }
         }
@@ -298,27 +418,75 @@ enum AIChangeApplier {
           environment.persistViaStore(store, snapshot.beforeText)
         }
       } else {
+        let current = await Task.detached(priority: .userInitiated) {
+          try? String(contentsOf: snapshot.url, encoding: .utf8)
+        }.value
+        guard current == expected else {
+          results.append(FileResult(path: snapshot.url.lastPathComponent, outcome: .failed("应用后文件又被编辑，已保护后续内容")))
+          remaining.editedSnapshots.append(snapshot)
+          continue
+        }
         let restored: Bool = await Task.detached(priority: .userInitiated) {
           (try? snapshot.beforeText.write(to: snapshot.url, atomically: true, encoding: .utf8)) != nil
         }.value
         guard restored else {
           results.append(FileResult(path: snapshot.url.lastPathComponent, outcome: .failed("恢复失败")))
+          remaining.editedSnapshots.append(snapshot)
           continue
         }
       }
       environment.refreshTree()
       results.append(FileResult(path: snapshot.url.lastPathComponent, outcome: .edited(appliedEdits: 1, skippedEdits: 0)))
     }
-    // 深度逆序：先删文件后删其父文件夹；先联动标签转草稿再入废纸篓（防自动保存复活）
-    for url in checkpoint.createdPaths.sorted(by: { $0.pathComponents.count > $1.pathComponents.count }) {
-      environment.notifyTrashed(url)
-      let trashed = environment.trashFile(url)
+    // 深度逆序：先删文件后删其父文件夹；只有文件内容未变/目录仍为空才允许入废纸篓。
+    for snapshot in checkpoint.createdSnapshots.sorted(by: {
+      $0.url.pathComponents.count > $1.url.pathComponents.count
+    }) {
+      let unchanged = await createdItemIsUnchanged(snapshot, environment: environment)
+      guard unchanged else {
+        results.append(FileResult(
+          path: snapshot.url.lastPathComponent,
+          outcome: .failed("新建项在应用后已变化，未移入废纸篓")))
+        remaining.createdSnapshots.append(snapshot)
+        continue
+      }
+      environment.notifyTrashed(snapshot.url)
+      let trashed = environment.trashFile(snapshot.url)
       if !trashed {
-        results.append(FileResult(path: url.lastPathComponent, outcome: .failed("撤销新建失败（入废纸篓未成功）")))
+        results.append(FileResult(path: snapshot.url.lastPathComponent, outcome: .failed("撤销新建失败（入废纸篓未成功）")))
+        remaining.createdSnapshots.append(snapshot)
       }
     }
     environment.refreshTree()
     Logger.ai.info("AI 变更撤销: 恢复 \(checkpoint.editedSnapshots.count) 文件 / 废纸篓 \(checkpoint.createdPaths.count) 项")
-    return results
+    return UndoResult(results: results, remainingCheckpoint: remaining)
+  }
+
+  private static func createdItemIsUnchanged(
+    _ snapshot: BatchCheckpoint.CreatedSnapshot,
+    environment: Environment
+  ) async -> Bool {
+    switch snapshot.kind {
+    case .file:
+      guard let expected = snapshot.expectedText else { return false }
+      if let store = environment.findEditorStore(snapshot.url) {
+        return store.text == expected
+      }
+      return await Task.detached(priority: .userInitiated) {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: snapshot.url.path),
+          attributes[.type] as? FileAttributeType == .typeRegular
+        else { return false }
+        return (try? String(contentsOf: snapshot.url, encoding: .utf8)) == expected
+      }.value
+    case .folder:
+      return await Task.detached(priority: .userInitiated) {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: snapshot.url.path),
+          attributes[.type] as? FileAttributeType == .typeDirectory,
+          let contents = try? FileManager.default.contentsOfDirectory(
+            at: snapshot.url, includingPropertiesForKeys: nil)
+        else { return false }
+        return contents.isEmpty
+      }.value
+    }
   }
 }

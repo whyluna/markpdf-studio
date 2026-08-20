@@ -11,6 +11,8 @@ final class InMemoryAIKeyStorage: AIKeyStorage {
 
   func exists(for account: String) -> Bool { map[account] != nil }
 
+  func allAccounts() -> Set<String> { Set(map.keys) }
+
   @discardableResult
   func set(_ value: String?, for account: String) -> Bool {
     guard let value, !value.isEmpty else {

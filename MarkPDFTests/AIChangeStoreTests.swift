@@ -125,6 +125,53 @@ final class AIChangeStoreTests: XCTestCase {
     XCTAssertEqual(store.changeSet(id: sealed.id)?.status, .undone)
   }
 
+  func testFailedCreateIsNotIncludedInUndoCheckpoint() async {
+    let store = AIChangeStore()
+    store.applierEnvironment = makeEnvironment()
+    store.enqueue(AIFileChange(kind: .createFile, path: "collision.md", content: "AI", edits: []))
+    guard let sealed = store.sealPending() else { return XCTFail() }
+    // 审批前由用户创建同名文件。
+    writeFile("collision.md", "用户文件")
+
+    await store.apply(sealed.id)
+    XCTAssertTrue(store.changeSet(id: sealed.id)?.checkpoint?.isEmpty ?? true)
+    await store.undo(sealed.id)
+
+    XCTAssertEqual(
+      try? String(contentsOf: root.appendingPathComponent("collision.md"), encoding: .utf8),
+      "用户文件",
+      "失败的新建不得进入撤销清单并删除用户文件")
+  }
+
+  func testOutcomeNotesAreIsolatedByDocumentThread() {
+    let store = AIChangeStore()
+    store.enqueue(AIFileChange(kind: .createFile, path: "a.md", content: "a", edits: []), bucket: "doc-a")
+    store.enqueue(AIFileChange(kind: .createFile, path: "b.md", content: "b", edits: []), bucket: "doc-b")
+    guard let a = store.sealPending(bucket: "doc-a"),
+      let b = store.sealPending(bucket: "doc-b")
+    else { return XCTFail() }
+    store.reject(a.id)
+    store.reject(b.id)
+
+    let aNotes = store.consumeOutcomeNotes(bucket: "doc-a")
+    XCTAssertEqual(aNotes.count, 1)
+    XCTAssertTrue(aNotes[0].contains("a.md"))
+    XCTAssertFalse(aNotes[0].contains("b.md"))
+    let bNotes = store.consumeOutcomeNotes(bucket: "doc-b")
+    XCTAssertEqual(bNotes.count, 1)
+    XCTAssertTrue(bNotes[0].contains("b.md"))
+  }
+
+  func testLegacyGenericOutcomeDoesNotLeakIntoNamedThread() {
+    let store = AIChangeStore()
+    store.enqueue(AIFileChange(kind: .createFile, path: "legacy.md", content: "", edits: []))
+    guard let legacy = store.sealPending() else { return XCTFail() }
+    store.reject(legacy.id)
+
+    XCTAssertTrue(store.consumeOutcomeNotes(bucket: "doc-a").isEmpty)
+    XCTAssertEqual(store.consumeOutcomeNotes().count, 1, "无归属旧注记只允许通用桶消费")
+  }
+
   func testRejectPendingSetsVoidOnWorkspaceSwitch() {
     let store = AIChangeStore()
     store.applierEnvironment = makeEnvironment()
@@ -265,6 +312,39 @@ final class AIReviewUnitSplitTests: XCTestCase {
     XCTAssertTrue(disk.contains("改17"), "勾选段落盘")
     XCTAssertTrue(disk.contains("\n3\n"), "未勾选段原行保留")
   }
+
+  func testPartialApplyUsesBlockRelativeHunksWhenOldTextStartsMidFile() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("UnitSplit-offset-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let prefix = (1...10).map { "前缀\($0)" }.joined(separator: "\n") + "\n"
+    let block = (11...30).map(String.init).joined(separator: "\n") + "\n"
+    let proposedLines: [String] = (11...30).map { value in
+      if value == 13 || value == 27 { return "改\(value)" }
+      return String(value)
+    }
+    let proposedBlock = proposedLines.joined(separator: "\n") + "\n"
+    try (prefix + block).write(
+      to: root.appendingPathComponent("note.md"), atomically: true, encoding: .utf8)
+    let store = AIChangeStore()
+    store.applierEnvironment = AIChangeApplier.Environment(workspaceRoot: { root })
+    store.enqueue(AIFileChange(kind: .editFile, path: "note.md", content: "", edits: [
+      AIFileChange.TextEdit(oldText: block, newText: proposedBlock),
+    ]))
+    guard let sealed = store.sealPending() else { return XCTFail() }
+    let changeID = try XCTUnwrap(sealed.changes.first?.id)
+    await store.prepareReviewsIfNeeded(sealed.id)
+    let review = try XCTUnwrap(store.changeSet(id: sealed.id)?.reviews[changeID])
+    XCTAssertEqual(review.units.count, 2)
+    store.setAllUnits(sealed.id, changeID: changeID, accepted: false)
+    store.toggleUnit(sealed.id, changeID: changeID, unitID: review.units[1].id)
+
+    await store.apply(sealed.id)
+
+    let disk = try String(contentsOf: root.appendingPathComponent("note.md"), encoding: .utf8)
+    XCTAssertEqual(disk, prefix + block.replacingOccurrences(of: "27", with: "改27"))
+  }
 }
 
 /// 卡片持久化（2026-08-19 用户现场：重启后提案卡片消失）：
@@ -396,6 +476,7 @@ final class AIChangePersistenceTests: XCTestCase {
     let entry = try XCTUnwrap(restored.changeSet(id: sealed.id), "原 id 恢复")
     guard case .applied = entry.status else { return XCTFail("状态应为 applied") }
     XCTAssertFalse(entry.reviews.isEmpty, "审查数据随行")
+    XCTAssertNotNil(entry.checkpoint, "安全撤销检查点随会话持久化")
 
     // 重启后撤销：检查点按审查基准重建 → 磁盘还原
     await restored.undo(sealed.id)

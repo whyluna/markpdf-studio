@@ -305,7 +305,8 @@ final class PDFAnnotationStoreTests: XCTestCase {
 
     XCTAssertFalse(page.annotations.contains { $0.isPopup }, "Popup 伴侣必须从页面摘除")
     XCTAssertTrue(page.annotations.contains { $0 === highlight }, "普通标注不得被连带摘除")
-    XCTAssertTrue(highlight.isReadOnly, "标注须锁掉 PDFKit 原生编辑")
+    let flags = (highlight.value(forAnnotationKey: PDFAnnotationKey(rawValue: "F")) as? NSNumber)?.intValue ?? 0
+    XCTAssertNotEqual(flags & PDFAnnotationStore.annotationReadOnlyFlag, 0, "普通标注须用标准 /F ReadOnly 锁定")
   }
 
   /// isPopup 兼容 PDFKit 上报的两种子类型形态

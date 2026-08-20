@@ -138,10 +138,145 @@ final class WindowCoordinatorTests: XCTestCase {
   }
 
   @MainActor
-  func testRequestDroppedWhenOpenWindowNotWired() {
+  func testRequestForwardsSceneCreationWhenOpenWindowNotWired() {
+    let coordinator = WindowCoordinator()
+    var forwarded: [[URL]] = []
+    coordinator.requestSceneCreation = { forwarded.append($0) }
+    coordinator.requestWindow(.file(outsideFile))
+    XCTAssertEqual(forwarded, [[outsideFile]], "零活窗且动作未接线：转发 open 事件强制建初始场景（冷启动 odoc 同款原语）")
+    XCTAssertEqual(coordinator.takePendingRequest(), .file(outsideFile), "请求保留待新窗领取（转发建出的窗 onAppear 领取）")
+  }
+
+  @MainActor
+  func testRequestDroppedWhenNothingCanCreateWindows() {
     let coordinator = WindowCoordinator()
     coordinator.requestWindow(.file(outsideFile))
-    XCTAssertNil(coordinator.takePendingRequest(), "未接线时不留悬挂任务（否则下个窗口领到过期任务）")
+    XCTAssertNil(coordinator.takePendingRequest(), "既无动作也无法建场景时不留悬挂任务（否则下个窗口领到过期任务）")
+  }
+
+  /// openWindow 动作调了但没建出窗（保留的动作在全部窗口关闭后失效）：
+  /// 滞留探测兜底转发建场景
+  @MainActor
+  func testStalenessProbeForwardsUnclaimedRequest() {
+    let coordinator = WindowCoordinator()
+    coordinator.openNewWindow = {}
+    coordinator.stalenessProbeDelay = 0.05
+    var forwarded: [[URL]] = []
+    coordinator.requestSceneCreation = { forwarded.append($0) }
+    coordinator.requestWindow(.file(outsideFile))
+    XCTAssertTrue(forwarded.isEmpty, "动作已接线先走动作，不立即转发")
+    let expectation = expectation(description: "滞留探测转发")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { expectation.fulfill() }
+    wait(for: [expectation], timeout: 2)
+    XCTAssertEqual(forwarded, [[outsideFile]], "任务滞留无窗领取 → 转发 open 事件兜底")
+    XCTAssertEqual(coordinator.takePendingRequest(), .file(outsideFile), "任务仍保留给兜底建出的窗")
+  }
+
+  /// 多个滞留请求只能各转发一次；旧实现每个请求各排一个 probe，全部重复转发队首。
+  @MainActor
+  func testStalenessProbeForwardsEachQueuedRequestOnce() {
+    let coordinator = WindowCoordinator()
+    coordinator.openNewWindow = {}
+    coordinator.stalenessProbeDelay = 0.05
+    var forwarded: [[URL]] = []
+    coordinator.requestSceneCreation = { forwarded.append($0) }
+    let second = URL(fileURLWithPath: "/tmp/second.md")
+    coordinator.requestWindow(.file(outsideFile))
+    coordinator.requestWindow(.file(second))
+    let expectation = expectation(description: "单批滞留探测")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { expectation.fulfill() }
+    wait(for: [expectation], timeout: 2)
+
+    XCTAssertEqual(forwarded, [[outsideFile], [second]])
+    XCTAssertEqual(coordinator.takePendingRequest(), .file(outsideFile))
+    XCTAssertEqual(coordinator.takePendingRequest(), .file(second))
+  }
+
+  /// 最后一个窗口关闭后 openWindow 动作保留：零活窗时 Finder 双击文件仍能开窗
+  @MainActor
+  func testUnregisterKeepsOpenWindowAction() {
+    let fixture = SessionFixture()
+    let coordinator = WindowCoordinator()
+    var openCount = 0
+    coordinator.openNewWindow = { openCount += 1 }
+    let session = fixture.makeSession(root: "/tmp/wsA")
+    coordinator.register(session)
+    coordinator.unregister(session)
+    coordinator.requestWindow(.file(outsideFile))
+    XCTAssertEqual(openCount, 1, "零活窗时请求仍走保留的 openWindow 动作")
+  }
+
+  // MARK: - 零活窗复活（B1）
+
+  @MainActor
+  func testReviveWindowlessQueuesNilRootRestore() {
+    let coordinator = WindowCoordinator()
+    coordinator.requestSceneCreation = { _ in }
+    coordinator.reviveWindowIfWindowless()
+    XCTAssertEqual(coordinator.takePendingRequest(), .restoreWorkspace(rootPath: nil), "无快照：走「最后工作区」路径恢复")
+    coordinator.reviveWindowIfWindowless()
+    XCTAssertNil(coordinator.takePendingRequest(), "已有复活任务在途不重复入队（防开一排窗）")
+  }
+
+  @MainActor
+  func testReviveUsesRecordedWorkspaceRoots() {
+    let fixture = SessionFixture()
+    let coordinator = WindowCoordinator()
+    coordinator.snapshotStore = fixture.snapshotStore
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("revive-\(UUID().uuidString)").path
+    try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+    coordinator.requestSceneCreation = { _ in }
+    let session = fixture.makeSession(root: root)
+    coordinator.register(session)
+    coordinator.unregister(session)  // 回到零活窗
+    // 本测试验证 WindowCoordinator 消费快照清单，不重复验证系统
+    // ScopedBookmarksAgent；直接放入一条占位书签，确保无 GUI 的 xctest 也确定运行。
+    fixture.snapshotStore.state.lastRootPath = root
+    fixture.snapshotStore.state.bookmarks[root] = Data([0x01])
+    coordinator.reviveWindowIfWindowless()
+    XCTAssertEqual(coordinator.takePendingRequest(), .restoreWorkspace(rootPath: root), "按书签恢复记录过的工作区")
+  }
+
+  @MainActor
+  func testReviveSkipsWhenWindowAlive() {
+    let fixture = SessionFixture()
+    let coordinator = WindowCoordinator()
+    coordinator.register(fixture.makeSession(root: "/tmp/wsA"))
+    coordinator.reviveWindowIfWindowless()
+    XCTAssertNil(coordinator.takePendingRequest(), "有活窗不补")
+  }
+
+  /// 复活任务被新窗领取后，窗口再次全关 → 允许再次复活（didQueueRevival 在 register 复位）
+  @MainActor
+  func testReviveAllowedAgainAfterWindowComesAndGoes() {
+    let fixture = SessionFixture()
+    let coordinator = WindowCoordinator()
+    coordinator.requestSceneCreation = { _ in }
+    coordinator.reviveWindowIfWindowless()
+    XCTAssertEqual(coordinator.takePendingRequest(), .restoreWorkspace(rootPath: nil))
+    let session = fixture.makeSession(root: "/tmp/wsA")
+    coordinator.register(session)
+    coordinator.unregister(session)
+    coordinator.reviveWindowIfWindowless()
+    XCTAssertEqual(coordinator.takePendingRequest(), .restoreWorkspace(rootPath: nil), "复位后可再次入队复活任务")
+  }
+
+  @MainActor
+  func testSceneRevivalURLs() {
+    let folder = URL(fileURLWithPath: "/tmp/wsB")
+    XCTAssertEqual(WindowCoordinator.WindowRequest.file(outsideFile).sceneRevivalURLs, [outsideFile])
+    XCTAssertEqual(WindowCoordinator.WindowRequest.workspace(folder).sceneRevivalURLs, [folder])
+    XCTAssertEqual(
+      WindowCoordinator.WindowRequest.workspaceWithFile(root: folder, file: outsideFile).sceneRevivalURLs,
+      [outsideFile])
+    XCTAssertEqual(
+      WindowCoordinator.WindowRequest.restoreWorkspace(rootPath: "/tmp/wsB").sceneRevivalURLs,
+      [folder])
+    // nil 根的中性驱动 URL：bundle 内 Info.plist（类型不在白名单，onOpenURL 忽略）
+    let neutral = WindowCoordinator.WindowRequest.restoreWorkspace(rootPath: nil).sceneRevivalURLs
+    XCTAssertEqual(neutral?.count, 1)
+    XCTAssertEqual(neutral?.first?.lastPathComponent, "Info.plist")
   }
 
   /// 接受「设为工作区」时新窗口仍在队列中：任务原地升级（不再多开一个窗口）
@@ -215,7 +350,7 @@ final class WindowCoordinatorTests: XCTestCase {
   private final class SessionFixture {
     private let suiteName = "WindowCoordinatorTests"
     private let defaults: UserDefaults
-    private let snapshotStore: WorkspaceSnapshotStore
+    let snapshotStore: WorkspaceSnapshotStore
     private let aiSettings: AISettingsStore
     private let aiKeys = AIKeyStore(storage: InMemoryAIKeyStorage())
     private let aiSessions: AISessionRepository

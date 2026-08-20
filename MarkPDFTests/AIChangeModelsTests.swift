@@ -120,4 +120,20 @@ final class AIChangeModelsTests: XCTestCase {
   func testResolveRootItselfRejected() {
     XCTAssertNil(resolve(".", ext: nil), "根目录自身不可作为目标")
   }
+
+  func testResolveRejectsWorkspaceSymlinkEscapingRoot() throws {
+    let base = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AIWriteFence-\(UUID().uuidString)")
+    let workspace = base.appendingPathComponent("workspace")
+    let outside = base.appendingPathComponent("outside")
+    try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: workspace.appendingPathComponent("linked"), withDestinationURL: outside)
+    defer { try? FileManager.default.removeItem(at: base) }
+
+    XCTAssertNil(
+      AIToolRegistry.resolveWritePath("linked/escape.md", root: workspace, requireExtension: "md"),
+      "工作区内指向外部的符号链接不得绕过写路径围栏")
+  }
 }

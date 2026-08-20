@@ -11,19 +11,22 @@ import os
 final class MarkPDFAppDelegate: NSObject, NSApplicationDelegate {
   /// 由 App 结构体 init 经 wire(_:) 接线（StateObject 持有，App 级单实例）
   static weak var externalOpen: ExternalOpenCoordinator?
+  /// 窗口路由中枢（wire 时一并接线）：零活窗复活（激活/点 Dock）走它的编排
+  static weak var coordinator: WindowCoordinator?
   /// odoc 可能早于 App 结构体 init 到达（彼时 StateObject 尚未创建）：先暂存，
   /// wire 时补投——补投仍早于首窗 onAppear，恢复决策不受影响
   private static var earlyURLs: [URL] = []
 
   /// 接线并补投早到的文件（MarkPDFApp.init 调用，必跑主线程）
-  static func wire(_ coordinator: ExternalOpenCoordinator) {
-    externalOpen = coordinator
+  static func wire(externalOpen: ExternalOpenCoordinator, windowCoordinator: WindowCoordinator) {
+    Self.externalOpen = externalOpen
+    Self.coordinator = windowCoordinator
     guard !earlyURLs.isEmpty else { return }
     let pending = earlyURLs
     earlyURLs = []
     MainActor.assumeIsolated {
       for url in pending {
-        coordinator.handle(url)
+        externalOpen.handle(url)
       }
     }
   }
@@ -35,12 +38,54 @@ final class MarkPDFAppDelegate: NSObject, NSApplicationDelegate {
 
   /// 冷启动场景转发只进行一次（多文件同批到达时，其余文件仍走同步喂入路由）
   private var didForwardInitialScene = false
+  /// 启动时 App 处于隐藏状态（open -g / 启动器后台唤起）：SwiftUI 不会建初始窗，
+  /// 激活后须补窗。正常启动不会经过此路径
+  private var launchedHidden = false
 
   func applicationWillFinishLaunching(_ notification: Notification) {
     NSAppleEventManager.shared().setEventHandler(
       self, andSelector: #selector(handleOpenDocumentsEvent(_:reply:)),
       forEventClass: AEEventClass(kCoreEventClass), andEventID: AEEventID(kAEOpenDocuments)
     )
+  }
+
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    launchedHidden = NSApp.isHidden
+  }
+
+  /// 后台/隐藏启动的补窗：激活时若无任何活窗则恢复工作区现场。
+  /// 延迟探测——SwiftUI 亦可能在激活时补建首窗，立即补会撞成双窗
+  func applicationDidBecomeActive(_ notification: Notification) {
+    guard launchedHidden else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+      MainActor.assumeIsolated {
+        Self.coordinator?.reviveWindowIfWindowless()
+      }
+    }
+  }
+
+  /// 点 Dock 图标（全部窗口已关 / 后台启动从未建窗）：延迟探测补窗。
+  /// 返回 true 保持系统默认（unhide）；SwiftUI 若自建首窗，探测到活窗即不补
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    if !flag {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+        MainActor.assumeIsolated {
+          Self.coordinator?.reviveWindowIfWindowless()
+        }
+      }
+    }
+    return true
+  }
+
+  /// 向 SwiftUI 内部委托转发 open 事件强制建立初始场景（无活窗时的建窗原语，
+  /// 冷启动 odoc 与零活窗复活共用）。带文件 URL 时 onOpenURL 的重复投递
+  /// 由外部打开路由幂等吸收；目录 URL 被白名单忽略，仅用建窗副作用
+  static func forwardSceneCreation(urls: [URL]) {
+    DispatchQueue.main.async {
+      let selector = #selector(NSApplicationDelegate.application(_:open:))
+      guard let delegate = NSApp.delegate, delegate.responds(to: selector) else { return }
+      delegate.application?(NSApp, open: urls)
+    }
   }
 
   /// 打开文档 AppleEvent（'aevt/odoc'）：Finder 双击 / Open With / 拖 Dock，冷热启动同通道。
@@ -75,11 +120,7 @@ final class MarkPDFAppDelegate: NSObject, NSApplicationDelegate {
     // 暖启动路由已在上面同步完成，再转发会让 SwiftUI 多空一个默认窗口（实测）
     guard needsScene, !didForwardInitialScene else { return }
     didForwardInitialScene = true
-    DispatchQueue.main.async {
-      let selector = #selector(NSApplicationDelegate.application(_:open:))
-      guard let delegate = NSApp.delegate, delegate.responds(to: selector) else { return }
-      delegate.application?(NSApp, open: urls)
-    }
+    Self.forwardSceneCreation(urls: urls)
   }
 }
 
@@ -121,7 +162,13 @@ struct MarkPDFApp: App {
     _aiSessionRepository = StateObject(wrappedValue: aiSessions)
     _windowCoordinator = StateObject(wrappedValue: coordinator)
     _externalOpen = StateObject(wrappedValue: externalOpen)
-    MarkPDFAppDelegate.wire(externalOpen)
+    MarkPDFAppDelegate.wire(externalOpen: externalOpen, windowCoordinator: coordinator)
+    // 零活窗复活（B1）：恢复编排读快照存储；openWindow 动作不可用时以
+    // 「向 SwiftUI 转发 open 事件」建初始场景（与冷启动 odoc 同款原语）
+    coordinator.snapshotStore = snapshotStore
+    coordinator.requestSceneCreation = { urls in
+      MarkPDFAppDelegate.forwardSceneCreation(urls: urls)
+    }
     // 开着的工作区窗口清单：开窗/切工作区/关窗即落盘（点 × 不是退出，进程仍活着——
     // 只在退出时采集会让清单停在上一次退出的旧状态，重新激活时把早已关掉的工作区开回来）
     coordinator.onOpenWindowRootsChanged = { roots in

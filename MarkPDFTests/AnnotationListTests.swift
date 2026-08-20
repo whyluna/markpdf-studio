@@ -202,14 +202,35 @@ final class AnnotationListTests: XCTestCase {
     }
   }
 
-  /// 新建标注即只读：PDFKit 不再提供拖动/缩放手柄
-  func testAddedAnnotationIsReadOnly() {
+  /// 新建普通标注写标准 `/F` ReadOnly，而不是仅写 Widget `/Ff`。
+  func testAddedAnnotationHasStandardReadOnlyFlag() {
     let (doc, url) = makeDocument()
     store.attach(document: doc, url: url)
     let page = doc.page(at: 0)!
     let annotation = highlight(y: 50)
     store.add(annotation, to: page)
-    XCTAssertTrue(annotation.isReadOnly)
+    let flags = (annotation.value(forAnnotationKey: PDFAnnotationKey(rawValue: "F")) as? NSNumber)?.intValue ?? 0
+    XCTAssertNotEqual(flags & PDFAnnotationStore.annotationReadOnlyFlag, 0)
+    XCTAssertNil(annotation.value(forAnnotationKey: PDFAnnotationKey(rawValue: "Ff")), "普通 Highlight 不应伪写 Widget flags")
+  }
+
+  func testWidgetLockKeepsFieldReadOnlyAndStandardAnnotationFlag() {
+    let widget = PDFAnnotation(bounds: .zero, forType: .widget, withProperties: nil)
+    PDFAnnotationStore.lockNativeInteraction(of: widget)
+    let flags = (widget.value(forAnnotationKey: PDFAnnotationKey(rawValue: "F")) as? NSNumber)?.intValue ?? 0
+    XCTAssertNotEqual(flags & PDFAnnotationStore.annotationReadOnlyFlag, 0)
+    XCTAssertTrue(widget.isReadOnly)
+  }
+
+  func testPortableVisibilityClearsNoViewFlag() {
+    for subtype in [PDFAnnotationSubtype.text, .underline] {
+      let annotation = PDFAnnotation(bounds: .zero, forType: subtype, withProperties: nil)
+      annotation.shouldDisplay = false
+      XCTAssertTrue(PDFAnnotationStore.restorePortableVisibility(of: annotation))
+      XCTAssertTrue(annotation.shouldDisplay)
+      let flags = (annotation.value(forAnnotationKey: PDFAnnotationKey(rawValue: "F")) as? NSNumber)?.intValue ?? 0
+      XCTAssertEqual(flags & (1 << 5), 0, "NoView 必须清除，第三方阅读器才能显示")
+    }
   }
 
   // MARK: - 排序

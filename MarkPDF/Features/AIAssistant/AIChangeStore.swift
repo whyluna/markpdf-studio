@@ -3,7 +3,7 @@ import os
 
 /// 变更审查状态机（FR-AI.5）：agent 产出的写提案在此排队、封存、审查、应用与撤销。
 /// 生命周期：循环内 enqueue 收提案 → 循环结束 sealPending 封存成变更集（挂聊天卡片）
-/// → 用户应用/拒绝 → 应用后留检查点供撤销。检查点仅存内存（关窗即失效——已知边界）。
+/// → 用户应用/拒绝 → 应用后留安全检查点供撤销，并随会话持久化。
 @MainActor
 final class AIChangeStore: ObservableObject {
   /// 变更集审查状态
@@ -69,10 +69,32 @@ final class AIChangeStore: ObservableObject {
           result.append(edit)
           continue
         }
-        // applying 按 hunk 自身 id 匹配：须把「单元勾选」换算成「hunk id 集合」
-        let acceptedHunkIDs = Set(editUnits.filter(\.isAccepted).map(\.hunk.id))
+        // ReviewUnit.hunk 为 UI 展示已平移到文件绝对行号；LineDiff.applying 的输入却是
+        // 局部 edit.oldText，必须先移回块内相对行号，否则文件中部的大块部分接受会错位/重复。
+        let offset = baseText.flatMap { base -> Int? in
+          guard let range = base.range(of: edit.oldText) else { return nil }
+          return base[..<range.lowerBound].filter { $0 == "\n" }.count
+        } ?? 0
+        let localHunks = editUnits.map { unit in
+          LineDiff.Hunk(
+            oldStart: max(unit.hunk.oldStart - offset, 1),
+            oldCount: unit.hunk.oldCount,
+            newStart: max(unit.hunk.newStart - offset, 1),
+            newCount: unit.hunk.newCount,
+            lines: unit.hunk.lines.map { line in
+              LineDiff.Line(
+                kind: line.kind,
+                text: line.text,
+                oldNumber: line.oldNumber.map { max($0 - offset, 1) },
+                newNumber: line.newNumber.map { max($0 - offset, 1) })
+            })
+        }
+        let acceptedUnitIDs = Set(editUnits.filter(\.isAccepted).map(\.id))
+        let acceptedHunkIDs = Set(zip(editUnits, localHunks).compactMap { pair in
+          acceptedUnitIDs.contains(pair.0.id) ? pair.1.id : nil
+        })
         let newText = LineDiff.applying(
-          editUnits.map(\.hunk), accepted: acceptedHunkIDs, to: edit.oldText)
+          localHunks, accepted: acceptedHunkIDs, to: edit.oldText)
         if newText != edit.oldText {
           result.append(AIFileChange.TextEdit(oldText: edit.oldText, newText: newText))
         }
@@ -92,7 +114,7 @@ final class AIChangeStore: ObservableObject {
   var applierEnvironment: AIChangeApplier.Environment?
 
   /// 供下一轮注入模型的审查结果注记（消费即清）
-  private var outcomeNotes: [String] = []
+  private var outcomeNotes: [String: [String]] = [:]
 
   /// 未封存提案按运行分桶（bucket = 线程键）：多文档并行运行互不串卡，
   /// 各自封存各自的提案
@@ -124,6 +146,7 @@ final class AIChangeStore: ObservableObject {
     pendingProposalCount = pendingBuckets.values.reduce(0) { $0 + $1.count }
     var set = AIChangeSet()
     set.changes = changes
+    set.threadKey = bucket.isEmpty ? nil : bucket
     sealedSets.append(SealedChangeSet(set: set))
     trimSealed()
     return set
@@ -135,9 +158,15 @@ final class AIChangeStore: ObservableObject {
     pendingProposalCount = 0
   }
 
+  /// 仅丢弃一个文档线程的未封存提案（新会话用）；其它并行文档不受影响。
+  func discardPending(bucket: String) {
+    pendingBuckets.removeValue(forKey: bucket)
+    pendingProposalCount = pendingBuckets.values.reduce(0) { $0 + $1.count }
+  }
+
   // MARK: - 持久化（卡片随会话存取；重启后回看与撤销可用）
 
-  /// 导出消息仍引用的变更集（按 id 过滤；检查点不落盘——撤销时按审查基准重建）
+  /// 导出消息仍引用的变更集（按 id 过滤；安全撤销检查点随会话落盘）
   func serializableSets(referencing ids: Set<UUID>) -> [AISessionStore.StoredChangeSet] {
     sealedSets
       .filter { ids.contains($0.id) }
@@ -147,8 +176,8 @@ final class AIChangeStore: ObservableObject {
           changeSet: entry.set,
           status: entry.status,
           reviews: Dictionary(
-            uniqueKeysWithValues: entry.reviews.map { (key, value) in (key.uuidString, value) })
-
+            uniqueKeysWithValues: entry.reviews.map { (key, value) in (key.uuidString, value) }),
+          checkpoint: entry.checkpoint
         )
       }
   }
@@ -162,7 +191,11 @@ final class AIChangeStore: ObservableObject {
       for (key, value) in entry.reviews {
         if let fileID = UUID(uuidString: key) { reviews[fileID] = value }
       }
-      sealedSets.append(SealedChangeSet(set: entry.changeSet, status: entry.status, checkpoint: nil, reviews: reviews))
+      sealedSets.append(SealedChangeSet(
+        set: entry.changeSet,
+        status: entry.status,
+        checkpoint: entry.checkpoint,
+        reviews: reviews))
     }
   }
 
@@ -316,28 +349,30 @@ final class AIChangeStore: ObservableObject {
     var timing = ["t0=\(Date().timeIntervalSince1970 * 1000)"]
     for change in entry.set.changes {
       let cpStart = Date()
-      checkpoint.merge(await AIChangeApplier.checkpoint(for: change, environment: environment))
+      var changeCheckpoint = await AIChangeApplier.checkpoint(for: change, environment: environment)
       timing.append("checkpoint=\(Int(Date().timeIntervalSince(cpStart) * 1000))ms")
+      let result: AIChangeApplier.FileResult
       // editFile 有审查数据 → 按勾选拼出有效编辑列表（部分接受的块自动缩水 new_text）
       if change.kind == .editFile, let review = entry.reviews[change.id] {
         let effective = review.effectiveEdits(change.edits)
         let applyStart = Date()
-        results.append(
-          await AIChangeApplier.applyReviewedEdits(
-            change, effectiveEdits: effective, environment: environment
-          ))
+        result = await AIChangeApplier.applyReviewedEdits(
+          change, effectiveEdits: effective, environment: environment)
         timing.append("apply=\(Int(Date().timeIntervalSince(applyStart) * 1000))ms")
       } else {
         let applyStart = Date()
-        results.append(await AIChangeApplier.apply(change, environment: environment))
+        result = await AIChangeApplier.apply(change, environment: environment)
         timing.append("apply=\(Int(Date().timeIntervalSince(applyStart) * 1000))ms")
       }
+      results.append(result)
+      changeCheckpoint.retainAppliedResult(result)
+      checkpoint.merge(changeCheckpoint)
     }
     UserDefaults.standard.set(timing.joined(separator: " "), forKey: "debug.applyTiming")
     entry.checkpoint = checkpoint
     entry.status = .applied(Self.summaryText(for: results))
     sealedSets[index] = entry
-    outcomeNotes.append(Self.modelNote(for: results))
+    appendOutcomeNote(Self.modelNote(for: results), threadKey: entry.set.threadKey)
   }
 
   /// 拒绝整个变更集（不落任何盘）
@@ -350,58 +385,44 @@ final class AIChangeStore: ObservableObject {
     entry.checkpoint = nil
     sealedSets[index] = entry
     let paths = entry.set.changes.map(\.path).joined(separator: ", ")
-    outcomeNotes.append("The user REJECTED all proposed file changes (\(paths)). Nothing was applied. Ask what to adjust instead of proposing the same thing again.")
+    appendOutcomeNote(
+      "The user REJECTED all proposed file changes (\(paths)). Nothing was applied. Ask what to adjust instead of proposing the same thing again.",
+      threadKey: entry.set.threadKey)
   }
 
-  /// 撤销已应用的变更集（检查点回滚：恢复被编辑文件 + 新建项入废纸篓）。
-  /// 重启恢复的变更集没有内存检查点——按审查基准重建（编辑文件恢复 baseText，
-  /// 新建项按路径入废纸篓）
+  /// 撤销已应用的变更集。检查点只含实际成功项目，并持久化应用后状态；
+  /// 当前文件发生后续变化时拒绝覆盖/删除，未完成项保留检查点供重试。
   func undo(_ changeSetID: UUID) async {
     guard let index = sealedSets.firstIndex(where: { $0.id == changeSetID }),
       case .applied = sealedSets[index].status,
       let environment = applierEnvironment
     else { return }
     var entry = sealedSets[index]
-    let checkpoint = entry.checkpoint ?? Self.rebuildCheckpoint(for: entry, environment: environment)
+    guard let checkpoint = entry.checkpoint else { return }
     guard !checkpoint.isEmpty else { return }
-    let results = await AIChangeApplier.undo(checkpoint, environment: environment)
-    entry.status = .undone
-    entry.checkpoint = nil
-    sealedSets[index] = entry
-    outcomeNotes.append(
-      "The user UNDID the previously approved changes (restored \(checkpoint.editedSnapshots.count) files, trashed \(checkpoint.createdPaths.count) created items). \(Self.failureDetail(results))"
-    )
-  }
-
-  /// 无内存检查点时按审查数据/变更清单重建（重启恢复路径）
-  private static func rebuildCheckpoint(
-    for entry: SealedChangeSet, environment: AIChangeApplier.Environment
-  ) -> AIChangeApplier.BatchCheckpoint {
-    guard let root = environment.workspaceRoot() else { return AIChangeApplier.BatchCheckpoint() }
-    var point = AIChangeApplier.BatchCheckpoint()
-    for change in entry.set.changes {
-      guard let resolved = AIToolRegistry.resolveWritePath(
-        change.path, root: root, requireExtension: change.kind == .createFolder ? nil : "md")
-      else { continue }
-      switch change.kind {
-      case .createFile, .createFolder:
-        point.createdPaths.append(resolved.url)
-      case .editFile:
-        // 恢复到审查时的基准文本（应用时刻若已漂移，恢复以审查基准为准）
-        if let base = entry.reviews[change.id]?.baseText {
-          point.editedSnapshots.append(
-            AIChangeApplier.BatchCheckpoint.EditedSnapshot(url: resolved.url, beforeText: base))
-        }
-      }
+    let undo = await AIChangeApplier.undo(checkpoint, environment: environment)
+    if undo.remainingCheckpoint.isEmpty {
+      entry.status = .undone
+      entry.checkpoint = nil
+    } else {
+      entry.status = .applied(
+        String(localized: "撤销未完成：文件在应用后又有变化，已保留这些内容"))
+      entry.checkpoint = undo.remainingCheckpoint
     }
-    return point
+    sealedSets[index] = entry
+    let note = undo.remainingCheckpoint.isEmpty
+      ? "The user UNDID the previously approved changes."
+      : "UNDO was not completed because files changed after approval. Remaining protected items: \(undo.remainingCheckpoint.editedSnapshots.count + undo.remainingCheckpoint.createdSnapshots.count). \(Self.failureDetail(undo.results))"
+    appendOutcomeNote(note, threadKey: entry.set.threadKey)
   }
 
   /// 取走自上次发送以来的审查注记（AIChatStore 组装上下文时调用）
-  func consumeOutcomeNotes() -> [String] {
-    let notes = outcomeNotes
-    outcomeNotes = []
-    return notes
+  func consumeOutcomeNotes(bucket: String = "") -> [String] {
+    outcomeNotes.removeValue(forKey: bucket) ?? []
+  }
+
+  private func appendOutcomeNote(_ note: String, threadKey: String?) {
+    outcomeNotes[threadKey ?? "", default: []].append(note)
   }
 
   // MARK: - 结果文案

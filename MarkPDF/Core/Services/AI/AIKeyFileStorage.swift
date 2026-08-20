@@ -51,6 +51,10 @@ struct ContainerFileKeyStorage: AIKeyStorage {
     load()[account] != nil
   }
 
+  func allAccounts() -> Set<String> {
+    Set(load().keys)
+  }
+
   @discardableResult
   func set(_ value: String?, for account: String) -> Bool {
     var map = load()
@@ -87,6 +91,10 @@ struct HybridAIKeyStorage: AIKeyStorage {
 
   func exists(for account: String) -> Bool {
     file.exists(for: account) || keychain.exists(for: account)
+  }
+
+  func allAccounts() -> Set<String> {
+    file.allAccounts().union(keychain.allAccounts())
   }
 
   @discardableResult

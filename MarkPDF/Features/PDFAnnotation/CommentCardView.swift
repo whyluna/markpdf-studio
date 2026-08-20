@@ -69,6 +69,8 @@ struct CommentCardView: View {
       .foregroundStyle(Color(color))
       .padding(.horizontal, 4 * scale)
       .padding(.vertical, 3 * scale)
+      // 完整盖住底下仍保持标准可见的 22pt /Text 图标；PDF 数据不再写 NoView。
+      .frame(minWidth: 22 * scale, minHeight: 22 * scale)
       .background(Color(nsColor: .controlBackgroundColor))
       .clipShape(RoundedRectangle(cornerRadius: 4 * scale))
       .overlay(

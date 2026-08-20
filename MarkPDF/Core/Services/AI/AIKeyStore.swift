@@ -7,8 +7,15 @@ protocol AIKeyStorage {
   func string(for account: String) -> String?
   /// 是否已存有该条（不读明文——启动检查用，见 KeychainAIKeyStorage.exists）
   func exists(for account: String) -> Bool
+  /// 可枚举存储中的全部 account。容器文件用于恢复自定义 Provider 的动态 ID；
+  /// 不支持枚举的实现可返回空集，内置 Provider 仍由 exists 逐项探测。
+  func allAccounts() -> Set<String>
   /// value 为 nil 或空串时删除该条；返回是否写入成功（锁屏等场景 Keychain 会拒绝）
   @discardableResult func set(_ value: String?, for account: String) -> Bool
+}
+
+extension AIKeyStorage {
+  func allAccounts() -> Set<String> { [] }
 }
 
 /// Keychain 实现：generic password，service 固定、account = Provider rawValue。
@@ -114,7 +121,8 @@ final class AIKeyStore: ObservableObject {
   init(storage: AIKeyStorage = HybridAIKeyStorage()) {
     self.storage = storage
     // 启动只查存在性（混合存储的存在性检查不读钥匙串明文，不弹授权窗）
-    configuredAccounts = Set(AIProviderKind.allCases.map(\.rawValue).filter { storage.exists(for: $0) })
+    let builtIns = Set(AIProviderKind.allCases.map(\.rawValue).filter { storage.exists(for: $0) })
+    configuredAccounts = builtIns.union(storage.allAccounts())
   }
 
   func apiKey(for account: String) -> String? {

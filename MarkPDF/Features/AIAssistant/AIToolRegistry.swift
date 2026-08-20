@@ -60,7 +60,7 @@ enum AIToolRegistry {
     - Batch all changes for one task. After the tool results, your final reply must be AT MOST ONE short sentence (e.g. "已提交 N 处修改，请审批") — the app shows the review card with full details; do NOT repeat the changes in prose.
     - workspace_edit_file: old_text must match exactly (whitespace, indentation, punctuation) and be unique; keep it as small as possible while still unique.
     - Prefer MANY SMALL edits (one logical change each) over one large rewrite — the app lets the user accept/reject each change individually, so small edits review much better.
-    - IMAGES: only embed image files that ACTUALLY EXIST in the workspace (paths relative to the workspace root). Never invent image paths or guess file names — a non-existent path renders as an ugly "图片加载失败" placeholder in the app. If no real image exists, write a plain-text description instead of image syntax.
+    - IMAGES: only embed image files that ACTUALLY EXIST in the workspace (paths relative to the workspace root). Never invent image paths or guess file names — a non-existent path renders as a broken-image placeholder in the app, never useful content. If no real image exists, write a plain-text description instead of image syntax. NEVER copy any placeholder or error text you may have seen into the file — the file must contain real Markdown syntax only.
     The app renders an extended Markdown dialect — use it:
     - Callouts: "> [!note] Title" on its own line followed by quoted lines; types note/tip/important/warning/danger/quote.
     - Diagrams: fenced code blocks with language "mermaid" (flowchart, sequence, mindmap…).
@@ -134,6 +134,7 @@ enum AIToolRegistry {
     let exists = await Task.detached(priority: .userInitiated) {
       FileManager.default.fileExists(atPath: resolved.url.path)
     }.value
+    guard !Task.isCancelled else { return "Cancelled." }
     guard !exists else {
       return "Error: '\(resolved.relative)' already exists. Use workspace_edit_file to modify it."
     }
@@ -179,6 +180,7 @@ enum AIToolRegistry {
     }
     let replaceAll = arguments["replace_all"] as? Bool ?? false
     let outcome = AIEditApplication.apply(edits.map(\.1), to: base, replaceAll: replaceAll)
+    guard !Task.isCancelled else { return "Cancelled." }
     // 全部命中才入队（部分命中会让审查界面与模型认知分叉；失败明细回传模型自纠）
     guard outcome.failures.isEmpty else {
       let details = outcome.failures.sorted(by: { $0.key < $1.key }).map { index, error in
@@ -205,6 +207,7 @@ enum AIToolRegistry {
     let exists = await Task.detached(priority: .userInitiated) {
       FileManager.default.fileExists(atPath: resolved.url.path)
     }.value
+    guard !Task.isCancelled else { return "Cancelled." }
     guard !exists else {
       return "Error: '\(resolved.relative)' already exists."
     }
@@ -216,9 +219,12 @@ enum AIToolRegistry {
   }
 
   private static func enqueue(_ change: AIFileChange, context: Context) async {
-    guard let enqueueChange = context.enqueueChange else { return }
+    guard !Task.isCancelled, let enqueueChange = context.enqueueChange else { return }
     // execute 在并发执行器上跑：入队必须显式回主线程（AIChangeStore 是 @MainActor）
-    await MainActor.run { enqueueChange(change) }
+    await MainActor.run {
+      guard !Task.isCancelled else { return }
+      enqueueChange(change)
+    }
   }
 
   // MARK: - 写路径解析
@@ -233,6 +239,12 @@ enum AIToolRegistry {
     let candidate = root.appendingPathComponent(trimmed).standardizedFileURL
     let rootPath = root.standardizedFileURL.path
     guard candidate.path.hasPrefix(rootPath + "/") else { return nil }
+    // standardizedFileURL 只消解 . 和 ..，不会解析工作区内符号链接。
+    // 复用图片协议的「最近存在祖先解析」口径，目标文件尚不存在时也能阻止
+    // workspace/link -> /outside 后经 link/new.md 写出工作区。
+    let resolvedRootPath = LocalFileSchemeHandler.resolvedPath(root)
+    let resolvedCandidatePath = LocalFileSchemeHandler.resolvedPath(candidate)
+    guard resolvedCandidatePath.hasPrefix(resolvedRootPath + "/") else { return nil }
     // 排除名单目录（.git/node_modules/.markpdf…）与隐藏段：写进去会从文件树里消失
     let segments = candidate.path.dropFirst(rootPath.count + 1).split(separator: "/")
     guard !segments.contains(where: { $0.hasPrefix(".") }),

@@ -206,19 +206,21 @@ struct AIChangeCardView: View {
         Text(summary)
           .font(.caption2)
           .foregroundStyle(.secondary)
-        Button {
-          guard !isWorking else { return }
-          isWorking = true
-          Task { await store.undo(sealed.id); isWorking = false }
-        } label: {
-          if isWorking {
-            ProgressView().controlSize(.mini)
-          } else {
-            Label("撤销本次变更", systemImage: "arrow.uturn.backward")
+        if sealed.checkpoint?.isEmpty == false {
+          Button {
+            guard !isWorking else { return }
+            isWorking = true
+            Task { await store.undo(sealed.id); isWorking = false }
+          } label: {
+            if isWorking {
+              ProgressView().controlSize(.mini)
+            } else {
+              Label("撤销本次变更", systemImage: "arrow.uturn.backward")
+            }
           }
+          .controlSize(.small)
+          .disabled(isBusy || isWorking)
         }
-        .controlSize(.small)
-        .disabled(isBusy || isWorking)
       }
     case .rejected:
       Text("已拒绝（未写入任何文件）")

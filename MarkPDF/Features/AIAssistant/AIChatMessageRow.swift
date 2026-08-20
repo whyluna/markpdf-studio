@@ -42,6 +42,7 @@ struct AIChatMessageRow: View {
         toolActivityChips
       }
       AIMessageTextView(markdown: message.content)
+        .equatable()
       if let setID = message.changeSetID, let sealed = changeStore.changeSet(id: setID) {
         AIChangeCardView(sealed: sealed, store: changeStore, isBusy: isBusy)
       }

@@ -1467,3 +1467,35 @@ final class AIWritingTokensTests: XCTestCase {
     XCTAssertTrue(chatBody.contains("3000"), "问答送 chatMaxReplyTokens")
   }
 }
+
+/// 新会话必须丢弃旧运行尚未封存的写提案，不能挂到下一次回答。
+@MainActor
+final class AINewSessionProposalIsolationTests: XCTestCase {
+  func testNewSessionDiscardsOnlyActiveThreadPendingProposals() {
+    let suite = "AINewSessionProposalIsolation-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = AISettingsStore(defaults: defaults)
+    let keys = AIKeyStore(storage: InMemoryAIKeyStorage())
+    let repository = AISessionRepository()
+    let store = AIChatStore(
+      settings: settings,
+      service: AIService(transport: AIServiceTests.MockAITransport(), keys: keys),
+      repository: repository)
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("new-session-\(UUID().uuidString)")
+    store.workspaceDidChange(root: root)
+    let activeKey = AIChatStore.workspaceThreadKey(for: root)
+    store.changeStore.enqueue(
+      AIFileChange(kind: .createFile, path: "stale.md", content: "旧任务", edits: []),
+      bucket: activeKey)
+    store.changeStore.enqueue(
+      AIFileChange(kind: .createFile, path: "other.md", content: "并行任务", edits: []),
+      bucket: "other-thread")
+
+    store.newSession()
+
+    XCTAssertNil(store.changeStore.sealPending(bucket: activeKey), "旧会话提案必须清空")
+    XCTAssertNotNil(store.changeStore.sealPending(bucket: "other-thread"), "其它并行文档不受影响")
+  }
+}

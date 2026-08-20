@@ -7,6 +7,9 @@ struct AIChangeSet: Identifiable, Equatable, Codable {
   /// var：id 必须随 Codable 往返（let+默认值会被合成编码排除，重启后卡片引用失配）
   var id: UUID = UUID()
   var changes: [AIFileChange] = []
+  /// 产出该变更集的文档线程键。审批结果按线程回传，避免多文档并行时串台。
+  /// 旧会话没有此字段时为 nil；其后续审批注记仅留在通用桶，不注入任意文档。
+  var threadKey: String?
 
   var isEmpty: Bool { changes.isEmpty }
 }

@@ -4,7 +4,10 @@ import SwiftUI
 /// 段落按行解析块级结构——标题/无序与有序列表/分割线/管道表格/$$ 块级公式
 /// （AttributedString 的 inlineOnly 模式不处理块级结构），行内样式仍走
 /// AttributedString(markdown:)；失败回退纯文本。
-struct AIMessageTextView: View {
+/// Equatable + 调用侧 .equatable()：内容不变的历史消息跳过整段重新解析排版——
+/// 会话里任何状态发布（如变更卡应用/撤销）都会重求整个转录 body，
+/// 不跳过时每条消息的逐行解析累加成「文档已变、按钮迟迟不切」的可感延迟
+struct AIMessageTextView: View, Equatable {
   let markdown: String
 
   var body: some View {

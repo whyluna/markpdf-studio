@@ -5,6 +5,9 @@ import PDFKit
 /// 主线程使用（开发规范 §3.2）；标注变更统一走 `markDirty()` → 500ms 防抖原子写回。
 @MainActor
 final class PDFAnnotationStore: ObservableObject {
+  /// PDF annotation flags `/F` 的 ReadOnly 位（ISO 32000：bit position 7）。
+  /// PDFAnnotation.isReadOnly 实测写的是 Widget 字段 `/Ff`，不能锁普通标注。
+  nonisolated static let annotationReadOnlyFlag = 1 << 6
   /// 当前 PDF 文件（nil = 无打开文档）
   @Published private(set) var currentFileURL: URL?
   /// 当前选中的标注工具（nil = 仅阅读/选择文本）
@@ -140,7 +143,7 @@ final class PDFAnnotationStore: ObservableObject {
           page.removeAnnotation(popup)
         }
         if Self.shouldLockNativeEditing(annotation) {
-          annotation.isReadOnly = true
+          Self.lockNativeInteraction(of: annotation)
         }
       }
     }
@@ -153,6 +156,26 @@ final class PDFAnnotationStore: ObservableObject {
   /// 只读只禁"修改标注"，不影响点击跳转（跳转走 PDFView 的 action 处理）
   nonisolated static func shouldLockNativeEditing(_ annotation: PDFAnnotation) -> Bool {
     annotation.type != nil
+  }
+
+  /// 对所有标注写标准 `/F` ReadOnly；Widget 额外保留 `/Ff` 只读语义。
+  nonisolated static func lockNativeInteraction(of annotation: PDFAnnotation) {
+    let flagsKey = PDFAnnotationKey(rawValue: "F")
+    let current = (annotation.value(forAnnotationKey: flagsKey) as? NSNumber)?.intValue ?? 0
+    annotation.setValue(current | annotationReadOnlyFlag, forAnnotationKey: flagsKey)
+    let subtype = annotation.type.map { $0.hasPrefix("/") ? String($0.dropFirst()) : $0 }
+    if subtype == "Widget" {
+      annotation.isReadOnly = true
+    }
+  }
+
+  /// 页边卡片只是本 App 的附加显示，标准 marker/underline 必须保留可见标志，
+  /// 否则写回后的 PDF 在 Preview/Acrobat 中会完全看不到批注。
+  @discardableResult
+  nonisolated static func restorePortableVisibility(of annotation: PDFAnnotation) -> Bool {
+    guard !annotation.shouldDisplay else { return false }
+    annotation.shouldDisplay = true
+    return true
   }
 
   /// 页面上是否已存在同款标注（类型 + 位置，0.5pt 容差）——恢复 sidecar 去重用。
@@ -233,7 +256,7 @@ final class PDFAnnotationStore: ObservableObject {
   func add(_ annotation: PDFAnnotation, to page: PDFPage) {
     // 只读：PDFKit 不再对它提供原生选中/拖动手柄——交互全走我们自己的通道
     //（点选 → 虚线框 + 编辑条；批注 → 自绘 popover）
-    annotation.isReadOnly = true
+    Self.lockNativeInteraction(of: annotation)
     page.addAnnotation(annotation)
     markDirty()
   }

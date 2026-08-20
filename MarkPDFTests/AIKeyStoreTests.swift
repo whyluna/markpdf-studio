@@ -68,6 +68,16 @@ final class AIKeyStoreTests: XCTestCase {
     XCTAssertTrue(store.configuredAccounts.contains(AIProviderKind.qwen.rawValue))
   }
 
+  @MainActor
+  func testInitRebuildsCustomProviderAccount() {
+    let storage = InMemoryAIKeyStorage()
+    storage.set("sk-custom", for: "custom-abc123")
+    let store = AIKeyStore(storage: storage)
+    XCTAssertTrue(
+      store.configuredAccounts.contains("custom-abc123"),
+      "动态自定义 Provider ID 必须在重启后恢复为已配置")
+  }
+
   /// 钥匙串写入失败（锁屏等）：不得把 account 标成「已配置」，且须上报错误（NFR-5）
   @MainActor
   func testFailedSaveNotMarkedConfigured() {
