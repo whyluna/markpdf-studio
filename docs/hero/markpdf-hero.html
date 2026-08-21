@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1672, initial-scale=1">
+  <title>MarkPDF Studio — GitHub Hero</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #14161b;
+      --muted: #737985;
+      --muted-2: #a5a9b1;
+      --line: #d9dbe0;
+      --panel: #f5f5f7;
+      --blue: #087cff;
+      --blue-soft: #e7f1ff;
+      --purple: #7657ff;
+      --purple-soft: #f0ecff;
+      --shadow: 0 24px 56px rgba(43, 56, 82, .24), 0 3px 9px rgba(28, 35, 48, .12);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 1672px;
+      height: 941px;
+      margin: 0;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", sans-serif;
+      color: var(--ink);
+      background: #e8eef7;
+    }
+
+    body {
+      background:
+        radial-gradient(circle at 88% -10%, rgba(114, 157, 255, .34), transparent 38%),
+        radial-gradient(circle at -8% 100%, rgba(84, 145, 221, .22), transparent 36%),
+        linear-gradient(135deg, #f8fbff 0%, #edf3fb 44%, #e3ebf5 100%);
+    }
+
+    .artboard {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      padding: 34px 58px 38px;
+    }
+
+    .artboard::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      opacity: .30;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(88, 113, 151, .08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(88, 113, 151, .08) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(to bottom, #000, transparent 42%);
+    }
+
+    .brand {
+      position: relative;
+      height: 116px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px 14px;
+    }
+
+    .brand-left {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      min-width: 0;
+    }
+
+    .app-icon {
+      width: 76px;
+      height: 76px;
+      border-radius: 18px;
+      box-shadow: 0 12px 25px rgba(51, 105, 222, .25);
+    }
+
+    .brand h1 {
+      margin: 0 0 5px;
+      font-size: 51px;
+      line-height: 1;
+      letter-spacing: -2.1px;
+      font-weight: 750;
+    }
+
+    .brand h1 span { color: #367df2; font-weight: 560; }
+
+    .brand p {
+      margin: 0;
+      color: #5f6673;
+      font-size: 20px;
+      letter-spacing: .1px;
+    }
+
+    .positioning {
+      text-align: right;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 12px;
+    }
+
+    .positioning strong {
+      font-size: 29px;
+      letter-spacing: -.7px;
+    }
+
+    .pills { display: flex; gap: 8px; }
+
+    .pill {
+      border: 1px solid rgba(73, 103, 150, .19);
+      color: #5f6e83;
+      background: rgba(255,255,255,.68);
+      border-radius: 999px;
+      padding: 7px 12px 6px;
+      font-size: 13px;
+      font-weight: 620;
+      box-shadow: 0 3px 10px rgba(78, 96, 126, .06);
+    }
+
+    .window {
+      position: relative;
+      width: 1556px;
+      height: 751px;
+      overflow: hidden;
+      border: 1px solid rgba(111, 123, 142, .36);
+      border-radius: 16px;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+
+    .titlebar {
+      height: 54px;
+      display: grid;
+      grid-template-columns: 510px 1fr 510px;
+      align-items: center;
+      border-bottom: 1px solid #d8d9dc;
+      background: rgba(250, 250, 251, .96);
+      padding: 0 16px;
+      color: #4c4e53;
+      font-size: 13px;
+    }
+
+    .title-left, .title-center, .title-right {
+      display: flex;
+      align-items: center;
+    }
+
+    .title-left { gap: 14px; }
+    .title-center { justify-content: center; }
+    .title-right { justify-content: flex-end; gap: 7px; }
+
+    .traffic { display: flex; gap: 8px; }
+    .traffic i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+    .traffic i:nth-child(1) { background: #ff5f57; }
+    .traffic i:nth-child(2) { background: #febc2e; }
+    .traffic i:nth-child(3) { background: #28c840; }
+
+    .toolbar-button {
+      width: 31px;
+      height: 28px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      font-size: 16px;
+      color: #666a71;
+    }
+
+    .toolbar-button.active { background: #e9eef6; color: #1c78ef; }
+    .doc-title { font-weight: 650; color: #2c2e33; }
+    .edited { color: var(--blue); background: var(--blue-soft); border-radius: 99px; padding: 3px 8px; font-size: 11px; font-weight: 650; }
+
+    .search {
+      width: 214px;
+      height: 30px;
+      border-radius: 8px;
+      background: #ededf0;
+      color: #858991;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+    }
+
+    .body {
+      height: calc(100% - 54px);
+      display: grid;
+      grid-template-columns: 206px 382px 568px 400px;
+      min-height: 0;
+    }
+
+    .filebar {
+      background: #f4f4f6;
+      border-right: 1px solid #d9dadd;
+      padding: 15px 12px;
+      font-size: 12px;
+      color: #4e5157;
+      overflow: hidden;
+    }
+
+    .section-label {
+      color: #a2a5ab;
+      font-size: 11px;
+      font-weight: 650;
+      margin: 0 0 8px 4px;
+    }
+
+    .tree { display: grid; gap: 2px; margin-bottom: 20px; }
+    .tree-row {
+      height: 25px;
+      border-radius: 6px;
+      padding: 0 7px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tree-row.indent { padding-left: 25px; }
+    .tree-row.active { color: #087cff; background: #dcecff; font-weight: 600; }
+    .tree-row .folder { color: #68707a; }
+    .file-icon {
+      width: 15px;
+      height: 17px;
+      border: 1.5px solid currentColor;
+      border-radius: 2px;
+      display: grid;
+      place-items: center;
+      font-size: 8px;
+      font-weight: 750;
+      flex: none;
+    }
+    .file-icon.pdf { color: #ef4d4d; }
+    .file-icon.md { color: #1684f8; }
+
+    .pane {
+      min-width: 0;
+      min-height: 0;
+      border-right: 1px solid var(--line);
+      background: white;
+      overflow: hidden;
+    }
+
+    .pane-tab {
+      height: 39px;
+      display: flex;
+      align-items: end;
+      background: #ededf0;
+      border-bottom: 1px solid var(--line);
+      padding-left: 7px;
+    }
+
+    .tab {
+      height: 33px;
+      min-width: 142px;
+      padding: 0 11px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #d9dade;
+      border-bottom-color: #fff;
+      border-radius: 7px 7px 0 0;
+      background: #fff;
+      color: #4c4f55;
+      font-size: 12px;
+    }
+
+    .pane-tools {
+      height: 42px;
+      padding: 0 11px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border-bottom: 1px solid #e3e3e5;
+      color: #555a62;
+      font-size: 12px;
+      background: #fbfbfc;
+    }
+
+    .mini-btn {
+      min-width: 27px;
+      height: 26px;
+      padding: 0 7px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      color: #666b73;
+      background: transparent;
+    }
+
+    .mini-btn.active { background: #e7edf6; color: #0a7df5; }
+    .divider { width: 1px; height: 19px; background: #dddfe3; margin: 0 3px; }
+    .spacer { flex: 1; }
+
+    .pdf-pane { background: #e8e9ec; }
+    .pdf-scroll { height: calc(100% - 81px); padding: 16px 18px; overflow: hidden; }
+    .paper {
+      height: 600px;
+      background: #fff;
+      box-shadow: 0 1px 5px rgba(37, 42, 50, .16);
+      padding: 36px 38px;
+      font-family: Georgia, "Times New Roman", serif;
+      color: #1b1c1e;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .paper h3 { margin: 0 0 17px; font-size: 16px; }
+    .paper p { margin: 0 0 15px; text-align: justify; }
+    .paper .hl { background: #ffe47a; padding: 1px 0; }
+    .diagram {
+      height: 100px;
+      margin: 20px 5px 9px;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 13px;
+      color: #30333a;
+    }
+    .diagram .box {
+      border: 1.5px solid #5a616d;
+      border-radius: 3px;
+      padding: 8px 10px;
+      background: #f7f9fb;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 9px;
+    }
+    .diagram .blocks { display: grid; grid-template-columns: repeat(5, 18px); gap: 2px; }
+    .diagram .blocks i { height: 19px; border: 1px solid #6d737b; background: #f5f6f8; }
+    .diagram .blocks i:nth-child(2), .diagram .blocks i:nth-child(4) { background: #cfe4ff; }
+    .diagram .arrow { font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #7b818a; }
+    .caption { text-align: center; color: #595d63; font-size: 10px; margin-bottom: 17px; }
+    .note-box {
+      border: 1.5px solid #8c64ff;
+      background: rgba(142, 100, 255, .07);
+      padding: 10px 11px;
+      color: #6446ad;
+      border-radius: 3px;
+      position: relative;
+    }
+    .note-badge {
+      position: absolute;
+      right: -8px;
+      top: -11px;
+      background: #7657ff;
+      color: white;
+      border-radius: 7px;
+      font: 700 10px -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 3px 6px;
+    }
+
+    .md-pane { background: white; }
+    .md-tools { gap: 3px; }
+    .mode-pill {
+      background: #e7f1ff;
+      color: #087cff;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-weight: 650;
+      font-size: 11px;
+    }
+    .editor {
+      height: calc(100% - 81px);
+      overflow: hidden;
+      padding: 28px 52px 40px;
+      color: #1e2025;
+    }
+    .editor h2 { margin: 0 0 7px; font-size: 25px; letter-spacing: -.6px; }
+    .meta { color: #a0a3a9; font-size: 11px; padding-bottom: 14px; border-bottom: 1px solid #e3e4e6; }
+    .editor h3 { font-size: 18px; margin: 24px 0 12px; }
+    .editor p, .editor li { font-size: 13px; line-height: 1.7; }
+    .editor p { margin: 0 0 11px; }
+    .editor ul { margin: 3px 0 17px; padding-left: 20px; }
+    .inline-code { color: #e33763; background: #fff0f3; border-radius: 4px; padding: 1px 4px; font-family: ui-monospace, Menlo, monospace; }
+    .source-block {
+      border: 1px dashed #0a84ff;
+      border-radius: 6px;
+      background: #fbfdff;
+      padding: 10px 12px;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+      position: relative;
+    }
+    .source-badge {
+      position: absolute;
+      right: 8px;
+      top: -13px;
+      background: #0a84ff;
+      color: white;
+      border-radius: 6px;
+      padding: 3px 7px;
+      font: 700 9px -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    .equation { text-align: center; font: italic 16px Georgia, serif; margin: 18px 0; }
+    .citation-card {
+      border: 1px solid #e0e2e5;
+      background: #fafafa;
+      border-radius: 10px;
+      padding: 11px 13px;
+      font-size: 11px;
+      color: #555a62;
+    }
+    .citation-card b { color: #1f2329; }
+    .citation-card .quote { border-left: 3px solid #ffcc3a; padding-left: 9px; margin-top: 7px; }
+
+    .ai {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+      overflow: hidden;
+    }
+    .ai-head {
+      height: 73px;
+      flex: none;
+      border-bottom: 1px solid #dfdfe2;
+      padding: 12px 15px 9px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+    .ai-title-row { display: flex; align-items: center; gap: 8px; }
+    .spark { color: #60646b; font-size: 22px; }
+    .ai-title { font-size: 17px; font-weight: 720; }
+    .model { color: #b0b2b7; font-size: 12px; }
+    .thread { color: #b0b2b7; font-size: 11px; margin-top: 5px; }
+    .ai-actions { display: flex; align-items: center; gap: 8px; }
+    .write-pill {
+      background: #ededee;
+      color: #5f6268;
+      border-radius: 999px;
+      padding: 6px 11px;
+      font-size: 12px;
+      font-weight: 620;
+    }
+    .write-pill::before { content: "✎"; margin-right: 5px; }
+    .ai-scroll {
+      flex: 1;
+      min-height: 0;
+      padding: 18px 18px 12px;
+      overflow: hidden;
+      font-size: 13px;
+    }
+    .user-bubble {
+      margin: 0 0 8px auto;
+      width: max-content;
+      max-width: 84%;
+      background: #e1edff;
+      border-radius: 13px;
+      padding: 8px 12px;
+      font-size: 14px;
+    }
+    .attached { text-align: right; color: #b0b2b7; font-size: 11px; margin-bottom: 19px; }
+    .activity {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #7e8289;
+      background: #f2f2f3;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
+    .assistant-text { font-size: 14px; margin: 0 0 10px; }
+    .change-card {
+      background: #f4f4f5;
+      border-radius: 11px;
+      padding: 12px 13px;
+      color: #555960;
+    }
+    .card-kicker { font-size: 11px; font-weight: 650; color: #7e8289; margin-bottom: 10px; }
+    .file-change { display: flex; align-items: center; gap: 8px; color: #292c31; font-weight: 650; font-size: 13px; }
+    .pen { color: #087cff; font-size: 16px; }
+    .file-change .count { margin-left: auto; color: #a4a7ac; font-weight: 500; font-size: 11px; }
+    .checks { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 0 10px 27px; }
+    .check {
+      color: #6faaf6;
+      background: #e6eefb;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 10px;
+    }
+    .applied { color: #7e8289; font-size: 11px; margin-bottom: 7px; }
+    .undo {
+      width: max-content;
+      color: #22262b;
+      background: #e2e2e3;
+      border-radius: 7px;
+      padding: 6px 10px;
+      font-weight: 620;
+      font-size: 11px;
+    }
+    .answer {
+      margin: 20px 0 5px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .anchor {
+      color: #087cff;
+      background: #e9f2ff;
+      border-radius: 4px;
+      padding: 1px 4px;
+      white-space: nowrap;
+    }
+    .copy { color: #b9bbc0; font-size: 15px; }
+    .composer {
+      flex: none;
+      border-top: 1px solid #dedfe2;
+      padding: 10px 13px 13px;
+      background: rgba(255,255,255,.98);
+    }
+    .chips { display: flex; gap: 6px; margin-bottom: 9px; }
+    .chip {
+      border-radius: 999px;
+      background: #e8f2ff;
+      color: #087cff;
+      padding: 5px 8px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .chip.off { background: #f0f0f1; color: #898c92; }
+    .input {
+      height: 51px;
+      border-radius: 10px;
+      background: #f3f3f4;
+      color: #a9abb0;
+      padding: 12px 13px;
+      font-size: 12px;
+    }
+    .input small { float: right; margin-top: 20px; color: #8e9298; }
+  </style>
+</head>
+<body>
+  <main class="artboard">
+    <header class="brand">
+      <div class="brand-left">
+        <img class="app-icon" src="../../MarkPDF/Assets.xcassets/AppIcon.appiconset/icon_1024.png" alt="">
+        <div>
+          <h1>MarkPDF <span>Studio</span></h1>
+          <p>Markdown 与 PDF，从阅读到写作都在一个窗口完成</p>
+        </div>
+      </div>
+      <div class="positioning">
+        <strong>Markdown + PDF + AI Agent</strong>
+        <div class="pills">
+          <span class="pill">原生 macOS</span>
+          <span class="pill">轻量</span>
+          <span class="pill">文件即真相</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="window" aria-label="MarkPDF Studio 产品界面复刻">
+      <div class="titlebar">
+        <div class="title-left">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <div class="toolbar-button">▣</div>
+          <span class="doc-title">KV Cache 调研笔记.md</span>
+          <span class="edited">已编辑</span>
+        </div>
+        <div class="title-center"><div class="search">⌕&nbsp; 搜索文件 / 全文（⇧⌘F）</div></div>
+        <div class="title-right">
+          <div class="toolbar-button active">✦</div>
+          <div class="toolbar-button">▥</div>
+          <div class="toolbar-button">⇧</div>
+          <div class="toolbar-button">◐</div>
+          <div class="toolbar-button">▤</div>
+        </div>
+      </div>
+
+      <div class="body">
+        <aside class="filebar">
+          <div class="section-label">工作区 · 论文阅读</div>
+          <div class="tree">
+            <div class="tree-row"><span class="folder">⌄ ▢</span> papers</div>
+            <div class="tree-row indent"><span class="file-icon pdf">P</span>vllm.pdf</div>
+            <div class="tree-row indent"><span class="file-icon pdf">P</span>lmcache.pdf</div>
+            <div class="tree-row indent"><span class="file-icon pdf">P</span>mooncake.pdf</div>
+            <div class="tree-row"><span class="folder">⌄ ▢</span> notes</div>
+            <div class="tree-row indent active"><span class="file-icon md">M</span>KV Cache 调研笔记.md</div>
+            <div class="tree-row indent"><span class="file-icon md">M</span>vLLM 精读.md</div>
+            <div class="tree-row"><span class="folder">› ▢</span> assets</div>
+          </div>
+          <div class="section-label">收藏</div>
+          <div class="tree">
+            <div class="tree-row"><span class="file-icon md">M</span>KV Cache 调研笔记.md</div>
+            <div class="tree-row"><span class="file-icon pdf">P</span>vllm.pdf</div>
+          </div>
+          <div class="section-label">最近打开</div>
+          <div class="tree">
+            <div class="tree-row"><span class="file-icon pdf">P</span>mooncake.pdf</div>
+            <div class="tree-row"><span class="file-icon md">M</span>vLLM 精读.md</div>
+          </div>
+        </aside>
+
+        <section class="pane pdf-pane">
+          <div class="pane-tab"><div class="tab"><span class="file-icon pdf">P</span>vllm.pdf <span class="spacer"></span>×</div></div>
+          <div class="pane-tools">
+            <span class="mini-btn">⌕</span><span>12 / 47</span>
+            <div class="divider"></div>
+            <span class="mini-btn">−</span><span>128%</span><span class="mini-btn">＋</span>
+            <div class="divider"></div>
+            <span class="mini-btn active">◉</span><span class="mini-btn">▣</span>
+            <span class="spacer"></span><span class="mini-btn">⋮</span>
+          </div>
+          <div class="pdf-scroll">
+            <article class="paper">
+              <h3>2.2&nbsp;&nbsp;PagedAttention</h3>
+              <p>PagedAttention is an attention algorithm designed for efficient inference with long sequences. It manages the KV cache in fixed-size blocks and maps logical blocks to physical blocks.</p>
+              <p><span class="hl">The key idea is to treat the KV cache as a collection of blocks. Each block stores a contiguous chunk of tokens. Blocks are fetched on demand and assembled into a logical sequence.</span></p>
+              <div class="diagram">
+                <div class="box">Query</div><span class="arrow">→</span>
+                <div class="blocks"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                <span class="arrow">→</span><div class="box">KV Cache</div>
+              </div>
+              <div class="caption">Figure 2. PagedAttention block-table overview.</div>
+              <div class="note-box"><span class="note-badge">12</span><b>Takeaway:</b><br>Block-based allocation avoids large contiguous memory regions and reduces fragmentation.</div>
+              <h3 style="margin-top:23px">2.3&nbsp;&nbsp;Implementation</h3>
+              <p>The block size is a critical system parameter. A compact table keeps logical ordering independent from physical placement.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="pane md-pane">
+          <div class="pane-tab"><div class="tab"><span class="file-icon md">M</span>KV Cache 调研笔记.md <span class="spacer"></span>×</div></div>
+          <div class="pane-tools md-tools">
+            <span class="mode-pill">所见即所得</span>
+            <div class="divider"></div>
+            <span class="mini-btn">H</span><span class="mini-btn"><b>B</b></span><span class="mini-btn"><i>I</i></span>
+            <span class="mini-btn">⌘</span><span class="mini-btn">≡</span><span class="mini-btn">☑</span>
+            <span class="spacer"></span><span class="mini-btn">▦</span><span class="mini-btn">▣</span>
+          </div>
+          <article class="editor">
+            <h2>KV Cache 调研笔记</h2>
+            <div class="meta">更新于 2026-08-21 · #LLM推理 #KVCache · 关联文献：vllm.pdf</div>
+            <h3>1. 背景与问题</h3>
+            <p>自回归解码时，每步都要读取历史 token 的 <span class="inline-code">K/V</span>。KV Cache 的显存占用随 <b>batch size × 序列长度</b> 线性膨胀，很快成为吞吐瓶颈。</p>
+            <div class="source-block"><span class="source-badge">编辑中 · 当前段显示源码</span>**PagedAttention** 借鉴操作系统的「虚拟内存 + 分页」思想：把 KV Cache 切成固定大小的 block，再用 block table 做逻辑块到物理块的映射。</div>
+            <h3>2. vLLM：PagedAttention</h3>
+            <ul>
+              <li>逻辑块连续、物理块离散，按需分配</li>
+              <li>共享前缀映射同一物理块，引用计数 + Copy-on-Write</li>
+              <li>显存浪费压到 <b>&lt; 4%</b></li>
+            </ul>
+            <div class="equation">Attention(q, K, V) = softmax(q · Kᵀ / √d) · V</div>
+            <div class="citation-card">
+              <b>来源（PDF）</b>&nbsp;&nbsp; vllm.pdf · Page 12
+              <div class="quote">The key idea is to treat the KV cache as a collection of blocks…</div>
+            </div>
+          </article>
+        </section>
+
+        <aside class="ai">
+          <div class="ai-head">
+            <div>
+              <div class="ai-title-row"><span class="spark">✦</span><span class="ai-title">AI 助手</span><span class="model">GLM · GLM-5.3</span></div>
+              <div class="thread">会话：KV Cache 调研笔记.md</div>
+            </div>
+            <div class="ai-actions"><span class="write-pill">写作</span><span>↶</span><span style="font-size:19px">×</span></div>
+          </div>
+          <div class="ai-scroll">
+            <div class="user-bubble">帮我精简这一节，并保留 PDF 引用</div>
+            <div class="attached">已附带：选中文字 · 当前文档</div>
+            <div class="activity">✓&nbsp; 提议修改文件：KV Cache 调研笔记.md</div>
+            <p class="assistant-text">已提交精简修改，共 4 处，等待你审查。</p>
+            <div class="change-card">
+              <div class="card-kicker">AI 变更提案 · 1 个文件</div>
+              <div class="file-change"><span class="pen">⌁</span>KV Cache 调研笔记.md <span class="count">修改 4/4 处&nbsp;›</span></div>
+              <div class="checks"><span class="check">✓ 1 ±4</span><span class="check">✓ 2 ±6</span><span class="check">✓ 3 ±3</span><span class="check">✓ 4 ±5</span></div>
+              <div class="applied">已修改 KV Cache 调研笔记.md（4 块）</div>
+              <div class="undo">↶&nbsp; 撤销本次变更</div>
+            </div>
+            <p class="answer">同时保留了 PagedAttention 的来源锚点，便于从笔记回查原文 <span class="anchor">[p.12]</span>。</p>
+            <span class="copy">▧</span>
+          </div>
+          <div class="composer">
+            <div class="chips"><span class="chip">✓ 选中文字</span><span class="chip">✓ 当前文档</span><span class="chip off">○ 工作区</span></div>
+            <div class="input">向 AI 提问…（回车发送，⌘↵ 换行）<small>⌘↵</small></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

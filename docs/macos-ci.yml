@@ -1,7 +1,8 @@
 # MarkPDF Studio — macOS CI 模板
 #
-# 启用方式：复制为 .github/workflows/macos.yml 后 push。
-# （自动化 token 缺少 workflow scope，workflows 目录需手动添加一次。）
+# 仓库已存在 .github/workflows/macos.yml，但当前在 GitHub 仓库设置中停用。
+# 本文件仅作参考模板；重新启用 CI 时应与正式 workflow 同步，README badge
+# 只能在真实持续运行且结果可信时恢复。
 #
 # 流程：检出 → Node 环境 → 构建 Web 编辑器内核（dist/editor.js）
 #       → XcodeGen 生成工程 → xcodebuild 编译 → 单元测试。
@@ -20,7 +21,7 @@ on:
 
 jobs:
   build-test:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -31,10 +32,11 @@ jobs:
           cache: npm
           cache-dependency-path: MarkPDF/Resources/Web/package-lock.json
 
-      - name: Build Web editor core
+      - name: Build and test Web editor core
         run: |
           cd MarkPDF/Resources/Web
           npm ci
+          npm test
           npm run build
 
       - name: Install XcodeGen
