@@ -7,6 +7,9 @@ struct AIChatMessageRow: View {
   let isBusy: Bool
   /// 写提案审查状态机（FR-AI.5 变更卡片渲染与操作）
   let changeStore: AIChangeStore
+  /// 可选择性开关供离屏测试与特殊渲染场景使用；生产会话保持开启。
+  /// 长正文和代码块由 TextKit 原地切换，不再重建 SwiftUI SelectionOverlay。
+  var allowsTextSelection = true
   @State private var isHovering = false
   @State private var copyFeedback = false
 
@@ -21,12 +24,9 @@ struct AIChatMessageRow: View {
 
   private var userRow: some View {
     VStack(alignment: .trailing, spacing: 3) {
-      Text(message.content)
-        .font(.system(size: 14))
-        .textSelection(.enabled)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+      // 用户问题通常只有一两行，保留选择层不会影响拖宽；始终挂载可避免
+      // mouseUp 后为短气泡重建 SelectionOverlay 的额外主线程尖峰。
+      userMessageText.textSelection(.enabled)
       if let summary = message.contextSummary {
         Text("已附带：\(summary)")
           .font(.caption)
@@ -36,12 +36,20 @@ struct AIChatMessageRow: View {
     .frame(maxWidth: .infinity, alignment: .trailing)
   }
 
+  private var userMessageText: some View {
+    Text(message.content)
+      .font(.system(size: 14))
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+  }
+
   private var assistantRow: some View {
     VStack(alignment: .leading, spacing: 4) {
       if !message.toolActivities.isEmpty {
         toolActivityChips
       }
-      AIMessageTextView(markdown: message.content)
+      AIMessageTextView(markdown: message.content, allowsTextSelection: allowsTextSelection)
         .equatable()
       if let setID = message.changeSetID, let sealed = changeStore.changeSet(id: setID) {
         AIChangeCardView(sealed: sealed, store: changeStore, isBusy: isBusy)
@@ -161,6 +169,73 @@ struct AIChatMessageRow: View {
       return String(localized: "写作模式：目标已存在，未生成新建提案")
     }
     return String(localized: "写作模式：写入工具校验失败，未生成提案")
+  }
+
+  // MARK: - 虚拟列表高度模型
+
+  /// 返回包含 List 行内边距的整行高度。高度代理对全部消息同步调用，不能创建
+  /// SwiftUI cell；复杂正文交给 AIMessageTextView 的 CoreText 分块估算。
+  static func estimatedHeight(
+    for message: AIChatStore.ChatMessage,
+    tableWidth: CGFloat,
+    changeStore: AIChangeStore
+  ) -> CGFloat {
+    let contentWidth = max(tableWidth - 20, 40) // listRowInsets 左右各 10
+    let bodyHeight: CGFloat
+    if message.role == .user {
+      let textWidth = max(contentWidth - 20, 30)
+      let text = textHeight(message.content, font: .systemFont(ofSize: 14), width: textWidth)
+      bodyHeight = text + 12 + (message.contextSummary == nil ? 0 : 17 + 3)
+    } else {
+      var components: [CGFloat] = []
+      if !message.toolActivities.isEmpty {
+        components.append(CGFloat(message.toolActivities.count) * 22 + CGFloat(max(message.toolActivities.count - 1, 0)) * 3)
+      }
+      components.append(AIMessageTextView.estimatedHeight(markdown: message.content, width: contentWidth))
+      if let setID = message.changeSetID, let sealed = changeStore.changeSet(id: setID) {
+        components.append(estimatedChangeCardHeight(sealed, width: contentWidth))
+      }
+      if message.writingNoProposal { components.append(18) }
+      components.append(20) // 流式/复制动作行固定高度
+      bodyHeight = components.reduce(0, +) + CGFloat(max(components.count - 1, 0)) * 4
+    }
+    return max(1, ceil(bodyHeight + 14)) // listRowInsets 上下各 7
+  }
+
+  private static func estimatedChangeCardHeight(
+    _ sealed: AIChangeStore.SealedChangeSet,
+    width: CGFloat
+  ) -> CGFloat {
+    var children: [CGFloat] = [15] // header
+    for change in sealed.set.changes {
+      var rowHeight: CGFloat = 17
+      if case .editFile = change.kind, let review = sealed.reviews[change.id], !review.units.isEmpty {
+        let pillCount = review.units.count + (sealed.status == .pending ? 1 : 0)
+        let gridWidth = max(width - 18 - 19, 42)
+        let columns = max(Int((gridWidth + 4) / 46), 1)
+        let rows = Int(ceil(Double(pillCount) / Double(columns)))
+        rowHeight += 3 + CGFloat(rows) * 19 + CGFloat(max(rows - 1, 0)) * 4
+        if review.skippedEditCount > 0 { rowHeight += 17 }
+      }
+      children.append(rowHeight)
+    }
+    switch sealed.status {
+    case .applying: children.append(20)
+    case .pending: children.append(28)
+    case .applied:
+      children.append(sealed.checkpoint?.isEmpty == false ? 46 : 15)
+    case .rejected, .undone: children.append(15)
+    }
+    return 18 + children.reduce(0, +) + CGFloat(max(children.count - 1, 0)) * 7
+  }
+
+  private static func textHeight(_ text: String, font: NSFont, width: CGFloat) -> CGFloat {
+    let bounds = ((text.isEmpty ? " " : text) as NSString).boundingRect(
+      with: NSSize(width: max(width, 1), height: .greatestFiniteMagnitude),
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      attributes: [.font: font]
+    )
+    return max(ceil(bounds.height), ceil(font.ascender - font.descender + font.leading))
   }
 
   /// 复制回复（唯一保留动作）：圆形底衬按钮，点击后图标短暂变对勾反馈

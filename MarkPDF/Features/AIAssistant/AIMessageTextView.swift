@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// AI 回复的轻量 markdown 渲染（FR-AI.2）：围栏代码块自绘（等宽+底色+复制），
@@ -9,6 +10,7 @@ import SwiftUI
 /// 不跳过时每条消息的逐行解析累加成「文档已变、按钮迟迟不切」的可感延迟
 struct AIMessageTextView: View, Equatable {
   let markdown: String
+  var allowsTextSelection = true
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -17,7 +19,11 @@ struct AIMessageTextView: View, Equatable {
         case .paragraph(let text):
           paragraphView(text)
         case .code(let language, let code):
-          AICodeBlockView(language: language, code: code)
+          AICodeBlockView(
+            language: language,
+            code: code,
+            allowsTextSelection: allowsTextSelection
+          )
         }
       }
     }
@@ -159,35 +165,221 @@ struct AIMessageTextView: View, Equatable {
   }
 
   private func paragraphView(_ text: String) -> some View {
-    let blocks = Self.parseBlocks(text)
+    let blocks = renderBlocks(Self.parseBlocks(text))
     return VStack(alignment: .leading, spacing: 3) {
       ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-        blockView(block)
+        renderBlockView(block)
       }
     }
   }
 
+  /// 渲染层把连续普通行合成一个 Text。此前每一行都是独立 Text/HStack，
+  /// 两三条可见长回复在宽度变化时就要布局数十个 SwiftUI 节点；合并后由
+  /// TextKit 一次完成换行。表格、公式、分割线与需块级公式的行仍独立渲染。
+  private enum RenderBlock {
+    case lines([String])
+    case richLine(String)
+    case table([[String]])
+    case math(String)
+    case rule
+  }
+
+  private func renderBlocks(_ blocks: [Block]) -> [RenderBlock] {
+    var result: [RenderBlock] = []
+    var lines: [String] = []
+    func flushLines() {
+      guard !lines.isEmpty else { return }
+      result.append(.lines(lines))
+      lines.removeAll(keepingCapacity: true)
+    }
+
+    for block in blocks {
+      switch block {
+      case .line(let line):
+        switch Self.classifyLine(line) {
+        case .rule:
+          flushLines()
+          result.append(.rule)
+        default:
+          if Self.containsInlineMath(line) {
+            flushLines()
+            result.append(.richLine(line))
+          } else {
+            lines.append(line)
+          }
+        }
+      case .table(let rows):
+        flushLines()
+        result.append(.table(rows))
+      case .math(let source):
+        flushLines()
+        result.append(.math(source))
+      }
+    }
+    flushLines()
+    return result
+  }
+
   @ViewBuilder
-  private func blockView(_ block: Block) -> some View {
+  private func renderBlockView(_ block: RenderBlock) -> some View {
     switch block {
-    case .line(let line):
+    case .lines(let lines):
+      combinedLinesView(lines)
+    case .richLine(let line):
       lineView(line)
     case .table(let rows):
       tableView(rows)
     case .math(let source):
       mathView(source)
+    case .rule:
+      Rectangle()
+        .fill(Color.primary.opacity(0.3))
+        .frame(height: 1)
+        .padding(.vertical, 3)
     }
+  }
+
+  private func combinedLinesView(_ lines: [String]) -> some View {
+    AIAttributedTextView(
+      text: nativeCombinedLines(lines),
+      isSelectable: allowsTextSelection
+    )
+      .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// SwiftUI Text 的 SelectionOverlay 在长回复恢复时会阻塞主线程。普通 Markdown
+  /// 行已经合并为单一富文本，直接交给 TextKit 可保留连续选择并原地切换
+  /// `isSelectable`，无需创建/销毁选择覆盖层。
+  private func nativeCombinedLines(_ lines: [String]) -> NSAttributedString {
+    let value = NSMutableAttributedString(combinedLines(lines))
+    let fullRange = NSRange(location: 0, length: value.length)
+    guard fullRange.length > 0 else { return value }
+    fillMissingAttribute(
+      .font,
+      value: NSFont.systemFont(ofSize: 14),
+      in: value,
+      range: fullRange
+    )
+    fillMissingAttribute(
+      .foregroundColor,
+      value: NSColor.labelColor,
+      in: value,
+      range: fullRange
+    )
+
+    let inlineIntentKey = NSAttributedString.Key("NSInlinePresentationIntent")
+    value.enumerateAttribute(inlineIntentKey, in: fullRange) { intent, range, _ in
+      guard let rawValue = (intent as? NSNumber)?.intValue else { return }
+      var font = (value.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+        ?? NSFont.systemFont(ofSize: 14)
+      if rawValue & 4 != 0 {
+        font = NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
+        value.addAttribute(.backgroundColor, value: NSColor.quaternaryLabelColor, range: range)
+      } else {
+        var traits: NSFontTraitMask = []
+        if rawValue & 1 != 0 { traits.insert(.italicFontMask) }
+        if rawValue & 2 != 0 { traits.insert(.boldFontMask) }
+        if !traits.isEmpty { font = NSFontManager.shared.convert(font, toHaveTrait: traits) }
+      }
+      value.addAttribute(.font, value: font, range: range)
+      if rawValue & 8 != 0 {
+        value.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+      }
+    }
+    return value
+  }
+
+  private func fillMissingAttribute(
+    _ key: NSAttributedString.Key,
+    value: Any,
+    in string: NSMutableAttributedString,
+    range: NSRange
+  ) {
+    var missing: [NSRange] = []
+    string.enumerateAttribute(key, in: range) { attribute, subrange, _ in
+      if attribute == nil { missing.append(subrange) }
+    }
+    for subrange in missing { string.addAttribute(key, value: value, range: subrange) }
+  }
+
+  @ViewBuilder
+  private func selectable<Content: View>(_ content: Content) -> some View {
+    if allowsTextSelection {
+      content.textSelection(.enabled)
+    } else {
+      content
+    }
+  }
+
+  /// 连续 Markdown 行的单一富文本。段落样式保留列表的悬挂缩进、引用层级，
+  /// 行内 markdown 属性继续来自 `inlineRendered`。
+  private func combinedLines(_ lines: [String]) -> AttributedString {
+    var result = AttributedString()
+    for (index, line) in lines.enumerated() {
+      if index > 0 { result.append(AttributedString("\n")) }
+      let paragraph = NSMutableParagraphStyle()
+      paragraph.lineSpacing = 3
+      var rendered: AttributedString
+      switch Self.classifyLine(line) {
+      case .header(let level, let text):
+        rendered = inlineRendered(text)
+        rendered = applyingAppKitAttributes(
+          [.font: NSFont.systemFont(ofSize: level <= 2 ? 15 : 14, weight: .semibold)],
+          to: rendered
+        )
+      case .bullet(let indent, let marker, let text):
+        // SwiftUI Text 在部分 macOS 版本不会绘制 NSParagraphStyle 的
+        // firstLineHeadIndent；显式 em 空格保证嵌套层级视觉上仍成立。
+        var prefix = AttributedString(String(repeating: "\u{2003}", count: indent) + "\(marker) ")
+        prefix.foregroundColor = NSColor.secondaryLabelColor
+        rendered = prefix
+        rendered.append(inlineRendered(text))
+        let baseIndent = CGFloat(indent) * 12
+        paragraph.firstLineHeadIndent = baseIndent
+        paragraph.headIndent = baseIndent + max(14, ceil((marker as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 14)]).width + 5))
+      case .quote(let depth, let text):
+        let baseIndent = CGFloat(depth - 1) * 12
+        var prefix = AttributedString(String(repeating: "\u{2003}", count: depth - 1) + "▎ ")
+        prefix.foregroundColor = NSColor.tertiaryLabelColor
+        rendered = prefix
+        var quote = inlineRendered(text)
+        quote.foregroundColor = NSColor.secondaryLabelColor
+        rendered.append(quote)
+        paragraph.firstLineHeadIndent = baseIndent
+        paragraph.headIndent = baseIndent + 12
+      case .plain(let text):
+        rendered = inlineRendered(text)
+      case .rule:
+        continue
+      }
+      rendered = applyingAppKitAttributes([.paragraphStyle: paragraph], to: rendered)
+      result.append(rendered)
+    }
+    return result
+  }
+
+  /// 通过 NSAttributedString 桥接 AppKit 段落属性，避免把不可 Sendable 的
+  /// NSFont/NSParagraphStyle 直接写进 Swift AttributedString 属性作用域。
+  private func applyingAppKitAttributes(
+    _ attributes: [NSAttributedString.Key: Any],
+    to value: AttributedString
+  ) -> AttributedString {
+    let mutable = NSMutableAttributedString(value)
+    guard mutable.length > 0 else { return value }
+    mutable.addAttributes(attributes, range: NSRange(location: 0, length: mutable.length))
+    return AttributedString(mutable)
   }
 
   /// 管道表格：表头加粗 + 分隔线 + 数据行（列数不齐补空）
   private func tableView(_ rows: [[String]]) -> some View {
     let columnCount = rows.map(\.count).max() ?? 0
-    return Grid(horizontalSpacing: 14, verticalSpacing: 4) {
+    return VStack(alignment: .leading, spacing: 4) {
       if let header = rows.first {
-        GridRow {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
           ForEach(0..<columnCount, id: \.self) { column in
             Text(inlineRendered(header.indices.contains(column) ? header[column] : ""))
               .font(.system(size: 14, weight: .semibold))
+              .fixedSize(horizontal: false, vertical: true)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
@@ -197,10 +389,11 @@ struct AIMessageTextView: View, Equatable {
           .frame(height: 1)
       }
       ForEach(Array(rows.indices.dropFirst()), id: \.self) { rowIndex in
-        GridRow {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
           ForEach(0..<columnCount, id: \.self) { column in
             Text(inlineRendered(rows[rowIndex].indices.contains(column) ? rows[rowIndex][column] : ""))
               .font(.system(size: 14))
+              .fixedSize(horizontal: false, vertical: true)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
@@ -229,9 +422,10 @@ struct AIMessageTextView: View, Equatable {
   private func lineView(_ line: String) -> some View {
     switch Self.classifyLine(line) {
     case .header(let level, let text):
-      Text(inlineRendered(text))
-        .font(.system(size: level <= 2 ? 15 : 14, weight: .semibold))
-        .textSelection(.enabled)
+      selectable(
+        Text(inlineRendered(text))
+          .font(.system(size: level <= 2 ? 15 : 14, weight: .semibold))
+      )
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
     case .bullet(let indent, let marker, let text):
@@ -241,9 +435,10 @@ struct AIMessageTextView: View, Equatable {
         if Self.containsInlineMath(text) {
           mathAwareLineContent(text)
         } else {
-          Text(inlineRendered(text))
-            .font(.system(size: 14))
-            .textSelection(.enabled)
+          selectable(
+            Text(inlineRendered(text))
+              .font(.system(size: 14))
+          )
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -259,10 +454,11 @@ struct AIMessageTextView: View, Equatable {
           mathAwareLineContent(text)
             .foregroundStyle(.secondary)
         } else {
-          Text(inlineRendered(text))
-            .font(.system(size: 14))
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
+          selectable(
+            Text(inlineRendered(text))
+              .font(.system(size: 14))
+              .foregroundStyle(.secondary)
+          )
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -278,9 +474,10 @@ struct AIMessageTextView: View, Equatable {
       if Self.containsInlineMath(text) {
         mathAwareLineContent(text)
       } else {
-        Text(inlineRendered(text))
-          .font(.system(size: 14))
-          .textSelection(.enabled)
+        selectable(
+          Text(inlineRendered(text))
+            .font(.system(size: 14))
+        )
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
@@ -296,16 +493,16 @@ struct AIMessageTextView: View, Equatable {
   private func mathAwareLineContent(_ text: String) -> some View {
     let segments = SwiftMathRenderer.splitInlineMath(text)
     if !needsBlockLayout(segments) {
-      SwiftMathInlineText.makeText(text) { inlineRendered($0) }
-        .textSelection(.enabled)
+      selectable(SwiftMathInlineText.makeText(text) { inlineRendered($0) })
     } else {
       VStack(alignment: .leading, spacing: 2) {
         ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
           switch segment {
           case .text(let string):
-            Text(inlineRendered(string))
-              .font(.system(size: 14))
-              .textSelection(.enabled)
+            selectable(
+              Text(inlineRendered(string))
+                .font(.system(size: 14))
+            )
           case .math(let latex):
             SwiftMathBlockView(source: latex, fontSize: 14)
           }
@@ -330,12 +527,168 @@ struct AIMessageTextView: View, Equatable {
       options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
     )) ?? AttributedString(text)
   }
+
+  // MARK: - 虚拟列表高度模型
+
+  /// NSTableView 的离屏行不能继续使用 SwiftUI List 的默认估算值；它会在行物化时
+  /// 改写总高度，造成滚动条长度/位置跳变。这里用与渲染器相同的分块规则，借助
+  /// CoreText 同步估算完整消息高度。视口 cell 仍使用上面的真实 SwiftUI 视图。
+  static func estimatedHeight(markdown: String, width: CGFloat) -> CGFloat {
+    let available = max(width, 40)
+    let segments = MarkdownBlockSegmenter.segments(markdown)
+    var heights: [CGFloat] = []
+    for segment in segments {
+      switch segment {
+      case .paragraph(let text):
+        heights.append(estimatedParagraphHeight(text, width: available))
+      case .code(_, let code):
+        let codeHeight = boundingHeight(
+          code.isEmpty ? " " : code,
+          font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+          width: max(available - 16, 20),
+          lineSpacing: 0
+        )
+        heights.append(25 + 1 + 16 + codeHeight)
+      }
+    }
+    return max(1, heights.reduce(0, +) + CGFloat(max(heights.count - 1, 0)) * 8)
+  }
+
+  private static func estimatedParagraphHeight(_ text: String, width: CGFloat) -> CGFloat {
+    let blocks = parseBlocks(text)
+    var heights: [CGFloat] = []
+    for block in blocks {
+      switch block {
+      case .line(let line):
+        heights.append(estimatedLineHeight(line, width: width))
+      case .table(let rows):
+        heights.append(estimatedTableHeight(rows, width: width))
+      case .math(let source):
+        let measured = SwiftMathRenderer.measure(latex: source, fontSize: 15, displayMode: true)
+        heights.append(max(measured.height, 17) + 4)
+      }
+    }
+    return max(1, heights.reduce(0, +) + CGFloat(max(heights.count - 1, 0)) * 3)
+  }
+
+  private static func estimatedLineHeight(_ line: String, width: CGFloat) -> CGFloat {
+    switch classifyLine(line) {
+    case .header(let level, let text):
+      return boundingHeight(
+        text.isEmpty ? " " : text,
+        font: .systemFont(ofSize: level <= 2 ? 15 : 14, weight: .semibold),
+        width: width,
+        lineSpacing: 3
+      )
+    case .bullet(let indent, let marker, let text):
+      let markerWidth = (marker as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 14)]).width
+      return estimatedMathAwareHeight(
+        text,
+        width: max(width - CGFloat(indent) * 12 - markerWidth - 5, 20)
+      )
+    case .quote(let depth, let text):
+      return estimatedMathAwareHeight(text, width: max(width - CGFloat(depth - 1) * 12 - 11, 20))
+    case .rule:
+      return 7
+    case .plain(let text):
+      if text.isEmpty { return 17 }
+      return estimatedMathAwareHeight(text, width: width)
+    }
+  }
+
+  private static func estimatedMathAwareHeight(_ text: String, width: CGFloat) -> CGFloat {
+    guard containsInlineMath(text) else {
+      return boundingHeight(text.isEmpty ? " " : text, font: .systemFont(ofSize: 14), width: width, lineSpacing: 3)
+    }
+    let segments = SwiftMathRenderer.splitInlineMath(text)
+    let hasBlock = segments.contains { segment in
+      guard case .math(let latex) = segment else { return false }
+      let size = SwiftMathRenderer.measure(latex: latex, fontSize: 14, displayMode: false)
+      return size.width > inlineMathMaxWidth || size.height > 28
+    }
+    if hasBlock {
+      var heights: [CGFloat] = []
+      for segment in segments {
+        switch segment {
+        case .text(let string):
+          heights.append(boundingHeight(string.isEmpty ? " " : string, font: .systemFont(ofSize: 14), width: width, lineSpacing: 0))
+        case .math(let latex):
+          heights.append(max(SwiftMathRenderer.measure(latex: latex, fontSize: 14, displayMode: true).height + 4, 17))
+        }
+      }
+      return heights.reduce(0, +) + CGFloat(max(heights.count - 1, 0)) * 2
+    }
+    let displayText = text.replacingOccurrences(of: "$", with: "")
+    let textHeight = boundingHeight(displayText, font: .systemFont(ofSize: 14), width: width, lineSpacing: 3)
+    let tallestMath = segments.compactMap { segment -> CGFloat? in
+      guard case .math(let latex) = segment else { return nil }
+      return SwiftMathRenderer.measure(latex: latex, fontSize: 14, displayMode: false).height
+    }.max() ?? 0
+    return max(textHeight, tallestMath)
+  }
+
+  private static func estimatedTableHeight(_ rows: [[String]], width: CGFloat) -> CGFloat {
+    let columnCount = max(rows.map(\.count).max() ?? 0, 1)
+    let columnWidth = max((width - CGFloat(columnCount - 1) * 14) / CGFloat(columnCount), 20)
+    var height: CGFloat = 4
+    for (rowIndex, row) in rows.enumerated() {
+      let font = NSFont.systemFont(ofSize: 14, weight: rowIndex == 0 ? .semibold : .regular)
+      let rowHeight = (0..<columnCount).map { column in
+        boundingHeight(row.indices.contains(column) ? row[column] : " ", font: font, width: columnWidth, lineSpacing: 0)
+      }.max() ?? 17
+      height += rowHeight
+      if rowIndex == 0 { height += 1 }
+      if rowIndex < rows.count - 1 { height += 4 }
+    }
+    return height
+  }
+
+  private static func boundingHeight(
+    _ text: String,
+    font: NSFont,
+    width: CGFloat,
+    lineSpacing: CGFloat
+  ) -> CGFloat {
+    let lineHeight = max(ceil(font.ascender - font.descender + font.leading), 1)
+    // 这里只建立滚动容器的高度表，不负责像素级文字绘制。TextKit 的
+    // boundingRect 每次都会创建排版器，29 条历史消息在每个拖宽帧重跑会耗费
+    // 40–50ms。按字形类别累计近似 advance；Markdown 标记本身仍计入宽度，
+    // 已提供少量保守余量，同时整个过程只做线性数值运算。
+    let effectiveWidth = max(width, 1)
+    let visualLines = text.split(separator: "\n", omittingEmptySubsequences: false).reduce(0) { total, line in
+      let advance = line.unicodeScalars.reduce(CGFloat.zero) { partial, scalar in
+        partial + estimatedAdvance(of: scalar, fontSize: font.pointSize)
+      }
+      return total + max(Int(ceil(advance / effectiveWidth)), 1)
+    }
+    return CGFloat(visualLines) * lineHeight + CGFloat(max(visualLines - 1, 0)) * lineSpacing
+  }
+
+  private static func estimatedAdvance(of scalar: Unicode.Scalar, fontSize: CGFloat) -> CGFloat {
+    let value = scalar.value
+    if value == 0x09 { return fontSize * 2 }
+    if value == 0x20 { return fontSize * 0.32 }
+    guard value < 0x80 else { return fontSize }
+    switch Character(String(scalar)) {
+    case "i", "l", "I", ".", ",", "'", "`", ":", ";", "!", "|":
+      return fontSize * 0.28
+    case "m", "w", "M", "W", "@", "#", "%", "&":
+      return fontSize * 0.82
+    case "0"..."9":
+      return fontSize * 0.56
+    case "A"..."Z":
+      return fontSize * 0.62
+    default:
+      return fontSize * 0.52
+    }
+  }
 }
 
 /// 代码块：等宽字体 + 圆角底色 + 语言标 + 复制按钮
 struct AICodeBlockView: View {
   let language: String?
   let code: String
+  var allowsTextSelection = true
   @State private var didCopy = false
 
   var body: some View {
@@ -361,14 +714,90 @@ struct AICodeBlockView: View {
       .padding(.horizontal, 8)
       .padding(.vertical, 4)
       Divider()
-      Text(code)
-        .font(.system(size: 13, design: .monospaced))
-        .textSelection(.enabled)
-        .fixedSize(horizontal: false, vertical: true)
+      AIAttributedTextView(text: codeAttributedText, isSelectable: allowsTextSelection)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
     }
     .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+  }
+
+  private var codeAttributedText: NSAttributedString {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.lineBreakMode = .byWordWrapping
+    return NSAttributedString(
+      string: code,
+      attributes: [
+        .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+        .foregroundColor: NSColor.labelColor,
+        .paragraphStyle: paragraph,
+      ]
+    )
+  }
+}
+
+/// 普通回复与代码块使用原生 TextKit 视图：选择能力通过 `isSelectable` 原地
+/// 切换，不创建 SwiftUI SelectionOverlay；整块文字仍可连续跨行选择。
+private struct AIAttributedTextView: NSViewRepresentable {
+  let text: NSAttributedString
+  let isSelectable: Bool
+
+  func makeNSView(context: Context) -> AIIntrinsicTextView {
+    let textView = AIIntrinsicTextView()
+    textView.configure(text: text, isSelectable: isSelectable)
+    return textView
+  }
+
+  func updateNSView(_ textView: AIIntrinsicTextView, context: Context) {
+    textView.configure(text: text, isSelectable: isSelectable)
+  }
+
+  func sizeThatFits(
+    _ proposal: ProposedViewSize,
+    nsView: AIIntrinsicTextView,
+    context: Context
+  ) -> CGSize? {
+    guard let width = proposal.width, width > 0 else { return nil }
+    return CGSize(width: width, height: nsView.height(for: width))
+  }
+}
+
+private final class AIIntrinsicTextView: NSTextView {
+  private var configuredText: NSAttributedString?
+
+  init() {
+    let storage = NSTextStorage()
+    let layoutManager = NSLayoutManager()
+    let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+    storage.addLayoutManager(layoutManager)
+    layoutManager.addTextContainer(container)
+    super.init(frame: .zero, textContainer: container)
+    drawsBackground = false
+    isEditable = false
+    isRichText = false
+    importsGraphics = false
+    isHorizontallyResizable = false
+    isVerticallyResizable = false
+    textContainerInset = .zero
+    container.lineFragmentPadding = 0
+    container.widthTracksTextView = false
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { nil }
+
+  func configure(text: NSAttributedString, isSelectable: Bool) {
+    self.isSelectable = isSelectable
+    guard configuredText?.isEqual(to: text) != true else { return }
+    configuredText = text.copy() as? NSAttributedString
+    textStorage?.setAttributedString(text)
+    invalidateIntrinsicContentSize()
+  }
+
+  func height(for width: CGFloat) -> CGFloat {
+    guard let textContainer, let layoutManager else { return 17 }
+    textContainer.containerSize = NSSize(width: max(width, 1), height: CGFloat.greatestFiniteMagnitude)
+    layoutManager.ensureLayout(for: textContainer)
+    return max(ceil(layoutManager.usedRect(for: textContainer).height), 17)
   }
 }
 

@@ -1,6 +1,7 @@
 import AppKit
 import os
 import PDFKit
+import QuartzCore
 import SwiftUI
 
 /// 应用根视图：三栏布局（文件树 / 标签内容区 / 上下文面板）+ 底部状态栏。
@@ -210,7 +211,10 @@ struct ContentView: View {
           // 拖拽区覆盖面板右缘 ±6pt（落在右侧 10pt 外衬内）
           PanelDragStrip(
             width: $panels.fileSidebarWidth,
-            clamp: PanelLayoutStore.clampedFileSidebarWidth
+            clamp: PanelLayoutStore.clampedFileSidebarWidth,
+            accessibilityLabel: "调整文件边栏宽度",
+            onDragBegan: panels.beginResize,
+            onDragEnded: panels.endResize
           )
           .frame(width: 12)
           .frame(maxHeight: .infinity)
@@ -224,14 +228,15 @@ struct ContentView: View {
 ///（280–360 钳制）。拖拽永不触发收起——显隐只由工具栏按钮控制
 private struct DetailPanelHost: View {
   @EnvironmentObject private var panels: PanelLayoutStore
-  @EnvironmentObject private var workspaceStore: WorkspaceStore
-  @EnvironmentObject private var tabStore: TabStore
+  @StateObject private var transcriptScroll = AITranscriptScrollCoordinator()
 
   var body: some View {
     if panels.isDetailPanelPresented {
       ZStack {
         InspectorMaterialBackground()
-        detailPanel
+        DetailPanelContent()
+          .equatable()
+          .environmentObject(transcriptScroll)
       }
       .frame(width: panels.detailPanelWidth)
       .frame(maxHeight: .infinity)
@@ -244,7 +249,17 @@ private struct DetailPanelHost: View {
         PanelDragStrip(
           width: $panels.detailPanelWidth,
           direction: -1,
-          clamp: PanelLayoutStore.clampedDetailPanelWidth
+          clamp: PanelLayoutStore.clampedDetailPanelWidth,
+          accessibilityLabel: "调整右侧面板宽度",
+          onWidthCommitted: transcriptScroll.widthDidChange,
+          onDragBegan: {
+            panels.beginResize()
+            transcriptScroll.beginResize()
+          },
+          onDragEnded: {
+            panels.endResize()
+            transcriptScroll.endResize()
+          }
         )
         .frame(width: 12)
         .frame(maxHeight: .infinity)
@@ -252,11 +267,18 @@ private struct DetailPanelHost: View {
       }
     }
   }
+}
 
-  /// 右侧面板：AI 助手可见时整栏替代（FR-AI.2 替代式单栏）；
-  /// 否则 pdf 标签 = 缩略图/书签/标注/引用（FR-3.3/5.4），其余 = 大纲（FR-2.6）+ 反向链接（FR-5.4）
-  @ViewBuilder
-  private var detailPanel: some View {
+/// 右侧面板内容不读取列宽。外层拖拽只改变布局提议，内容继续实时换行，
+/// 但不会因为 PanelLayoutStore 每帧发布而重算整棵 SwiftUI body。
+/// 自身的环境对象变化仍会独立触发更新。
+private struct DetailPanelContent: View, Equatable {
+  @EnvironmentObject private var workspaceStore: WorkspaceStore
+  @EnvironmentObject private var tabStore: TabStore
+
+  static func == (_ lhs: Self, _ rhs: Self) -> Bool { true }
+
+  var body: some View {
     if workspaceStore.isAIAssistantPresented {
       AIAssistantPanelView()
     } else if let tab = tabStore.activeGroup.activeTab, tab.kind == .pdf, let url = tab.url {
@@ -728,17 +750,32 @@ private struct PanelDragStrip: NSViewRepresentable {
   var direction: CGFloat = 1
   /// 列宽钳制函数（各自栏的 min/max 范围）
   var clamp: (CGFloat) -> CGFloat
+  var accessibilityLabel: String
+  /// 列宽已按显示帧发布后的通知；右侧 AI transcript 用它同步滚动基准。
+  var onWidthCommitted: () -> Void = {}
+  /// 仅控制偏好持久化生命周期；不冻结列宽或内容换行。
+  var onDragBegan: () -> Void
+  var onDragEnded: () -> Void
 
   func makeNSView(context: Context) -> PanelDragStripNSView {
-    PanelDragStripNSView()
+    let view = PanelDragStripNSView()
+    view.setAccessibilityElement(true)
+    view.setAccessibilityRole(.splitter)
+    return view
   }
 
   func updateNSView(_ nsView: PanelDragStripNSView, context: Context) {
     nsView.currentWidth = width
     nsView.direction = direction
+    nsView.setAccessibilityLabel(accessibilityLabel)
     nsView.onWidthChanged = { newWidth in
-      width = clamp(newWidth)
+      let nextWidth = clamp(newWidth)
+      guard abs(nextWidth - width) > 0.01 else { return }
+      width = nextWidth
+      onWidthCommitted()
     }
+    nsView.onDragBegan = onDragBegan
+    nsView.onDragEnded = onDragEnded
   }
 }
 
@@ -749,19 +786,80 @@ final class PanelDragStripNSView: NSView {
   var direction: CGFloat = 1
   /// 拖动中目标列宽回调
   var onWidthChanged: ((CGFloat) -> Void)?
+  var onDragBegan: (() -> Void)?
+  var onDragEnded: (() -> Void)?
   private var dragStartX: CGFloat = 0
   private var dragStartWidth: CGFloat = 0
+  /// 鼠标采样可能高于显示刷新率；每个显示帧只提交最新坐标，避免同一帧
+  /// 重复排版。显示帧仍逐帧更新列宽，文字换行保持实时。
+  private var pendingWidth: CGFloat?
+  private var frameDisplayLink: CADisplayLink?
+  private var isDragging = false
 
   override func resetCursorRects() {
     addCursorRect(bounds, cursor: .resizeLeftRight)
   }
 
   override func mouseDown(with event: NSEvent) {
+    if isDragging { finishDrag() }
     dragStartX = event.locationInWindow.x
     dragStartWidth = currentWidth
+    pendingWidth = nil
+    isDragging = true
+    onDragBegan?()
+    startDisplayLink()
   }
 
   override func mouseDragged(with event: NSEvent) {
-    onWidthChanged?(dragStartWidth + direction * (event.locationInWindow.x - dragStartX))
+    pendingWidth = dragStartWidth + direction * (event.locationInWindow.x - dragStartX)
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    guard isDragging else { return }
+    pendingWidth = dragStartWidth + direction * (event.locationInWindow.x - dragStartX)
+    flushPendingWidth()
+    finishDrag()
+  }
+
+  override func viewWillMove(toWindow newWindow: NSWindow?) {
+    if newWindow == nil { finishDrag() }
+    super.viewWillMove(toWindow: newWindow)
+  }
+
+  private func startDisplayLink() {
+    stopDisplayLink()
+    let link = displayLink(target: self, selector: #selector(displayLinkDidFire(_:)))
+    // ProMotion 屏幕跟随实际刷新率；系统会自动钳制到当前显示器能力。
+    // 每帧仍只提交最后一次鼠标采样，不会放大布局次数。
+    link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
+    link.add(to: .main, forMode: .common)
+    frameDisplayLink = link
+  }
+
+  private func stopDisplayLink() {
+    frameDisplayLink?.invalidate()
+    frameDisplayLink = nil
+  }
+
+  private func finishDrag() {
+    stopDisplayLink()
+    pendingWidth = nil
+    guard isDragging else { return }
+    isDragging = false
+    onDragEnded?()
+  }
+
+  @objc private func displayLinkDidFire(_ link: CADisplayLink) {
+    flushPendingWidth()
+  }
+
+  private func flushPendingWidth() {
+    guard let width = pendingWidth else { return }
+    pendingWidth = nil
+    onWidthChanged?(width)
+  }
+
+  deinit {
+    frameDisplayLink?.invalidate()
   }
 }

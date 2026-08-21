@@ -1,4 +1,417 @@
+import AppKit
 import SwiftUI
+
+/// 原生会话滚动容器桥接：接管 SwiftUI List 底层 NSOutlineView 的行高查询。
+/// SwiftUI 的自动行高只在 cell 物化后才准确，长会话会先用错误估值绘制滚动条，
+/// 随滚动不断改总高。代理对全部消息使用同步轻量高度模型，建立一次性完整高度表；
+/// cell 仍由 SwiftUI 仅渲染视口行，拖宽性能不退回全量 VStack。
+@MainActor
+final class AITranscriptScrollCoordinator: ObservableObject {
+  private enum ResizeAnchor {
+    case bottom
+    case row(index: Int, offset: CGFloat)
+    case absoluteY(CGFloat)
+  }
+
+  weak var scrollView: NSScrollView?
+  private var messages: [AIChatStore.ChatMessage] = []
+  private var sealedSets: [AIChangeStore.SealedChangeSet] = []
+  private weak var changeStore: AIChangeStore?
+  private let delegateProxy = AITranscriptTableDelegateProxy()
+  private var resizeAnchor: ResizeAnchor?
+  private var layoutScheduled = false
+  private var finishAfterLayout = false
+  private var resizeGeneration = 0
+  private var scrollWheelMonitor: Any?
+
+  func attach(_ scrollView: NSScrollView?) {
+    guard self.scrollView !== scrollView else { return }
+    restoreOriginalTableDelegate()
+    removeScrollWheelMonitor()
+    self.scrollView = scrollView
+    guard scrollView != nil else {
+      resizeAnchor = nil
+      layoutScheduled = false
+      finishAfterLayout = false
+      return
+    }
+    ensureHeightDelegateInstalled()
+    refreshHeightMap(preserving: nil)
+  }
+
+  func updateContent(
+    messages: [AIChatStore.ChatMessage],
+    changeStore: AIChangeStore
+  ) {
+    let referenced = Set(messages.compactMap(\.changeSetID))
+    let nextSets = changeStore.sealedSets.filter { referenced.contains($0.id) }
+    guard messages != self.messages || nextSets != sealedSets || self.changeStore !== changeStore else {
+      ensureHeightDelegateInstalled()
+      return
+    }
+    self.messages = messages
+    sealedSets = nextSets
+    self.changeStore = changeStore
+    delegateProxy.update(messages: messages, changeStore: changeStore)
+    ensureHeightDelegateInstalled()
+    let generation = resizeGeneration
+    DispatchQueue.main.async { [weak self] in
+      guard let self, generation == self.resizeGeneration else { return }
+      let anchor = self.scrollView.map(self.captureAnchor(in:))
+      self.refreshHeightMap(preserving: anchor)
+    }
+  }
+
+  private func installScrollWheelMonitor() {
+    guard scrollWheelMonitor == nil else { return }
+    // 本地事件监听发生在 NSScrollView 消费滚轮之前，只负责取消待处理锚定；
+    // 不读布局、不写滚动位置，让同一个滚轮事件零等待地继续分发。
+    scrollWheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+      self?.userWillScroll(event)
+      return event
+    }
+  }
+
+  func beginResize() {
+    guard let scrollView else {
+      resizeAnchor = nil
+      return
+    }
+    resizeGeneration += 1
+    layoutScheduled = false
+    finishAfterLayout = false
+    resizeAnchor = captureAnchor(in: scrollView)
+    installScrollWheelMonitor()
+  }
+
+  /// 列宽已经按显示帧发布；下一轮主队列在同一帧批量读取/写入行高与锚点。
+  /// 任务会合并，因此同一显示帧至多触发一次表格布局。
+  func widthDidChange() {
+    scheduleLayout()
+  }
+
+  func endResize() {
+    guard resizeAnchor != nil else {
+      removeScrollWheelMonitor()
+      return
+    }
+    // mouseUp 不创建新任务。若最终宽度帧仍在队列里，由那一帧收尾；
+    // 否则上一帧已经稳定，直接结束即可。
+    if layoutScheduled {
+      finishAfterLayout = true
+    } else {
+      resizeAnchor = nil
+      removeScrollWheelMonitor()
+    }
+  }
+
+  private func scheduleLayout() {
+    guard resizeAnchor != nil, !layoutScheduled else { return }
+    layoutScheduled = true
+    let generation = resizeGeneration
+    DispatchQueue.main.async { [weak self] in
+      self?.applyWidthFrame(generation: generation)
+    }
+  }
+
+  private func applyWidthFrame(generation: Int) {
+    guard generation == resizeGeneration, let anchor = resizeAnchor, let scrollView else { return }
+    layoutScheduled = false
+    ensureHeightDelegateInstalled()
+    refreshHeightMap(preserving: nil)
+    apply(anchor, in: scrollView)
+
+    if finishAfterLayout {
+      finishAfterLayout = false
+      resizeAnchor = nil
+      removeScrollWheelMonitor()
+    }
+  }
+
+  private func apply(_ anchor: ResizeAnchor, in scrollView: NSScrollView) {
+    guard let documentView = scrollView.documentView else { return }
+    let clipView = scrollView.contentView
+    let minY = documentView.bounds.minY
+    let maxY = max(documentView.bounds.maxY - clipView.bounds.height, minY)
+    let targetY: CGFloat
+    switch anchor {
+    case .bottom:
+      targetY = maxY
+    case .absoluteY(let y):
+      targetY = min(max(y, minY), maxY)
+    case .row(let index, let offset):
+      guard let tableView = Self.tableView(in: documentView), tableView.numberOfRows > 0 else { return }
+      let row = min(max(index, 0), tableView.numberOfRows - 1)
+      let rowRect = tableView.convert(tableView.rect(ofRow: row), to: documentView)
+      targetY = min(max(rowRect.minY + min(max(offset, 0), rowRect.height), minY), maxY)
+    }
+    clipView.scroll(to: NSPoint(x: clipView.bounds.minX, y: targetY))
+    scrollView.reflectScrolledClipView(clipView)
+  }
+
+  private func captureAnchor(in scrollView: NSScrollView) -> ResizeAnchor {
+    guard let documentView = scrollView.documentView else { return .bottom }
+    let visible = scrollView.contentView.documentVisibleRect
+    if documentView.bounds.maxY - visible.maxY <= 24 { return .bottom }
+    guard let tableView = Self.tableView(in: documentView), tableView.numberOfRows > 0 else {
+      return .absoluteY(visible.minY)
+    }
+    let documentPoint = NSPoint(x: visible.midX, y: visible.minY + 1)
+    let tablePoint = tableView.convert(documentPoint, from: documentView)
+    let row = tableView.row(at: tablePoint)
+    guard row >= 0 else { return .absoluteY(visible.minY) }
+    let rowRect = tableView.convert(tableView.rect(ofRow: row), to: documentView)
+    return .row(index: row, offset: visible.minY - rowRect.minY)
+  }
+
+  private func userWillScroll(_ event: NSEvent) {
+    guard let scrollView, event.window === scrollView.window else { return }
+    let location = scrollView.convert(event.locationInWindow, from: nil)
+    guard scrollView.bounds.contains(location) else { return }
+    // 滚轮事件路径必须严格 O(1)。最终宽度帧通常已经在 mouseUp 后的主队列
+    // 周期完成；即使它仍待执行，也直接放弃该帧，绝不在首个滚轮事件前排版。
+    prioritizeUserScroll()
+  }
+
+  /// 同一个滚轮事件继续交给 NSScrollView；这里只取消旧锚点与事件监听，
+  /// 不触发任何同步布局。
+  func prioritizeUserScroll() {
+    cancelResizeAnchoringForUserScroll()
+    removeScrollWheelMonitor()
+  }
+
+  /// 必须保持 O(1)：在滚轮事件分发前调用，不能触发布局或滚动写入。
+  private func cancelResizeAnchoringForUserScroll() {
+    guard resizeAnchor != nil else { return }
+    // 输入事件绝不能触发布局。上一版在这里同步失效全部行高，长会话会让
+    // mouseUp 后的第一下滚轮等待近 1 秒。用户开始滚动即放弃 resize 锚定，
+    // 让同一个滚轮事件直接交给 NSScrollView。
+    resizeGeneration += 1
+    layoutScheduled = false
+    finishAfterLayout = false
+    resizeAnchor = nil
+  }
+
+  private func refreshHeightMap(preserving anchor: ResizeAnchor?) {
+    guard let scrollView, let tableView = Self.tableView(in: scrollView.documentView) else { return }
+    let changedRows = delegateProxy.prepareHeights(for: tableView.bounds.width)
+    let validRows = changedRows.intersection(IndexSet(integersIn: 0..<tableView.numberOfRows))
+    if !validRows.isEmpty {
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0
+        context.allowsImplicitAnimation = false
+        tableView.noteHeightOfRows(withIndexesChanged: validRows)
+        tableView.layoutSubtreeIfNeeded()
+        scrollView.layoutSubtreeIfNeeded()
+      }
+    }
+    if let anchor { apply(anchor, in: scrollView) }
+  }
+
+  private func ensureHeightDelegateInstalled() {
+    guard let scrollView, let tableView = Self.tableView(in: scrollView.documentView) else { return }
+    delegateProxy.install(on: tableView)
+  }
+
+  private func restoreOriginalTableDelegate() {
+    delegateProxy.restore()
+  }
+
+  private static func tableView(in view: NSView?) -> NSTableView? {
+    guard let view else { return nil }
+    if let tableView = view as? NSTableView { return tableView }
+    for child in view.subviews {
+      if let tableView = tableView(in: child) { return tableView }
+    }
+    return nil
+  }
+
+  private func removeScrollWheelMonitor() {
+    guard let scrollWheelMonitor else { return }
+    NSEvent.removeMonitor(scrollWheelMonitor)
+    self.scrollWheelMonitor = nil
+  }
+
+}
+
+/// 仅覆写可变行高查询，其它 SwiftUI 私有 delegate 消息全部转发回原对象。
+/// `noteHeightOfRows` 因此只读取同步数值，不触发自动行高动画或离屏 cell 布局。
+@MainActor
+private final class AITranscriptTableDelegateProxy: NSObject, NSTableViewDelegate, NSOutlineViewDelegate {
+  weak var tableView: NSTableView?
+  weak var originalDelegate: (any NSTableViewDelegate)?
+  private var originalUsesAutomaticRowHeights = true
+  private var originalRowSizeStyle: NSTableView.RowSizeStyle = .default
+  private var messages: [AIChatStore.ChatMessage] = []
+  private weak var changeStore: AIChangeStore?
+  private var preparedHeights: [CGFloat] = []
+  private var preparedWidth: CGFloat = -1
+  private var contentChanged = true
+
+  func update(messages: [AIChatStore.ChatMessage], changeStore: AIChangeStore?) {
+    self.messages = messages
+    self.changeStore = changeStore
+    contentChanged = true
+  }
+
+  func prepareHeights(for width: CGFloat) -> IndexSet {
+    let width = max(width, 40)
+    guard contentChanged || abs(width - preparedWidth) > 0.01 || preparedHeights.count != messages.count else { return [] }
+    let previous = preparedHeights
+    preparedWidth = width
+    contentChanged = false
+    guard let changeStore else {
+      preparedHeights = Array(repeating: 1, count: messages.count)
+      return changedIndexes(previous: previous, next: preparedHeights)
+    }
+    preparedHeights = messages.map {
+      AIChatMessageRow.estimatedHeight(for: $0, tableWidth: width, changeStore: changeStore)
+    }
+    return changedIndexes(previous: previous, next: preparedHeights)
+  }
+
+  private func changedIndexes(previous: [CGFloat], next: [CGFloat]) -> IndexSet {
+    let sharedCount = min(previous.count, next.count)
+    var changed = IndexSet((0..<sharedCount).filter { abs(next[$0] - previous[$0]) > 0.5 })
+    if next.count > sharedCount {
+      changed.formUnion(IndexSet(integersIn: sharedCount..<next.count))
+    }
+    return changed
+  }
+
+  func install(on tableView: NSTableView) {
+    if self.tableView !== tableView {
+      restore()
+      self.tableView = tableView
+      originalUsesAutomaticRowHeights = tableView.usesAutomaticRowHeights
+      originalRowSizeStyle = tableView.rowSizeStyle
+    }
+    if (tableView.delegate as AnyObject?) !== self {
+      originalDelegate = tableView.delegate
+      tableView.delegate = self
+    }
+    tableView.usesAutomaticRowHeights = false
+    tableView.rowSizeStyle = .custom
+  }
+
+  func restore() {
+    guard let tableView else { return }
+    if (tableView.delegate as AnyObject?) === self {
+      tableView.delegate = originalDelegate
+    }
+    tableView.usesAutomaticRowHeights = originalUsesAutomaticRowHeights
+    tableView.rowSizeStyle = originalRowSizeStyle
+    self.tableView = nil
+    originalDelegate = nil
+  }
+
+  func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+    estimatedHeight(forRow: row)
+  }
+
+  /// SwiftUI 的 macOS `List` 实际使用 `SwiftUIOutlineListView`。NSOutlineView
+  /// 不查询 NSTableView 的 `heightOfRow`，而是查询这个逐 item 接口。
+  func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
+    estimatedHeight(forRow: outlineView.row(forItem: item))
+  }
+
+  private func estimatedHeight(forRow row: Int) -> CGFloat {
+    guard preparedHeights.indices.contains(row) else {
+      return 1
+    }
+    return preparedHeights[row]
+  }
+
+  override func responds(to selector: Selector!) -> Bool {
+    if selector == #selector(NSTableViewDelegate.tableView(_:heightOfRow:)) { return true }
+    if selector == #selector(NSOutlineViewDelegate.outlineView(_:heightOfRowByItem:)) { return true }
+    if super.responds(to: selector) { return true }
+    return (originalDelegate as? NSObjectProtocol)?.responds(to: selector) == true
+  }
+
+  override func forwardingTarget(for selector: Selector!) -> Any? {
+    if (originalDelegate as? NSObjectProtocol)?.responds(to: selector) == true {
+      return originalDelegate
+    }
+    return super.forwardingTarget(for: selector)
+  }
+}
+
+/// SwiftUI List 不公开其 NSScrollView。透明背景视图按窗口坐标匹配与自身
+/// 重叠面积最大的滚动容器，从而把右侧 AI transcript 精确交给协调器。
+private struct AITranscriptScrollResolver: NSViewRepresentable {
+  let coordinator: AITranscriptScrollCoordinator
+  let messages: [AIChatStore.ChatMessage]
+  let changeStore: AIChangeStore
+
+  func makeNSView(context: Context) -> AITranscriptScrollResolverView {
+    let view = AITranscriptScrollResolverView()
+    view.coordinator = coordinator
+    coordinator.updateContent(messages: messages, changeStore: changeStore)
+    view.resolveLater()
+    return view
+  }
+
+  func updateNSView(_ nsView: AITranscriptScrollResolverView, context: Context) {
+    nsView.coordinator = coordinator
+    coordinator.updateContent(messages: messages, changeStore: changeStore)
+    nsView.resolveLater()
+  }
+}
+
+private final class AITranscriptScrollResolverView: NSView {
+  weak var coordinator: AITranscriptScrollCoordinator?
+  private var resolveScheduled = false
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    resolveLater()
+  }
+
+  override func viewWillMove(toWindow newWindow: NSWindow?) {
+    if newWindow == nil, coordinator?.scrollView === resolvedScrollView {
+      coordinator?.attach(nil)
+    }
+    super.viewWillMove(toWindow: newWindow)
+  }
+
+  private weak var resolvedScrollView: NSScrollView?
+
+  func resolveLater() {
+    guard !resolveScheduled else { return }
+    resolveScheduled = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.resolveScheduled = false
+      self.resolve()
+    }
+  }
+
+  private func resolve() {
+    guard bounds.width > 0, bounds.height > 0, let root = window?.contentView else { return }
+    let markerFrame = convert(bounds, to: nil)
+    let candidates = Self.scrollViews(in: root).compactMap { scrollView -> (NSScrollView, CGFloat)? in
+      let frame = scrollView.convert(scrollView.bounds, to: nil)
+      let overlap = markerFrame.intersection(frame)
+      guard !overlap.isNull, overlap.width > 80, overlap.height > 120 else { return nil }
+      return (scrollView, overlap.width * overlap.height)
+    }
+    guard let best = candidates.max(by: { $0.1 < $1.1 })?.0 else { return }
+    resolvedScrollView = best
+    coordinator?.attach(best)
+  }
+
+  private static func scrollViews(in view: NSView) -> [NSScrollView] {
+    var result: [NSScrollView] = []
+    if let scrollView = view as? NSScrollView { result.append(scrollView) }
+    for child in view.subviews {
+      result.append(contentsOf: scrollViews(in: child))
+    }
+    return result
+  }
+}
 
 /// 侧边栏 AI 助手（FR-AI.2）：替代式单栏面板——与右侧上下文面板同位切换。
 /// 多轮流式对话（可取消/重试）+ 两层上下文 chips + 回复五动作。
@@ -8,6 +421,7 @@ struct AIAssistantPanelView: View {
   @EnvironmentObject private var tabStore: TabStore
   @EnvironmentObject private var workspaceStore: WorkspaceStore
   @EnvironmentObject private var pdfStore: PDFReaderStore
+  @EnvironmentObject private var transcriptScroll: AITranscriptScrollCoordinator
 
   @State private var draft = ""
   @State private var toast: String?
@@ -161,21 +575,41 @@ struct AIAssistantPanelView: View {
 
   private var messageList: some View {
     ScrollViewReader { proxy in
-      ScrollView {
-        Group {
-          // 中小规模对话全量布局：内容高度首帧即精确（滚动条永远成比例——
-          // LazyVStack 靠近底部才物化高公式行，总长突然撑大致滚动条跳变，实测反馈）
-          if chat.messages.count <= Self.eagerMessageLimit {
-            VStack(alignment: .leading, spacing: 14) {
-              messageRows
-            }
-          } else {
-            LazyVStack(alignment: .leading, spacing: 14) {
-              messageRows
-            }
-          }
+      // macOS List 由 NSTableView 按消息行虚拟化并维护可见行锚点。
+      // 与 LazyVStack 不同，历史行高度因换行改变时不会用估算总高反复修正
+      // contentOffset；同时拖宽只排版可见消息，不再每帧测量整个会话。
+      List {
+        ForEach(chat.messages) { message in
+          AIChatMessageRow(
+            message: message,
+            isBusy: chat.phase == .streaming,
+            changeStore: chat.changeStore
+          )
+          .id(message.id)
+          .listRowInsets(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
+          .listRowSeparator(.hidden)
+          .listRowBackground(Color.clear)
         }
-        .padding(10)
+
+        Color.clear
+          .frame(height: 1)
+          .id(bottomAnchorID)
+          .listRowInsets(EdgeInsets())
+          .listRowSeparator(.hidden)
+          .listRowBackground(Color.clear)
+      }
+      .listStyle(.plain)
+      .scrollContentBackground(.hidden)
+      .environment(\.defaultMinListRowHeight, 1)
+      .background(AITranscriptScrollResolver(
+        coordinator: transcriptScroll,
+        messages: chat.messages,
+        changeStore: chat.changeStore
+      ))
+      .onScrollGeometryChange(for: Bool.self) { geometry in
+        geometry.visibleRect.maxY >= geometry.contentSize.height - 24
+      } action: { _, pinned in
+        isPinnedToBottom = pinned
       }
       // 仅在内容变化且贴底时自动滚（用户拖条/上翻期间不做任何程序化滚动）；
       // 目标是锚点自身（回到底部后锚点可见，贴底状态自然恢复）
@@ -198,27 +632,6 @@ struct AIAssistantPanelView: View {
         }
       }
     }
-  }
-
-  /// 全量布局的消息数上限（内滚行总数 ≈ 条数 × 平均块数，控制在数百视图内）
-  private static let eagerMessageLimit = 30
-
-  @ViewBuilder
-  private var messageRows: some View {
-    ForEach(chat.messages) { message in
-      AIChatMessageRow(
-        message: message,
-        isBusy: chat.phase == .streaming,
-        changeStore: chat.changeStore
-      )
-      .id(message.id)
-    }
-    // 贴底锚点：可见才算贴底——用户上翻即松手
-    Color.clear
-      .frame(height: 1)
-      .id(bottomAnchorID)
-      .onAppear { isPinnedToBottom = true }
-      .onDisappear { isPinnedToBottom = false }
   }
 
   private var emptyState: some View {
@@ -461,5 +874,6 @@ final class ComposerSplitNSSplitView: NSSplitView {
     .environmentObject(TabStore())
     .environmentObject(WorkspaceStore())
     .environmentObject(PDFReaderStore())
+    .environmentObject(AITranscriptScrollCoordinator())
     .frame(width: 320, height: 560)
 }

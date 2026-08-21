@@ -46,6 +46,9 @@ final class PanelLayoutStore: ObservableObject {
 
   private let defaults = UserDefaults.standard
   private var persistTask: Task<Void, Never>?
+  /// 拖动期间列宽继续逐帧发布，但 UserDefaults 去抖任务只在松手后创建一次。
+  /// 否则每帧取消/重建 MainActor Task 也会挤占布局时间。
+  private var activeResizeCount = 0
   private enum Key {
     static let fileSidebarWidth = "workspace.fileSidebarWidth"
     static let isFileSidebarPresented = "workspace.isFileSidebarPresented"
@@ -65,15 +68,38 @@ final class PanelLayoutStore: ObservableObject {
     isFileSidebarPresented = defaults.object(forKey: Key.isFileSidebarPresented) as? Bool ?? true
   }
 
+  func beginResize() {
+    activeResizeCount += 1
+    persistTask?.cancel()
+    persistTask = nil
+  }
+
+  func endResize() {
+    activeResizeCount = max(0, activeResizeCount - 1)
+    if activeResizeCount == 0 {
+      schedulePersist()
+    }
+  }
+
   /// 去抖落盘：拖拽每帧写宽度不再同步写 UserDefaults（此前 60Hz 磁盘 IO）
   private func schedulePersist() {
+    guard activeResizeCount == 0 else { return }
     persistTask?.cancel()
-    persistTask = Task { [weak self] in
+    let fileSidebarWidth = Double(fileSidebarWidth)
+    let detailPanelWidth = Double(detailPanelWidth)
+    let isFileSidebarPresented = isFileSidebarPresented
+    let fileSidebarWidthKey = Key.fileSidebarWidth
+    let detailPanelWidthKey = Key.detailPanelWidth
+    let isFileSidebarPresentedKey = Key.isFileSidebarPresented
+    // UserDefaults 线程安全；延迟与写盘都放到 utility task，避免 mouseUp 后
+    // 0.4 秒恰好落在用户继续滚动时占用 MainActor。
+    persistTask = Task.detached(priority: .utility) {
       try? await Task.sleep(nanoseconds: 400_000_000)
-      guard !Task.isCancelled, let self else { return }
-      self.defaults.set(Double(self.fileSidebarWidth), forKey: Key.fileSidebarWidth)
-      self.defaults.set(Double(self.detailPanelWidth), forKey: Key.detailPanelWidth)
-      self.defaults.set(self.isFileSidebarPresented, forKey: Key.isFileSidebarPresented)
+      guard !Task.isCancelled else { return }
+      let defaults = UserDefaults.standard
+      defaults.set(fileSidebarWidth, forKey: fileSidebarWidthKey)
+      defaults.set(detailPanelWidth, forKey: detailPanelWidthKey)
+      defaults.set(isFileSidebarPresented, forKey: isFileSidebarPresentedKey)
     }
   }
 }
