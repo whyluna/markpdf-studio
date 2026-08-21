@@ -273,8 +273,8 @@ final class WindowSession: ObservableObject, Identifiable {
       applyViaKernel: { store, text, completion in
         store.applyEdits(text, completion: completion)
       },
-      // 内核不活（后台标签/桥未就绪）：以 store 内存文本应用后直接落盘，
-      // 标签重新激活时新视图按 store.text 整文载入，不会停在旧内容
+      // 内核成功也同步 Native store 并落盘：Web contentChanged 有防抖，不能让
+      // 卡片先完成而 store.text 仍是旧文；内核不活时同一闭包兼作回退。
       persistViaStore: { store, text in
         store.contentDidChange(text)
         store.flushPendingSave()

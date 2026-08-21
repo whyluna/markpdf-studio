@@ -30,6 +30,17 @@ final class AIChatStore: ObservableObject {
     let argsSummary: String
     var resultSummary: String?
     var isRunning = true
+
+    /// 工具完成不等于成功：旧 UI 对 Error 结果也画对勾，导致用户误以为提案已提交。
+    var hasFailed: Bool {
+      guard let resultSummary else { return false }
+      return resultSummary.hasPrefix("Error:") || resultSummary == "Cancelled."
+    }
+
+    /// 写工具保留了有效块、跳过了冲突块；仍会生成审查卡，但须显式提示是部分成功。
+    var isPartialSuccess: Bool {
+      resultSummary?.hasPrefix("Queued for review (partial):") == true
+    }
   }
 
   struct ChatMessage: Identifiable, Equatable {
@@ -47,8 +58,8 @@ final class AIChatStore: ObservableObject {
     var toolActivities: [ToolActivity] = []
     /// 本轮写提案封存后的变更集 ID（FR-AI.5；渲染变更卡片；不持久化，重启即失效）
     var changeSetID: UUID?
-    /// 写作模式下本轮以普通回答收尾、未产生任何提案（防模型口头幻觉「已提交」，
-    /// 渲染为消息下方警示行）
+    /// 写作模式下本轮未产生任何提案：可能是纯文字幻觉，也可能是写工具校验失败；
+    /// UI 结合 toolActivities 显示真实原因。
     var writingNoProposal = false
   }
 

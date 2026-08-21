@@ -148,6 +148,46 @@ final class AIChangeApplierTests: XCTestCase {
     XCTAssertEqual(diskText("live.md"), "# 定稿\n\n未落盘的新段落")
   }
 
+  /// 活体 Web 内核成功后也必须立即推进 Native store；不能只等 Web 侧防抖的
+  /// contentChanged，否则卡片先完成、当前标签仍显示旧文，切换标签后才收敛。
+  func testSuccessfulKernelImmediatelySynchronizesNativeStoreAndDisk() async throws {
+    let url = root.appendingPathComponent("visible.md")
+    try "旧内容".write(to: url, atomically: true, encoding: .utf8)
+    let store = EditorStore()
+    store.loadFile(url)
+    let loaded = await waitUntil { store.currentFileURL == url }
+    XCTAssertTrue(loaded)
+    var kernelText: String?
+    var synchronizedCount = 0
+    let environment = AIChangeApplier.Environment(
+      findEditorStore: { candidate in
+        WindowCoordinator.normalize(candidate) == WindowCoordinator.normalize(url) ? store : nil
+      },
+      applyViaKernel: { _, text, completion in
+        kernelText = text
+        completion(true)
+      },
+      persistViaStore: { store, text in
+        synchronizedCount += 1
+        store.contentDidChange(text)
+        store.flushPendingSave()
+      },
+      workspaceRoot: { self.root }
+    )
+
+    let result = await AIChangeApplier.apply(
+      change(.editFile, "visible.md", edits: [
+        AIFileChange.TextEdit(oldText: "旧内容", newText: "立即刷新"),
+      ]),
+      environment: environment)
+
+    XCTAssertEqual(result.outcome, .edited(appliedEdits: 1, skippedEdits: 0))
+    XCTAssertEqual(kernelText, "立即刷新", "活体内核仍保留单事务替换/撤销语义")
+    XCTAssertEqual(synchronizedCount, 1, "内核成功后也同步 Native 状态")
+    XCTAssertEqual(store.text, "立即刷新", "apply 返回前当前标签绑定已是新内容")
+    XCTAssertEqual(diskText("visible.md"), "立即刷新")
+  }
+
   // MARK: - 检查点与撤销回路
 
   func testUndoRestoresEditsAndTrashesCreated() async throws {

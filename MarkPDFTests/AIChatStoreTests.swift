@@ -1263,6 +1263,67 @@ final class AIWritingModeTests: XCTestCase {
     XCTAssertEqual(store.messages.last?.writingNoProposal, true, "零提案的口头声明被标记")
     XCTAssertNil(store.messages.last?.changeSetID)
   }
+
+  /// 单次 edit 工具里部分 old_text 冲突时，保留有效块形成审查卡；旧行为因 1 个
+  /// 模糊匹配丢掉全部有效修改，并把失败活动错误画成成功对勾。
+  func testWritingModeQueuesMatchedEditsWhenOneEditIsAmbiguous() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("WriteModePartial-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = root.appendingPathComponent("note.md")
+    try "# 唯一标题\n重复\n重复\n".write(to: note, atomically: true, encoding: .utf8)
+
+    let rawArgs = ##"{"path":"note.md","edits":[{"old_text":"# 唯一标题","new_text":"# 简明标题"},{"old_text":"重复","new_text":"简化"}]}"##
+    let escapedArgs = rawArgs
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
+    let toolChunks: [Data] = [
+      Data("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_partial\",\"function\":{\"name\":\"workspace_edit_file\",\"arguments\":\"\(escapedArgs)\"}}]}}]}\n\n".utf8),
+      Data("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n".utf8),
+      sseDone,
+    ]
+    var requestBodies: [Data] = []
+    let transport = AIServiceTests.MockAITransport(streamHandler: { request in
+      requestBodies.append(request.httpBody ?? Data())
+      return AsyncThrowingStream { continuation in
+        if requestBodies.count == 1 {
+          for chunk in toolChunks { continuation.yield(chunk) }
+        } else {
+          continuation.yield(self.sse("已提交有效修改，请审批"))
+          continuation.yield(self.sseDone)
+        }
+        continuation.finish()
+      }
+    })
+    let store = makeStore(transport: transport)
+    store.isWritingMode = true
+    store.contextSources.workspaceFiles = { (root: root, files: [note]) }
+
+    store.send("把文档改简单")
+    let done = await waitUntil { store.phase == .idle && store.messages.count == 2 }
+
+    XCTAssertTrue(done)
+    XCTAssertEqual(requestBodies.count, 2)
+    XCTAssertTrue(
+      String(decoding: requestBodies[1], as: UTF8.self).contains("Queued for review (partial)"),
+      "部分成功结果须回传模型，避免它误称全部完成")
+    let sealed = try XCTUnwrap(store.changeStore.sealedSets.first)
+    XCTAssertEqual(sealed.set.changes.first?.edits.count, 1, "有效块进入审查卡，模糊块跳过")
+    XCTAssertEqual(sealed.set.changes.first?.edits.first?.newText, "# 简明标题")
+    XCTAssertEqual(store.messages.last?.changeSetID, sealed.id)
+    XCTAssertEqual(store.messages.last?.writingNoProposal, false)
+    XCTAssertEqual(store.messages.last?.toolActivities.first?.isPartialSuccess, true)
+    XCTAssertFalse(try String(contentsOf: note, encoding: .utf8).contains("简明标题"), "审批前不落盘")
+  }
+
+  func testFailedToolActivityIsNotReportedAsSuccess() {
+    var activity = AIChatStore.ToolActivity(name: "workspace_edit_file", argsSummary: "note.md")
+    activity.isRunning = false
+    activity.resultSummary = "Error: all 2 edits failed to match 'note.md'."
+    XCTAssertTrue(activity.hasFailed)
+    XCTAssertFalse(activity.isPartialSuccess)
+  }
 }
 
 /// 多文档并行运行（2026-08-19 用户需求）：切文档不取消在途运行；

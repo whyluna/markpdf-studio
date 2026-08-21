@@ -19,7 +19,9 @@ enum AIChangeApplier {
     var findEditorStore: (URL) -> EditorStore? = { _ in nil }
     /// 经内核整文替换（单事务入撤销栈，⌘Z 一步回）；内核不活/失败回 false
     var applyViaKernel: (EditorStore, String, @escaping (Bool) -> Void) -> Void = { _, _, completion in completion(false) }
-    /// 内核不活时的回退：把结果文本同步进 store 并直接落盘
+    /// 把结果文本同步进 Native store 并直接落盘。内核成功时也必须调用：Web 的
+    /// contentChanged 有防抖，若卡片状态更新触发视图重建，旧 store.text 会让新 WebView
+    /// 短暂重载旧文；同步后再完成 apply 才能保证当前标签立即收敛。
     var persistViaStore: (EditorStore, String) -> Void = { _, _ in }
     var workspaceRoot: () -> URL? = { nil }
     /// 编辑应用成功后：编辑器高亮改动行并滚到首处改动（FR-AI.6）
@@ -364,12 +366,12 @@ enum AIChangeApplier {
     highlight: (ranges: [[Int]], firstLine: Int)? = nil
   ) async -> FileResult {
     if let store = environment.findEditorStore(url) {
-      let viaKernel = await withCheckedContinuation { continuation in
+      _ = await withCheckedContinuation { continuation in
         environment.applyViaKernel(store, newText) { continuation.resume(returning: $0) }
       }
-      if !viaKernel {
-        environment.persistViaStore(store, newText)
-      }
+      // 不论内核是否成功都先同步 Native 权威状态。成功分支不能只等 Web 侧
+      // contentChanged 防抖回传，否则应用完成与 store 更新之间存在可见旧内容窗口。
+      environment.persistViaStore(store, newText)
       if let highlight {
         environment.highlightApplied(url, highlight.ranges, highlight.firstLine)
       }
@@ -411,12 +413,10 @@ enum AIChangeApplier {
           remaining.editedSnapshots.append(snapshot)
           continue
         }
-        let viaKernel = await withCheckedContinuation { continuation in
+        _ = await withCheckedContinuation { continuation in
           environment.applyViaKernel(store, snapshot.beforeText) { continuation.resume(returning: $0) }
         }
-        if !viaKernel {
-          environment.persistViaStore(store, snapshot.beforeText)
-        }
+        environment.persistViaStore(store, snapshot.beforeText)
       } else {
         let current = await Task.detached(priority: .userInitiated) {
           try? String(contentsOf: snapshot.url, encoding: .utf8)

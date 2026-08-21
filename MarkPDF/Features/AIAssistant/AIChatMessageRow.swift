@@ -47,9 +47,10 @@ struct AIChatMessageRow: View {
         AIChangeCardView(sealed: sealed, store: changeStore, isBusy: isBusy)
       }
       if message.writingNoProposal {
-        Label("写作模式：本轮没有产生任何提案（模型只是文字描述）", systemImage: "exclamationmark.triangle")
+        Label(writingNoProposalMessage, systemImage: "exclamationmark.triangle")
           .font(.caption)
           .foregroundStyle(.orange)
+          .help(failedWriteActivity?.resultSummary ?? "")
       }
       HStack(spacing: 10) {
         if message.isStreaming {
@@ -85,6 +86,14 @@ struct AIChatMessageRow: View {
           if activity.isRunning {
             ProgressView()
               .controlSize(.mini)
+          } else if activity.hasFailed {
+            Image(systemName: "xmark.circle.fill")
+              .font(.system(size: 10))
+              .foregroundStyle(.red)
+          } else if activity.isPartialSuccess {
+            Image(systemName: "exclamationmark.circle.fill")
+              .font(.system(size: 10))
+              .foregroundStyle(.orange)
           } else {
             Image(systemName: "checkmark.circle")
               .font(.system(size: 10))
@@ -92,7 +101,7 @@ struct AIChatMessageRow: View {
           }
           Text(activityLabel(activity))
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(activity.hasFailed ? Color.red : (activity.isPartialSuccess ? Color.orange : Color.secondary))
             .lineLimit(1)
         }
         .padding(.horizontal, 8)
@@ -110,12 +119,48 @@ struct AIChatMessageRow: View {
     case "workspace_list_documents": action = String(localized: "列出文档")
     case "workspace_get_outline": action = String(localized: "查看大纲")
     case "workspace_read_section": action = String(localized: "读取章节")
-    case "workspace_write_file": action = String(localized: "提议新建文件")
-    case "workspace_edit_file": action = String(localized: "提议修改文件")
-    case "workspace_create_folder": action = String(localized: "提议新建文件夹")
+    case "workspace_write_file":
+      action = activity.hasFailed ? String(localized: "新建提案失败") : String(localized: "提议新建文件")
+    case "workspace_edit_file":
+      if activity.hasFailed {
+        action = String(localized: "修改提案失败")
+      } else if activity.isPartialSuccess {
+        action = String(localized: "提议部分修改")
+      } else {
+        action = String(localized: "提议修改文件")
+      }
+    case "workspace_create_folder":
+      action = activity.hasFailed ? String(localized: "文件夹提案失败") : String(localized: "提议新建文件夹")
     default: action = activity.name
     }
     return activity.argsSummary.isEmpty ? action : "\(action)：\(activity.argsSummary)"
+  }
+
+  private var failedWriteActivity: AIChatStore.ToolActivity? {
+    message.toolActivities.last { activity in
+      activity.hasFailed && [
+        "workspace_write_file", "workspace_edit_file", "workspace_create_folder",
+      ].contains(activity.name)
+    }
+  }
+
+  private var writingNoProposalMessage: String {
+    guard let result = failedWriteActivity?.resultSummary else {
+      return String(localized: "写作模式：本轮没有产生任何提案（模型只是文字描述）")
+    }
+    if result.contains("failed to match") || result.contains("did not match") {
+      return String(localized: "写作模式：修改内容与当前文档不匹配，未生成提案")
+    }
+    if result.contains("missing 'path'") {
+      return String(localized: "写作模式：模型没有提供文件路径，未生成提案")
+    }
+    if result.contains("cannot read") {
+      return String(localized: "写作模式：无法读取目标文件，未生成提案")
+    }
+    if result.contains("already exists") {
+      return String(localized: "写作模式：目标已存在，未生成新建提案")
+    }
+    return String(localized: "写作模式：写入工具校验失败，未生成提案")
   }
 
   /// 复制回复（唯一保留动作）：圆形底衬按钮，点击后图标短暂变对勾反馈

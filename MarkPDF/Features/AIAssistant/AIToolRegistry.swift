@@ -138,10 +138,10 @@ enum AIToolRegistry {
     guard !exists else {
       return "Error: '\(resolved.relative)' already exists. Use workspace_edit_file to modify it."
     }
-    await enqueue(
+    guard await enqueue(
       AIFileChange(kind: .createFile, path: resolved.relative, content: content, edits: []),
       context: context
-    )
+    ) else { return "Cancelled." }
     return "Queued for review: create '\(resolved.relative)' (\(content.count) chars). It becomes a real file only after the user approves. Do not assume it exists."
   }
 
@@ -181,19 +181,28 @@ enum AIToolRegistry {
     let replaceAll = arguments["replace_all"] as? Bool ?? false
     let outcome = AIEditApplication.apply(edits.map(\.1), to: base, replaceAll: replaceAll)
     guard !Task.isCancelled else { return "Cancelled." }
-    // 全部命中才入队（部分命中会让审查界面与模型认知分叉；失败明细回传模型自纠）
-    guard outcome.failures.isEmpty else {
-      let details = outcome.failures.sorted(by: { $0.key < $1.key }).map { index, error in
-        "edits[\(index)]: \(error.guidance)"
-      }.joined(separator: "; ")
-      return "Error: \(outcome.failures.count) of \(edits.count) edits did not match '\(resolved.relative)' — \(details). Nothing was queued; fix old_text and retry."
+    let matchedEdits = edits.filter { outcome.appliedIndices.contains($0.0) }
+    let failureDetails = outcome.failures.sorted(by: { $0.key < $1.key }).map { index, error in
+      "edits[\(index)]: \(error.guidance)"
+    }.joined(separator: "; ")
+    // 一个大工具调用里只要有有效块就保留为可审查的部分提案；旧版因 1 个模糊
+    // old_text 丢弃另外所有有效块，UI 同时显示「调用完成」与「零提案」，造成现场误导。
+    guard !matchedEdits.isEmpty else {
+      return "Error: all \(edits.count) edits failed to match '\(resolved.relative)' — \(failureDetails). Nothing was queued; fix old_text and retry."
     }
-    await enqueue(
-      AIFileChange(kind: .editFile, path: resolved.relative, content: "", edits: edits.map(\.1)),
+    guard await enqueue(
+      AIFileChange(
+        kind: .editFile,
+        path: resolved.relative,
+        content: "",
+        edits: matchedEdits.map(\.1)),
       context: context
-    )
-    let summary = edits.map { "\($0.1.oldText.prefix(30).replacingOccurrences(of: "\n", with: "⏎"))" }
+    ) else { return "Cancelled." }
+    let summary = matchedEdits.map { "\($0.1.oldText.prefix(30).replacingOccurrences(of: "\n", with: "⏎"))" }
       .joined(separator: " | ")
+    if !outcome.failures.isEmpty {
+      return "Queued for review (partial): \(matchedEdits.count) of \(edits.count) edits to '\(resolved.relative)' (\(summary.prefix(160))). Skipped \(outcome.failures.count) invalid edits — \(failureDetails). Retry only the skipped edits if needed."
+    }
     return "Queued for review: \(edits.count) edits to '\(resolved.relative)' (\(summary.prefix(200))). They take effect only after the user approves."
   }
 
@@ -211,19 +220,21 @@ enum AIToolRegistry {
     guard !exists else {
       return "Error: '\(resolved.relative)' already exists."
     }
-    await enqueue(
+    guard await enqueue(
       AIFileChange(kind: .createFolder, path: resolved.relative, content: "", edits: []),
       context: context
-    )
+    ) else { return "Cancelled." }
     return "Queued for review: create folder '\(resolved.relative)'. Only needed as an explicit organization step — workspace_write_file creates parent folders automatically."
   }
 
-  private static func enqueue(_ change: AIFileChange, context: Context) async {
-    guard !Task.isCancelled, let enqueueChange = context.enqueueChange else { return }
+  @discardableResult
+  private static func enqueue(_ change: AIFileChange, context: Context) async -> Bool {
+    guard !Task.isCancelled, let enqueueChange = context.enqueueChange else { return false }
     // execute 在并发执行器上跑：入队必须显式回主线程（AIChangeStore 是 @MainActor）
-    await MainActor.run {
-      guard !Task.isCancelled else { return }
+    return await MainActor.run {
+      guard !Task.isCancelled else { return false }
       enqueueChange(change)
+      return true
     }
   }
 
