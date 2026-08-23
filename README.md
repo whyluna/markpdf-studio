@@ -2,7 +2,7 @@
 
 **轻量的 macOS 原生 Markdown + PDF AI 工作台**：在一个窗口里阅读并标注 PDF、编写 Markdown，再由内置 Agent 辅助读文档与写笔记。
 
-<img width="1672" height="941" alt="MarkPDF Studio：Markdown、PDF 与 AI Agent 一体化工作台" src="docs/images/markpdf-hero.png" />
+<img width="1672" height="941" alt="MarkPDF Studio：Markdown、PDF 与 AI Agent 一体化工作台" src="docs/images/markpdf-hero-v1.0.3.png" />
 
 [![Release](https://img.shields.io/github/v/release/whyluna/markpdf-studio)](https://github.com/whyluna/markpdf-studio/releases)
 
