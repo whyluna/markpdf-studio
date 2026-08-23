@@ -39,8 +39,8 @@ MarkPDF 把通常分散在阅读器、Markdown 编辑器和 AI 对话框里的�
 ## 下载安装
 
 - **要求**：macOS 15 Sequoia 及以上（Apple Silicon / Intel）
-- 下载 [**MarkPDF-1.0.2.dmg**](https://github.com/whyluna/markpdf-studio/releases/download/v1.0.2/MarkPDF-1.0.2.dmg)，打开后把 MarkPDF.app 拖入 Applications（后续版本见 [Releases](https://github.com/whyluna/markpdf-studio/releases)）
-- **SHA-256**：`f12fe2351d17a1a1e90068ee832b72ffea328e8672152ce6aadc2f99a06fc64f`（通用二进制：`arm64 + x86_64`）
+- 下载 [**MarkPDF-1.0.3.dmg**](https://github.com/whyluna/markpdf-studio/releases/download/v1.0.3/MarkPDF-1.0.3.dmg)，打开后把 MarkPDF.app 拖入 Applications（后续版本见 [Releases](https://github.com/whyluna/markpdf-studio/releases)）
+- **SHA-256**：`91366aa9d384142ef7d2b62c621cd141decb91739e72b2b909e534e06c50fe24`（通用二进制：`arm64 + x86_64`）
 - **首次打开请右键点击图标 →「打开」**（当前未购买 Apple Developer ID 签名，Gatekeeper 提示「无法验证开发者」属正常现象，仅需首次操作一次）
 
 ## 快速上手
