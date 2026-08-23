@@ -127,9 +127,21 @@ final class PDFAnnotationStore: ObservableObject {
     //    给它画带手柄的原生选中框（128×64pt，压住正文），还把那块区域的划词吃掉。
     //    既有批注的伴侣从磁盘加载回来是基类 PDFAnnotation，必须按 subtype 判（isPopup），
     //    另按父标注的 popup 属性再摘一遍（有些伴侣不在 /Annots 里）；
-    // ② 标注一律设只读（含 PDF 自带的超链接/表单域/图形标注——它们同样会冒出手柄框
+    // ② 批注由 CommentCardView + CommentConnectorLayer 自绘：隐藏原生 /Text 气泡与
+    //    作为定位数据的下划线/高亮，避免卡片避让后原生图标从下面露出、正文重复画线；
+    // ③ 标注一律设只读（含 PDF 自带的超链接/表单域/图形标注——它们同样会冒出手柄框
     //    并抢走该区域的文本选择，实测某页点任意处都出框）。
     // 运行时行为调整，不 markDirty
+    var commentGroupIDs: Set<String> = []
+    for pageIndex in 0..<document.pageCount {
+      guard let page = document.page(at: pageIndex) else { continue }
+      commentGroupIDs.formUnion(
+        page.annotations
+          .filter(\.isCommentMarker)
+          .compactMap(\.userName)
+          .filter { isAnnotationGroupID($0) }
+      )
+    }
     for pageIndex in 0..<document.pageCount {
       guard let page = document.page(at: pageIndex) else { continue }
       for annotation in page.annotations {
@@ -141,6 +153,13 @@ final class PDFAnnotationStore: ObservableObject {
         if let popup = annotation.popup {
           popup.shouldDisplay = false
           page.removeAnnotation(popup)
+        }
+        let kind = AnnotationKind.of(annotation)
+        if annotation.isCommentMarker
+          || (commentGroupIDs.contains(annotation.userName ?? "")
+            && (kind == .highlight || kind == .underline))
+        {
+          Self.hideNativeCommentVisualForOverlay(annotation)
         }
         if Self.shouldLockNativeEditing(annotation) {
           Self.lockNativeInteraction(of: annotation)
@@ -169,12 +188,22 @@ final class PDFAnnotationStore: ObservableObject {
     }
   }
 
-  /// 页边卡片只是本 App 的附加显示，标准 marker/underline 必须保留可见标志，
-  /// 否则写回后的 PDF 在 Preview/Acrobat 中会完全看不到批注。
+  /// 清除旧文件里的 NoView 标志（通用兼容迁移工具）。批注覆盖层不调用此方法：
+  /// 它有独立的运行时显示策略，写回时也会分别处理 marker 与正文范围标记。
   @discardableResult
   nonisolated static func restorePortableVisibility(of annotation: PDFAnnotation) -> Bool {
     guard !annotation.shouldDisplay else { return false }
     annotation.shouldDisplay = true
+    return true
+  }
+
+  /// MarkPDF 内由自绘卡片、虚线框和连接线完整呈现批注，原生 /Text 气泡及其正文定位
+  /// 标记只会造成重复视觉。这里只改当前内存文档；写回时会在私有文档中重建为
+  /// “标准 /Text 可见、正文定位标记隐藏”，兼顾 App 内体验与第三方阅读器兼容性。
+  @discardableResult
+  nonisolated static func hideNativeCommentVisualForOverlay(_ annotation: PDFAnnotation) -> Bool {
+    guard annotation.shouldDisplay else { return false }
+    annotation.shouldDisplay = false
     return true
   }
 

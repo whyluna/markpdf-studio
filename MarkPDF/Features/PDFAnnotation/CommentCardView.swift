@@ -3,8 +3,8 @@ import SwiftUI
 
 /// 页边批注卡片（FR-4.3 视觉升级）：常驻显示批注文本，替代「点图标才见内容」。
 /// 几何在页空间（跟随页面缩放），hosting 显示时按当前 scaleFactor 换算 frame 并
-/// 同步字号/边距（尺寸量 × scale）。不透明底盖住 22pt 原生 /Text 图标——
-/// 数据仍存 marker.contents，导出后第三方阅读器看到的标准便签批注不受影响。
+/// 同步字号/边距（尺寸量 × scale）。原生 /Text 图标在 App 内由控制器隐藏，
+/// 数据仍存 marker.contents，写回后第三方阅读器看到的标准便签批注不受影响。
 struct CommentCardView: View {
   let text: String
   let color: NSColor
@@ -44,9 +44,11 @@ struct CommentCardView: View {
       .truncationMode(.tail)
       .multilineTextAlignment(.leading)
       .fixedSize(horizontal: false, vertical: true)
-      .frame(width: width, alignment: .topLeading)
       .padding(.horizontal, paddingH)
       .padding(.vertical, paddingV)
+      // width 表示整张卡片的外宽；放在 padding 外面，避免内容宽 + padding
+      // 实际越过 hosting frame 与 PDF 页边（旧实现会多出 9pt × scale）。
+      .frame(width: width, alignment: .topLeading)
       .background(Color(nsColor: .controlBackgroundColor))
       .background(alignment: isLeftMargin ? .trailing : .leading) {
         // 色板色竖条：贴内容一侧的边缘，与虚线指认同向
@@ -69,7 +71,7 @@ struct CommentCardView: View {
       .foregroundStyle(Color(color))
       .padding(.horizontal, 4 * scale)
       .padding(.vertical, 3 * scale)
-      // 完整盖住底下仍保持标准可见的 22pt /Text 图标；PDF 数据不再写 NoView。
+      // 空批注保持 22pt 的稳定点击面积；原生 /Text 图标由控制器隐藏。
       .frame(minWidth: 22 * scale, minHeight: 22 * scale)
       .background(Color(nsColor: .controlBackgroundColor))
       .clipShape(RoundedRectangle(cornerRadius: 4 * scale))

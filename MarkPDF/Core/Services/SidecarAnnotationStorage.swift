@@ -92,7 +92,16 @@ enum SidecarAnnotationStorage {
 
   /// entries → 标注（sidecar 恢复与 PDF 写回共用）
   static func annotations(from entries: [Entry]) -> [(page: Int, annotation: PDFAnnotation)] {
-    entries.compactMap { entry in
+    // 批注正文范围以同组 Highlight/Underline 保存几何，但视觉完全由 MarkPDF 的
+    // 虚线框负责。重建到 PDF 时保持 /Text 标记可见（第三方阅读器仍能找到批注），
+    // 同组范围标记则写成 NoView，避免导出的 PDF 额外出现一条下划线。
+    let commentGroupIDs = Set(
+      entries
+        .filter { $0.type == "Text" || $0.type == "/Text" }
+        .compactMap(\.userName)
+        .filter { isAnnotationGroupID($0) }
+    )
+    return entries.compactMap { entry -> (page: Int, annotation: PDFAnnotation)? in
       // 负宽高的畸形 CGRect 直接进 PDFAnnotation 行为未定义（手改/损坏文件防御）
       guard entry.bounds.count == 4, entry.bounds[2] >= 0, entry.bounds[3] >= 0,
         let subtype = PDFAnnotationSubtype(rawValue: "/\(entry.type)") as PDFAnnotationSubtype?
@@ -107,9 +116,15 @@ enum SidecarAnnotationStorage {
       }
       annotation.contents = entry.contents
       annotation.userName = entry.userName
+      let kind = AnnotationKind.of(annotation)
       // 批注标记只用便签图标一种；不补的话重建出来的图标是空白
       if annotation.isCommentMarker {
         annotation.iconType = .comment
+        annotation.shouldDisplay = true
+      } else if commentGroupIDs.contains(entry.userName ?? ""),
+        kind == .highlight || kind == .underline
+      {
+        annotation.shouldDisplay = false
       }
       // 四边形点应为 8 的倍数（每四边形 4 点 × 2 坐标）；非 4 倍数点列行为未定义
       if let quad = entry.quad, quad.count >= 8, quad.count % 8 == 0 {

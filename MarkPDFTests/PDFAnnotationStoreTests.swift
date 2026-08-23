@@ -222,9 +222,19 @@ final class PDFAnnotationStoreTests: XCTestCase {
     store.setSidecarMode(true)
     XCTAssertTrue(store.isSidecarMode)
     XCTAssertFalse(store.hasUnsavedChanges, "切换写回通道前必须落盘挂起改动")
+    // flush 默认把已定格快照交给后台串行队列；等待实际文件提交完成再断言，
+    // 避免机器负载较高时在队列开始前就清理 fixture，造成时序型误报。
+    let backupURL = url.appendingPathExtension("bak")
+    let backupWritten = expectation(
+      for: NSPredicate { _, _ in
+        FileManager.default.fileExists(atPath: backupURL.path)
+      },
+      evaluatedWith: nil
+    )
+    wait(for: [backupWritten], timeout: 2)
     XCTAssertTrue(
-      FileManager.default.fileExists(atPath: url.appendingPathExtension("bak").path),
-      "挂起改动应在切换前写回 PDF 本体")
+      FileManager.default.fileExists(atPath: backupURL.path),
+      "挂起改动应由切换前定格的 PDF 写回任务提交到本体")
   }
 
   // MARK: - 分栏焦点切换 attach（Bug 回归：共享 Store 把 A 窗标注写进 B 文档）
@@ -307,6 +317,80 @@ final class PDFAnnotationStoreTests: XCTestCase {
     XCTAssertTrue(page.annotations.contains { $0 === highlight }, "普通标注不得被连带摘除")
     let flags = (highlight.value(forAnnotationKey: PDFAnnotationKey(rawValue: "F")) as? NSNumber)?.intValue ?? 0
     XCTAssertNotEqual(flags & PDFAnnotationStore.annotationReadOnlyFlag, 0, "普通标注须用标准 /F ReadOnly 锁定")
+  }
+
+  /// 批注视觉在 MarkPDF 内全部由覆盖层负责：attach 后原生 /Text 气泡与同组正文
+  /// 范围标记必须隐藏；普通下划线不能被误伤。
+  func testAttachHidesNativeCommentVisualsButKeepsOrdinaryUnderlineVisible() throws {
+    let (dir, url, doc) = try makePDFFixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let page = try XCTUnwrap(doc.page(at: 0))
+    let groupID = UUID().uuidString
+
+    let marker = PDFAnnotation(
+      bounds: CGRect(x: 4, y: 20, width: 22, height: 22),
+      forType: .text, withProperties: nil)
+    marker.userName = groupID
+    page.addAnnotation(marker)
+    let target = PDFAnnotation(
+      bounds: CGRect(x: 30, y: 20, width: 40, height: 12),
+      forType: .underline, withProperties: nil)
+    target.userName = groupID
+    page.addAnnotation(target)
+    let ordinary = PDFAnnotation(
+      bounds: CGRect(x: 30, y: 50, width: 40, height: 12),
+      forType: .underline, withProperties: nil)
+    ordinary.userName = UUID().uuidString
+    page.addAnnotation(ordinary)
+
+    XCTAssertTrue(marker.shouldDisplay)
+    XCTAssertTrue(target.shouldDisplay)
+    XCTAssertTrue(ordinary.shouldDisplay)
+
+    makeStore().attach(document: doc, url: url)
+
+    XCTAssertFalse(marker.shouldDisplay, "自绘卡片启用后不得再显示原生气泡")
+    XCTAssertFalse(target.shouldDisplay, "批注正文只显示自绘虚线框，不得重复显示下划线")
+    XCTAssertTrue(ordinary.shouldDisplay, "独立的下划线标注不能被批注显示策略误伤")
+  }
+
+  func testHideNativeCommentVisualIsIdempotent() {
+    let marker = PDFAnnotation(bounds: .zero, forType: .text, withProperties: nil)
+    XCTAssertTrue(PDFAnnotationStore.hideNativeCommentVisualForOverlay(marker))
+    XCTAssertFalse(marker.shouldDisplay)
+    XCTAssertFalse(PDFAnnotationStore.hideNativeCommentVisualForOverlay(marker))
+  }
+
+  func testCommentConnectorStrokeWidthTracksPDFScale() {
+    XCTAssertEqual(
+      CommentConnectorLayer.strokeWidth(for: 0.25, backingScaleFactor: 2),
+      0.5, accuracy: 0.001)
+    XCTAssertEqual(
+      CommentConnectorLayer.strokeWidth(for: 1, backingScaleFactor: 2),
+      1, accuracy: 0.001)
+    XCTAssertEqual(
+      CommentConnectorLayer.strokeWidth(for: 2, backingScaleFactor: 2),
+      2, accuracy: 0.001)
+    XCTAssertEqual(
+      CommentConnectorLayer.strokeWidth(for: 0.25, backingScaleFactor: 1),
+      1, accuracy: 0.001)
+  }
+
+  func testCommentConnectorFrameHitReturnsItsMarker() {
+    let layer = CommentConnectorLayer(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+    let marker = PDFAnnotation(
+      bounds: CGRect(x: 4, y: 20, width: 22, height: 22),
+      forType: .text, withProperties: nil)
+    layer.frames = [
+      .init(
+        rect: CGRect(x: 40, y: 50, width: 80, height: 20),
+        color: .systemBlue, lineWidth: 2, marker: marker)
+    ]
+
+    XCTAssertTrue(layer.marker(at: CGPoint(x: 60, y: 60)) === marker)
+    XCTAssertTrue(layer.hitTest(CGPoint(x: 60, y: 60)) === layer)
+    XCTAssertNil(layer.marker(at: CGPoint(x: 10, y: 10)))
+    XCTAssertNil(layer.hitTest(CGPoint(x: 10, y: 10)))
   }
 
   /// isPopup 兼容 PDFKit 上报的两种子类型形态

@@ -5,9 +5,11 @@ import SwiftUI
 /// 每键直改 PDFAnnotation 会连带 PDFKit 失效重绘 + 防抖写回，是卡顿根因
 final class CommentDraft: ObservableObject {
   @Published var text: String
+  @Published var color: AnnotationColor
 
-  init(_ text: String) {
+  init(_ text: String, color: AnnotationColor = .blue) {
     self.text = text
+    self.color = color
   }
 }
 
@@ -16,16 +18,19 @@ final class CommentDraft: ObservableObject {
 /// 键位：↵ 提交并关闭（同点击空白处），⌘↵ 换行
 struct CommentEditorView: View {
   @ObservedObject var draft: CommentDraft
+  let onPickColor: (AnnotationColor) -> Void
   let onDelete: () -> Void
   /// ↵ 提交：关闭编辑框（内容由关闭流程一次性写回标注）
   let onCommit: () -> Void
+
+  @State private var hoveredColor: AnnotationColor?
 
   var body: some View {
     VStack(spacing: 8) {
       PlainTextView(text: $draft.text, onCommit: onCommit)
         .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
         .frame(width: 240, height: 150)
-      HStack(spacing: 8) {
+      HStack(spacing: 3) {
         Button(role: .destructive, action: onDelete) {
           Image(systemName: "trash")
             .font(.system(size: 12))
@@ -35,6 +40,12 @@ struct CommentEditorView: View {
         }
         .buttonStyle(.plain)
         .help("删除批注")
+        Divider()
+          .frame(height: 16)
+          .padding(.horizontal, 2)
+        ForEach(AnnotationColor.allCases) { color in
+          colorDot(color)
+        }
         Spacer()
         Text("⌘↵ 换行")
           .font(.system(size: 10))
@@ -45,6 +56,36 @@ struct CommentEditorView: View {
       }
     }
     .padding(10)
+  }
+
+  private func colorDot(_ color: AnnotationColor) -> some View {
+    Button {
+      draft.color = color
+      onPickColor(color)
+    } label: {
+      Circle()
+        .fill(Color(color.nsColor))
+        .frame(width: 14, height: 14)
+        .overlay(
+          Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1)
+        )
+        .padding(2)
+        .overlay(
+          Circle().strokeBorder(
+            draft.color == color ? Color.accentColor : Color.clear,
+            lineWidth: 2
+          )
+        )
+        .frame(width: 20, height: 20)
+        .background(
+          hoveredColor == color ? Color.primary.opacity(0.08) : Color.clear,
+          in: RoundedRectangle(cornerRadius: 6)
+        )
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hoveredColor = $0 ? color : nil }
+    .help("修改批注颜色")
   }
 }
 
@@ -135,6 +176,8 @@ private struct PlainTextView: NSViewRepresentable {
 }
 
 #Preview {
-  CommentEditorView(draft: CommentDraft("示例批注"), onDelete: {}, onCommit: {})
+  CommentEditorView(
+    draft: CommentDraft("示例批注"),
+    onPickColor: { _ in }, onDelete: {}, onCommit: {})
     .padding()
 }

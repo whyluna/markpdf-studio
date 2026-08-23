@@ -47,6 +47,8 @@ final class SidecarAnnotationTests: XCTestCase {
     let marker = PDFAnnotation(bounds: CGRect(x: 500, y: 30, width: 22, height: 22), forType: .text, withProperties: nil)
     marker.contents = "批注正文"
     marker.userName = groupID
+    // App 运行时隐藏原生气泡；快照不能把这个临时状态带进最终 PDF。
+    marker.shouldDisplay = false
     page.addAnnotation(marker)
 
     // 写 sidecar
@@ -69,8 +71,10 @@ final class SidecarAnnotationTests: XCTestCase {
     let restoredMarker = try XCTUnwrap(annotations.first { $0.type == "Text" })
     XCTAssertEqual(restoredMarker.contents, "批注正文")
     XCTAssertEqual(restoredMarker.userName, groupID)
+    XCTAssertTrue(restoredMarker.shouldDisplay, "重建 PDF 时 /Text 必须恢复可见，供第三方阅读器使用")
     let restoredHighlight = try XCTUnwrap(annotations.first { $0.type == "Highlight" })
     XCTAssertEqual(restoredHighlight.bounds, CGRect(x: 10, y: 20, width: 100, height: 12))
+    XCTAssertFalse(restoredHighlight.shouldDisplay, "同组正文范围只供自绘虚线框定位，不得显示原生线条")
   }
 
   @MainActor

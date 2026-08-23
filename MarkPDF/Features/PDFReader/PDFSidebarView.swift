@@ -240,8 +240,12 @@ private struct PDFOutlineRow: View {
             : (isHovered ? Color.primary.opacity(0.05) : Color.clear),
           in: RoundedRectangle(cornerRadius: 6)
         )
+        // Button(.plain) 的默认命中区会退回文字内容；用整行矩形保证
+        // 大纲标题右侧空白同样响应 hover 与跳转。
+        .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .onHover { isHovered = $0 }
   }
 }

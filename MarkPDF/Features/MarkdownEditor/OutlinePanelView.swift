@@ -81,8 +81,12 @@ private struct OutlineRow: View {
             : (isHovered ? Color.primary.opacity(0.05) : Color.clear),
           in: RoundedRectangle(cornerRadius: 6)
         )
+        // Button(.plain) 默认只按有内容的区域命中；明确把整行矩形纳入
+        // hit testing，标题右侧的空白也能 hover / 点击。
+        .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .onHover { isHovered = $0 }
   }
 }
