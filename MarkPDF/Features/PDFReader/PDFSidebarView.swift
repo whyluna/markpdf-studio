@@ -40,6 +40,7 @@ struct PDFSidebarView: View {
         }
       }
       .pickerStyle(.segmented)
+      .font(.system(size: AppTypography.secondary, weight: .medium))
       .labelsHidden()
       .padding(10)
       Divider()
@@ -195,7 +196,7 @@ struct PDFSidebarView: View {
 
   private func sectionTitle(_ title: String) -> some View {
     Text(title)
-      .font(.caption)
+      .font(.system(size: AppTypography.secondary))
       .fontWeight(.semibold)
       .foregroundStyle(.tertiary)
       .padding(.horizontal, 6)
@@ -225,7 +226,7 @@ private struct PDFOutlineRow: View {
       }
     } label: {
       Text(entry.outline.label ?? String(localized: "未命名"))
-        .font(.system(size: 13))
+        .font(.system(size: AppTypography.primary))
         .fontWeight(isActive ? .semibold : .regular)
         .foregroundStyle(isActive ? Color.accentColor : Color.primary)
         .lineLimit(1)
@@ -265,7 +266,7 @@ private struct BookmarkRow: View {
           Image(systemName: "bookmark.fill")
             .foregroundStyle(Color.accentColor)
           Text("第 \(page) 页")
-            .font(.system(size: 13))
+            .font(.system(size: AppTypography.primary))
           Spacer()
         }
         .padding(.horizontal, 8)
@@ -369,7 +370,7 @@ private struct ThumbnailCell: View {
           )
       )
       Text("\(pageNumber)")
-        .font(.caption)
+        .font(.system(size: AppTypography.secondary))
         .fontWeight(isCurrent ? .semibold : .regular)
         .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
     }

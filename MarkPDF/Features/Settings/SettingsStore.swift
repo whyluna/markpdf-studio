@@ -3,6 +3,20 @@ import Foundation
 import PDFKit
 import os
 
+/// App 外壳的统一字体层级。文档正文由 SettingsStore 单独控制，不与界面字号混用。
+enum AppTypography {
+  /// 面板级标题，例如「AI 助手」。
+  static let panelTitle: CGFloat = 16
+  /// 主要可读内容：文件、目录、消息正文与输入文字。
+  static let primary: CGFloat = 14
+  /// 分区标题、控件文字与说明性副文本。
+  static let secondary: CGFloat = 12
+  /// 时间、状态与紧凑辅助信息。
+  static let metadata: CGFloat = 11
+  /// 仅供高密度图标、差异统计等使用。
+  static let compact: CGFloat = 10
+}
+
 /// 应用设置（FR-7.2）：编辑器字体/字号/行高、PDF 默认视图模式；即时生效并持久化。
 @MainActor
 final class SettingsStore: ObservableObject {
@@ -224,24 +238,40 @@ final class SettingsStore: ObservableObject {
     static let pdfReadingTheme = "settings.pdfReadingTheme" // 旧键：仅作迁移读取
     static let appAppearance = "settings.appAppearance"
     static let appLanguage = "settings.appLanguage"
+    static let comfortableTypographyMigrated = "settings.comfortableTypographyMigrated"
   }
 
   /// 默认值（与内核 baseTheme 一致）
-  static let defaultFontSize = 15.5
+  static let defaultFontSize = 16.0
   static let defaultLineHeight = 1.8
   static let defaultParaGap = 1.0
-  static let defaultPageWidth = 780.0
+  static let defaultPageWidth = 830.0
+  private static let legacyDefaultFontSize = 15.5
+  private static let legacyDefaultPageWidth = 780.0
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     editorFont = EditorFont(rawValue: defaults.string(forKey: Key.font) ?? "") ?? .system
-    let fontSize = defaults.double(forKey: Key.fontSize)
+    var fontSize = defaults.double(forKey: Key.fontSize)
+    var pageWidth = defaults.double(forKey: Key.pageWidth)
+    // 一次性把旧默认值升级为更舒适的 16 / 830；用户主动调过的其他值原样保留。
+    // 迁移完成后即使用户再手动选回 15.5 / 780，也不能在下次启动时被重复改写。
+    if !defaults.bool(forKey: Key.comfortableTypographyMigrated) {
+      if fontSize == Self.legacyDefaultFontSize {
+        fontSize = Self.defaultFontSize
+        defaults.set(fontSize, forKey: Key.fontSize)
+      }
+      if pageWidth == Self.legacyDefaultPageWidth {
+        pageWidth = Self.defaultPageWidth
+        defaults.set(pageWidth, forKey: Key.pageWidth)
+      }
+      defaults.set(true, forKey: Key.comfortableTypographyMigrated)
+    }
     editorFontSize = fontSize > 0 ? fontSize : Self.defaultFontSize
     let lineHeight = defaults.double(forKey: Key.lineHeight)
     editorLineHeight = lineHeight > 0 ? lineHeight : Self.defaultLineHeight
     let paraGap = defaults.double(forKey: Key.paraGap)
     editorParaGap = paraGap > 0 ? paraGap : Self.defaultParaGap
-    let pageWidth = defaults.double(forKey: Key.pageWidth)
     editorPageWidth = pageWidth >= 400 ? pageWidth : Self.defaultPageWidth
     pdfViewMode = PDFViewMode(rawValue: defaults.string(forKey: Key.pdfViewMode) ?? "") ?? .continuous
     // 迁移：独立 PDF 阅读主题已并入全局外观——老用户存过「夜间」且没选过外观的，

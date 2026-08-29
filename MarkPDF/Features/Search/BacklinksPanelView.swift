@@ -10,7 +10,7 @@ struct BacklinksPanelView: View {
   var body: some View {
     VStack(spacing: 0) {
       Text("反向链接")
-        .font(.caption)
+        .font(.system(size: AppTypography.secondary))
         .fontWeight(.semibold)
         .foregroundStyle(.tertiary)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -60,11 +60,11 @@ struct BacklinksPanelView: View {
     } label: {
       VStack(alignment: .leading, spacing: 2) {
         Label(item.source.lastPathComponent, systemImage: "doc.text")
-          .font(.system(size: 13))
+          .font(.system(size: AppTypography.primary))
           .lineLimit(1)
           .truncationMode(.middle)
         Text(item.text)
-          .font(.caption)
+          .font(.system(size: AppTypography.secondary))
           .foregroundStyle(.secondary)
           .lineLimit(1)
           .truncationMode(.tail)

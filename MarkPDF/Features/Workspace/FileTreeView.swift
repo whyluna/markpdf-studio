@@ -114,6 +114,7 @@ struct FileTreeView: View {
         namingField
       } else {
         Label(node.name, systemImage: node.iconName)
+          .font(.system(size: AppTypography.primary))
           .lineLimit(1)
           .truncationMode(.middle)
       }
@@ -147,6 +148,7 @@ struct FileTreeView: View {
   /// 行内命名输入框：Enter 提交，Esc 取消，点击别处（焦点丢失）也提交
   private var namingField: some View {
     TextField("名称", text: namingDraft)
+      .font(.system(size: AppTypography.primary))
       .textFieldStyle(.plain)
       .labelsHidden()
       .focused($namingFocused)
@@ -172,7 +174,7 @@ struct FileTreeView: View {
       Image(systemName: "folder.fill")
         .foregroundStyle(.secondary)
       Text(root.name)
-        .font(.headline)
+        .font(.system(size: AppTypography.primary, weight: .semibold))
         .lineLimit(1)
         .truncationMode(.middle)
       Spacer(minLength: 4)
@@ -204,7 +206,7 @@ struct FileTreeView: View {
     let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
     if !existing.isEmpty {
       Text(title)
-        .font(.caption)
+        .font(.system(size: AppTypography.secondary))
         .fontWeight(.semibold)
         .foregroundStyle(.tertiary)
         .padding(.horizontal, 10)
@@ -215,6 +217,7 @@ struct FileTreeView: View {
           Spacer()
             .frame(width: 12)
           Label(url.lastPathComponent, systemImage: FileNode.kind(for: url, isDirectory: false).iconName)
+            .font(.system(size: AppTypography.primary))
             .lineLimit(1)
             .truncationMode(.middle)
           Spacer(minLength: 0)

@@ -37,7 +37,7 @@ struct AIChangeCardView: View {
 
   private var header: some View {
     Text("AI 变更提案 · \(sealed.set.changes.count) 个文件")
-      .font(.caption.weight(.medium))
+      .font(.system(size: AppTypography.secondary, weight: .medium))
       .foregroundStyle(.secondary)
   }
 
@@ -64,7 +64,7 @@ struct AIChangeCardView: View {
             .help(change.path)
           Spacer(minLength: 4)
           Text(detail(for: change))
-            .font(.caption2)
+            .font(.system(size: AppTypography.metadata))
             .foregroundStyle(.tertiary)
           Image(systemName: "chevron.right")
             .font(.system(size: 8, weight: .semibold))
@@ -105,7 +105,7 @@ struct AIChangeCardView: View {
         }
         if review.skippedEditCount > 0 {
           Text("\(review.skippedEditCount) 处提案已因文本变化丢弃")
-            .font(.caption2)
+            .font(.system(size: AppTypography.metadata))
             .foregroundStyle(.tertiary)
         }
       }
@@ -170,7 +170,7 @@ struct AIChangeCardView: View {
       HStack(spacing: 6) {
         ProgressView().controlSize(.small)
         Text("正在应用…")
-          .font(.caption)
+          .font(.system(size: AppTypography.secondary))
           .foregroundStyle(.secondary)
       }
     case .pending:
@@ -198,13 +198,13 @@ struct AIChangeCardView: View {
         .disabled(isBusy || isWorking)
 
         Text("应用前不会写入任何文件")
-          .font(.caption2)
+          .font(.system(size: AppTypography.metadata))
           .foregroundStyle(.tertiary)
       }
     case .applied(let summary):
       VStack(alignment: .leading, spacing: 4) {
         Text(summary)
-          .font(.caption2)
+          .font(.system(size: AppTypography.metadata))
           .foregroundStyle(.secondary)
         if sealed.checkpoint?.isEmpty == false {
           Button {
@@ -224,11 +224,11 @@ struct AIChangeCardView: View {
       }
     case .rejected:
       Text("已拒绝（未写入任何文件）")
-        .font(.caption2)
+        .font(.system(size: AppTypography.metadata))
         .foregroundStyle(.tertiary)
     case .undone:
       Text("已撤销（新建项已移入废纸篓）")
-        .font(.caption2)
+        .font(.system(size: AppTypography.metadata))
         .foregroundStyle(.tertiary)
     }
   }

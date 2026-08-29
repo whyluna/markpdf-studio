@@ -243,11 +243,11 @@ const baseTheme = EditorView.theme({
   ".cm-scroller": { fontFamily: "var(--editor-font)", overflow: "auto" },
   ".cm-content": {
     // 版心宽度（P2-3）：走 CSS 变量，设置「版心」推送；回退值与 SettingsStore 默认一致
-    maxWidth: "var(--editor-content-width, 780px)",
+    maxWidth: "var(--editor-content-width, 830px)",
     margin: "0 auto",
     padding: "38px 52px 140px",
     // 字号/行高走 CSS 变量（FR-7.2 设置即时生效），回退值与 SettingsStore 默认一致
-    fontSize: "var(--editor-font-size, 15.5px)",
+    fontSize: "var(--editor-font-size, 16px)",
     lineHeight: "var(--editor-line-height, 1.8)",
     caretColor: "var(--accent)",
   },

@@ -118,13 +118,13 @@ struct AIChangeDiffSheet: View {
           .lineLimit(1)
           .truncationMode(.middle)
         Text(subtitle)
-          .font(.caption)
+          .font(.system(size: AppTypography.metadata))
           .foregroundStyle(.secondary)
       }
       Spacer()
       if isPending, let review, review.kind == .editFile, !review.units.isEmpty {
         Text("\(review.acceptedUnitCount)/\(review.units.count) 处")
-          .font(.caption.weight(.medium))
+          .font(.system(size: AppTypography.secondary, weight: .medium))
           .foregroundStyle(review.acceptedUnitCount == 0 ? Color.red : Color.accentColor)
         Button("全不选") {
           store.setAllUnits(sealed.id, changeID: change.id, accepted: false)
@@ -206,14 +206,14 @@ struct AIChangeDiffSheet: View {
               .font(.system(size: 13))
               .foregroundStyle(unit.isAccepted ? Color.accentColor : Color.secondary)
             Text("变更段 \(index + 1)")
-              .font(.caption.weight(.medium))
+              .font(.system(size: AppTypography.secondary, weight: .medium))
               .foregroundStyle(unit.isAccepted ? Color.primary : Color.secondary)
             Text("±\(unit.changeCount) 行")
-              .font(.caption2)
+              .font(.system(size: AppTypography.metadata))
               .foregroundStyle(.tertiary)
             if !unit.isAccepted {
               Text("已取消")
-                .font(.caption2)
+                .font(.system(size: AppTypography.metadata))
                 .foregroundStyle(.tertiary)
             }
           }

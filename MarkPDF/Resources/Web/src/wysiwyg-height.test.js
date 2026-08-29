@@ -36,11 +36,30 @@ describe("TableWidget.estimatedHeight", () => {
     header: [[{ text: "h", marks: [] }]],
     rows: rows.map(() => [[{ text: "c", marks: [] }]]),
     rowOffsets: [0, 10, 20, 30],
+    showHeader: true,
   });
 
   it("按行数估算（表头+数据行）", () => {
     expect(new TableWidget(model([1, 2, 3]), "src").estimatedHeight).toBe(4 * 38 + 16);
     expect(new TableWidget(model([]), "src").estimatedHeight).toBe(1 * 38 + 16);
+  });
+
+  it("全空表头不计入渲染高度，也不生成 thead", () => {
+    const headerless = {
+      header: [[], []],
+      rows: [[
+        [{ text: "a", marks: "" }],
+        [{ text: "b", marks: "" }],
+      ]],
+      rowOffsets: [0, 10],
+      showHeader: false,
+    };
+    const widget = new TableWidget(headerless, "empty-header");
+    expect(widget.estimatedHeight).toBe(1 * 38 + 16);
+    const dom = widget.toDOM({ posAtDOM: () => 0, dispatch() {}, focus() {} });
+    expect(dom.querySelector("thead")).toBeNull();
+    expect(dom.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(dom.querySelectorAll("tbody td")).toHaveLength(2);
   });
 });
 

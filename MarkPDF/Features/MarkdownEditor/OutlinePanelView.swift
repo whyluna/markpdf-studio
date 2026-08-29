@@ -19,7 +19,7 @@ struct OutlinePanelView: View {
   var body: some View {
     VStack(spacing: 0) {
       Text("大纲")
-        .font(.caption)
+        .font(.system(size: AppTypography.secondary))
         .fontWeight(.semibold)
         .foregroundStyle(.tertiary)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -66,7 +66,7 @@ private struct OutlineRow: View {
   var body: some View {
     Button(action: action) {
       Text(item.text)
-        .font(.system(size: 13))
+        .font(.system(size: AppTypography.primary))
         .fontWeight(isActive || item.level == 1 ? .semibold : .regular)
         .foregroundStyle(isActive ? Color.accentColor : (item.level == 1 ? .primary : .secondary))
         .lineLimit(1)

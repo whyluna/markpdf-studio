@@ -118,6 +118,51 @@ describe("wysiwyg 装饰层（FR-2.4 扩展语法集成）", () => {
   });
 });
 
+describe("GFM 表格空单元格列位", () => {
+  function tableWidgetOf(doc) {
+    const field = wysiwyg(true);
+    const state = EditorState.create({
+      doc,
+      extensions: [markdown({ base: markdownLanguage }), field],
+    });
+    let widget = null;
+    state.field(field).between(0, 1e9, (_from, _to, value) => {
+      const candidate = value.spec?.widget;
+      if (value.isReplace && candidate?.constructor?.name === "TableWidget") widget = candidate;
+    });
+    return widget;
+  }
+
+  it("全空表头仍生成两列表格，并省略可见表头行", () => {
+    const widget = tableWidgetOf(`| | |
+| --- | --- |
+| **汇报人** | 路易吉 |
+| **团队** | 搜推引擎 |`);
+    expect(widget).not.toBeNull();
+    expect(widget.model.header).toEqual([[], []]);
+    expect(widget.model.showHeader).toBe(false);
+    expect(widget.model.rows).toHaveLength(2);
+    expect(widget.model.rows.every((row) => row.length === 2)).toBe(true);
+    expect(widget.model.rows[0][0].some((seg) => seg.text === "汇报人" && seg.marks.includes("b"))).toBe(true);
+    expect(widget.model.rows[0][1].some((seg) => seg.text === "路易吉")).toBe(true);
+  });
+
+  it("部分空表头与正文空格保留原列位，缺列按 GFM 规则补空", () => {
+    const widget = tableWidgetOf(`| | 内容 |
+| --- | --- |
+| 左 |
+| | 右 |`);
+    expect(widget).not.toBeNull();
+    expect(widget.model.showHeader).toBe(true);
+    expect(widget.model.header[0]).toEqual([]);
+    expect(widget.model.header[1].some((seg) => seg.text === "内容")).toBe(true);
+    expect(widget.model.rows[0][0].some((seg) => seg.text === "左")).toBe(true);
+    expect(widget.model.rows[0][1]).toEqual([]);
+    expect(widget.model.rows[1][0]).toEqual([]);
+    expect(widget.model.rows[1][1].some((seg) => seg.text === "右")).toBe(true);
+  });
+});
+
 // 批次四·P1 回归：`[^a](x)` 被 lezer 整体解析为 Link，前缀不得再生成脚注 widget
 // （修复前：脚注 replace 与 Link 隐藏装饰 replace 相交——CM 明令禁止、行为未定义）
 describe("脚注引用与带目标链接的装饰重叠（[^注](2024)）", () => {

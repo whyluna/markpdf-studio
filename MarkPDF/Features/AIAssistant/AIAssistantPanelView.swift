@@ -496,10 +496,10 @@ struct AIAssistantPanelView: View {
         Image(systemName: "sparkles")
           .foregroundStyle(.secondary)
         Text("AI 助手")
-          .font(.headline)
+          .font(.system(size: AppTypography.panelTitle, weight: .semibold))
         if !chat.providerBadge.isEmpty {
           Text(chat.providerBadge)
-            .font(.caption)
+            .font(.system(size: AppTypography.secondary))
             .foregroundStyle(.tertiary)
             .lineLimit(1)
         }
@@ -510,12 +510,12 @@ struct AIAssistantPanelView: View {
         } label: {
           HStack(spacing: 3) {
             Image(systemName: "pencil.line")
-              .font(.system(size: 9, weight: .semibold))
+              .font(.system(size: AppTypography.metadata, weight: .semibold))
             Text("写作")
-              .font(.caption2.weight(.medium))
+              .font(.system(size: AppTypography.secondary, weight: .medium))
           }
-          .padding(.horizontal, 7)
-          .padding(.vertical, 3)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
           .background(
             chat.isWritingMode ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06),
             in: Capsule()
@@ -543,7 +543,7 @@ struct AIAssistantPanelView: View {
       }
       // 会话线程归属（FR-AI.3：每文档一条线程，切文档自动切换）
       Text(threadCaption)
-        .font(.caption)
+        .font(.system(size: AppTypography.secondary))
         .foregroundStyle(.tertiary)
         .lineLimit(1)
     }
@@ -664,7 +664,7 @@ struct AIAssistantPanelView: View {
   private func failureRow(_ message: String) -> some View {
     HStack(alignment: .top, spacing: 8) {
       Text(message)
-        .font(.caption)
+        .font(.system(size: AppTypography.secondary))
         .foregroundStyle(.red)
         .lineLimit(3)
       Spacer()
@@ -685,14 +685,14 @@ struct AIAssistantPanelView: View {
         // 回车发送、⌘↵ 换行（2026-08-19 用户决策）
         ZStack(alignment: .topLeading) {
           TextEditor(text: $draft)
-            .font(.system(size: 14))
+            .font(.system(size: AppTypography.primary))
             .scrollContentBackground(.hidden)
             // 高度交给外层分栏的下栏（ NSSplitView 逐帧驱动）
             .frame(minHeight: 56, maxHeight: .infinity)
             .focused($inputFocused)
           if draft.isEmpty {
             Text(chat.isWritingMode ? "描述要写或要改的文件…（回车发送，⌘↵ 换行）" : "向 AI 提问…（回车发送，⌘↵ 换行）")
-              .font(.system(size: 14))
+              .font(.system(size: AppTypography.primary))
               .foregroundStyle(.tertiary)
               // 实测对齐（textprobe）：TextEditor 内部 textContainerInset=(0,0)、
               // lineFragmentPadding=5，空文本光标行顶格 y=0 高 17pt——
@@ -751,9 +751,9 @@ struct AIAssistantPanelView: View {
     Button(action: toggle) {
       HStack(spacing: 4) {
         Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-          .font(.system(size: 11))
+          .font(.system(size: AppTypography.metadata))
         Text(title)
-          .font(.callout)
+          .font(.system(size: AppTypography.secondary))
           .lineLimit(1)
       }
       .fixedSize()

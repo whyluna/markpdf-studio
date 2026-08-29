@@ -54,6 +54,32 @@ final class SettingsStoreTests: XCTestCase {
     XCTAssertEqual(store.pdfViewMode, .continuous)
   }
 
+  @MainActor
+  func testLegacyTypographyDefaultsMigrateOnce() {
+    defaults.set(15.5, forKey: "settings.editorFontSize")
+    defaults.set(780.0, forKey: "settings.editorPageWidth")
+
+    let migrated = SettingsStore(defaults: defaults)
+    XCTAssertEqual(migrated.editorFontSize, 16.0)
+    XCTAssertEqual(migrated.editorPageWidth, 830.0)
+
+    // 用户迁移后主动选回旧数值：下一次启动必须尊重用户选择。
+    migrated.editorFontSize = 15.5
+    migrated.editorPageWidth = 780.0
+    let reopened = SettingsStore(defaults: defaults)
+    XCTAssertEqual(reopened.editorFontSize, 15.5)
+    XCTAssertEqual(reopened.editorPageWidth, 780.0)
+  }
+
+  @MainActor
+  func testTypographyMigrationPreservesCustomizedValues() {
+    defaults.set(17.0, forKey: "settings.editorFontSize")
+    defaults.set(960.0, forKey: "settings.editorPageWidth")
+    let store = SettingsStore(defaults: defaults)
+    XCTAssertEqual(store.editorFontSize, 17.0)
+    XCTAssertEqual(store.editorPageWidth, 960.0)
+  }
+
   func testPDFViewModeMapping() {
     XCTAssertEqual(SettingsStore.PDFViewMode.continuous.pdfDisplayMode, .singlePageContinuous)
     XCTAssertEqual(SettingsStore.PDFViewMode.singlePage.pdfDisplayMode, .singlePage)

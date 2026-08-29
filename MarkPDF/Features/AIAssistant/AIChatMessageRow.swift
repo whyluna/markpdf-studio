@@ -29,7 +29,7 @@ struct AIChatMessageRow: View {
       userMessageText.textSelection(.enabled)
       if let summary = message.contextSummary {
         Text("已附带：\(summary)")
-          .font(.caption)
+          .font(.system(size: AppTypography.secondary))
           .foregroundStyle(.tertiary)
       }
     }
@@ -38,7 +38,7 @@ struct AIChatMessageRow: View {
 
   private var userMessageText: some View {
     Text(message.content)
-      .font(.system(size: 14))
+      .font(.system(size: AppTypography.primary))
       .padding(.horizontal, 10)
       .padding(.vertical, 6)
       .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
@@ -56,7 +56,7 @@ struct AIChatMessageRow: View {
       }
       if message.writingNoProposal {
         Label(writingNoProposalMessage, systemImage: "exclamationmark.triangle")
-          .font(.caption)
+          .font(.system(size: AppTypography.secondary))
           .foregroundStyle(.orange)
           .help(failedWriteActivity?.resultSummary ?? "")
       }
@@ -67,7 +67,7 @@ struct AIChatMessageRow: View {
         }
         if message.wasCancelled {
           Text("已停止")
-            .font(.caption2)
+            .font(.system(size: AppTypography.metadata))
             .foregroundStyle(.tertiary)
         }
         // 复制按钮常驻（淡显），悬停变实—— hover 才出现时鼠标移向按钮的
@@ -96,19 +96,19 @@ struct AIChatMessageRow: View {
               .controlSize(.mini)
           } else if activity.hasFailed {
             Image(systemName: "xmark.circle.fill")
-              .font(.system(size: 10))
+              .font(.system(size: AppTypography.compact))
               .foregroundStyle(.red)
           } else if activity.isPartialSuccess {
             Image(systemName: "exclamationmark.circle.fill")
-              .font(.system(size: 10))
+              .font(.system(size: AppTypography.compact))
               .foregroundStyle(.orange)
           } else {
             Image(systemName: "checkmark.circle")
-              .font(.system(size: 10))
+              .font(.system(size: AppTypography.compact))
               .foregroundStyle(.secondary)
           }
           Text(activityLabel(activity))
-            .font(.caption)
+            .font(.system(size: AppTypography.secondary))
             .foregroundStyle(activity.hasFailed ? Color.red : (activity.isPartialSuccess ? Color.orange : Color.secondary))
             .lineLimit(1)
         }
@@ -184,7 +184,7 @@ struct AIChatMessageRow: View {
     let bodyHeight: CGFloat
     if message.role == .user {
       let textWidth = max(contentWidth - 20, 30)
-      let text = textHeight(message.content, font: .systemFont(ofSize: 14), width: textWidth)
+      let text = textHeight(message.content, font: .systemFont(ofSize: AppTypography.primary), width: textWidth)
       bodyHeight = text + 12 + (message.contextSummary == nil ? 0 : 17 + 3)
     } else {
       var components: [CGFloat] = []
@@ -248,7 +248,7 @@ struct AIChatMessageRow: View {
       DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copyFeedback = false }
     } label: {
       Image(systemName: copyFeedback ? "checkmark" : "doc.on.doc.fill")
-        .font(.system(size: 10, weight: .medium))
+        .font(.system(size: AppTypography.compact, weight: .medium))
         .foregroundStyle(copyFeedback ? Color.green : Color.secondary)
         .frame(width: 22, height: 20)
         .background(Color.primary.opacity(0.06), in: Capsule())

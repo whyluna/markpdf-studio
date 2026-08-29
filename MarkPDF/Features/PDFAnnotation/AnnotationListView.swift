@@ -43,7 +43,7 @@ struct AnnotationListView: View {
   private var header: some View {
     HStack {
       Text("全部标注 · \(items.count)")
-        .font(.caption)
+        .font(.system(size: AppTypography.secondary))
         .fontWeight(.semibold)
         .foregroundStyle(.tertiary)
       Spacer()
@@ -61,7 +61,7 @@ struct AnnotationListView: View {
         }
       } label: {
         Label(sortOrder.title, systemImage: "arrow.up.arrow.down")
-          .font(.caption)
+          .font(.system(size: AppTypography.secondary))
       }
       .menuStyle(.borderlessButton)
       .fixedSize()
@@ -182,18 +182,18 @@ private struct AnnotationRow: View {
             }
         } else {
           Text(item.displayText.isEmpty ? "（无文本）" : item.displayText)
-            .font(.system(size: 13))
+            .font(.system(size: AppTypography.primary))
             .foregroundStyle(item.displayText.isEmpty ? .tertiary : .primary)
             .lineLimit(3)
             .truncationMode(.tail)
         }
         HStack(spacing: 0) {
           Text("\(item.kind.title) · 第 \(item.pageLabel) 页")
-            .font(.caption)
+            .font(.system(size: AppTypography.secondary))
             .foregroundStyle(.secondary)
           if !item.name.isEmpty, !isRenaming {
             Text(" · 已命名")
-              .font(.caption)
+              .font(.system(size: AppTypography.secondary))
               .foregroundStyle(.tertiary)
           }
         }

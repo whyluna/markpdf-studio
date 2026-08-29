@@ -584,7 +584,7 @@ function collectHeadingsForToc(state) {
 class TableWidget extends WidgetType {
   constructor(model, source) {
     super();
-    this.model = model; // { header: [segs], rows: [[segs]], rowOffsets: [int] }
+    this.model = model; // { header: [segs], rows: [[segs]], rowOffsets: [int], showHeader: bool }
     this.source = source; // 表格源码文本，用于 eq 去重
   }
   eq(o) {
@@ -593,8 +593,8 @@ class TableWidget extends WidgetType {
   get estimatedHeight() {
     const cached = widgetHeightCache.get("t:" + this.source);
     if (cached) return cached;
-    // 行高 = 单元格 padding 16 + 文本行 ~22；表头也算一行；上下 padding 16
-    return (this.model.rows.length + 1) * 38 + 16;
+    // 行高 = 单元格 padding 16 + 文本行 ~22；全空表头不生成 thead；上下 padding 16
+    return (this.model.rows.length + (this.model.showHeader !== false ? 1 : 0)) * 38 + 16;
   }
   toDOM(view) {
     const wrap = document.createElement("div");
@@ -635,16 +635,20 @@ class TableWidget extends WidgetType {
       }
     };
 
-    const thead = document.createElement("thead");
-    const htr = document.createElement("tr");
-    htr.dataset.row = 0;
-    for (const segs of this.model.header) {
-      const th = document.createElement("th");
-      appendSegs(th, segs);
-      htr.appendChild(th);
+    // GFM 必须有表头源码行，但常见的“无标题键值表”会把所有表头单元格留空。
+    // 与 VS Code 等工具一致：仍按列解析，只是不渲染一整行空白 thead。
+    if (this.model.showHeader !== false) {
+      const thead = document.createElement("thead");
+      const htr = document.createElement("tr");
+      htr.dataset.row = 0;
+      for (const segs of this.model.header) {
+        const th = document.createElement("th");
+        appendSegs(th, segs);
+        htr.appendChild(th);
+      }
+      thead.appendChild(htr);
+      table.appendChild(thead);
     }
-    thead.appendChild(htr);
-    table.appendChild(thead);
 
     const tbody = document.createElement("tbody");
     this.model.rows.forEach((row, i) => {
@@ -927,9 +931,44 @@ function resolveImageURL(src) {
   }
 }
 
+// 从 TableHeader / TableRow 恢复完整列位。Lezer 会省略空单元格的 TableCell 节点，
+// 不能直接 compactMap 节点，否则全空表头会被误判失败、部分空表头/空正文格会左移错列。
+function tableRowCells(state, rowNode) {
+  const delimiters = [];
+  const parsedCells = [];
+  for (let child = rowNode.firstChild; child; child = child.nextSibling) {
+    if (child.name === "TableDelimiter") delimiters.push(child);
+    else if (child.name === "TableCell") parsedCells.push(child);
+  }
+  if (delimiters.length === 0) {
+    return parsedCells.map((cell) => cellSegments(state, cell));
+  }
+
+  // 行首/行尾 pipe 只是边框，不增加列；中间 pipe 才是列分隔符。
+  const beforeFirst = state.doc.sliceString(rowNode.from, delimiters[0].from);
+  const afterLast = state.doc.sliceString(delimiters[delimiters.length - 1].to, rowNode.to);
+  const hasLeadingPipe = beforeFirst.trim() === "";
+  const hasTrailingPipe = afterLast.trim() === "";
+  const internal = delimiters.slice(hasLeadingPipe ? 1 : 0, hasTrailingPipe ? -1 : undefined);
+
+  const starts = [hasLeadingPipe ? delimiters[0].to : rowNode.from];
+  const ends = [];
+  for (const delimiter of internal) {
+    ends.push(delimiter.from);
+    starts.push(delimiter.to);
+  }
+  ends.push(hasTrailingPipe ? delimiters[delimiters.length - 1].from : rowNode.to);
+
+  return starts.map((from, index) => {
+    const to = ends[index];
+    const cell = parsedCells.find((candidate) => candidate.from >= from && candidate.to <= to);
+    return cell ? cellSegments(state, cell) : [];
+  });
+}
+
 // 遍历 Table 节点，提取表头/数据行单元格与各行相对表格起点的偏移；解析失败返回 null（降级源码样式）
 function buildTableModel(state, tableNode) {
-  const header = [];
+  let header = null;
   const rows = [];
   const rowOffsets = [];
   let widgetFrom = -1;
@@ -937,16 +976,18 @@ function buildTableModel(state, tableNode) {
     if (child.name !== "TableHeader" && child.name !== "TableRow") continue;
     const lineFrom = state.doc.lineAt(child.from).from;
     if (widgetFrom < 0) widgetFrom = lineFrom;
-    const cells = [];
-    for (let cell = child.firstChild; cell; cell = cell.nextSibling) {
-      if (cell.name === "TableCell") cells.push(cellSegments(state, cell));
-    }
+    const cells = tableRowCells(state, child);
     rowOffsets.push(lineFrom - widgetFrom);
-    if (child.name === "TableHeader") header.push(...cells);
+    if (child.name === "TableHeader") header = cells;
     else rows.push(cells);
   }
-  if (header.length === 0) return null;
-  return { header, rows, rowOffsets };
+  if (!header || header.length === 0) return null;
+  // GFM：正文缺列补空格，多出的列忽略；保证 DOM 每行列数稳定。
+  const normalizedRows = rows.map((row) =>
+    Array.from({ length: header.length }, (_, index) => row[index] ?? [])
+  );
+  const showHeader = header.some((cell) => cell.length > 0);
+  return { header, rows: normalizedRows, rowOffsets, showHeader };
 }
 
 /* ---------- 装饰构建 ---------- */
