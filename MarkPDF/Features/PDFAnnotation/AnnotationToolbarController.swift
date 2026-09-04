@@ -18,7 +18,10 @@ final class AnnotationToolbarController: NSObject {
   private let aiSettings: AISettingsStore
   private let translationStore: TranslationStore
   private var hostingView: NSHostingView<SelectionFloatingPanel>?
-  private var mouseUpMonitor: Any?
+  private var selectionMouseMonitor: Any?
+  /// 只在正文 mouseDown 时建立，mouseUp 消费一次；不能借用 PDFView 上一次的起点。
+  private var selectionGesture: (start: NSPoint, document: PDFDocument)?
+  private var selectionGestureGeneration = 0
   private var keyMonitor: Any?
   private var toolCancellable: AnyCancellable?
   private var translationCancellable: AnyCancellable?
@@ -53,12 +56,10 @@ final class AnnotationToolbarController: NSObject {
       name: .PDFViewSelectionChanged,
       object: pdfView
     )
-    // 鼠标松开才弹出（划词途中不打扰）；只响应本窗事件——
-    // 别窗/侧栏的点击不应触发本视图的重排与面板复活
-    mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-      if event.window === self?.pdfView?.window {
-        self?.revealIfSelection(at: event)
-      }
+    // 同窗 mouseUp 也可能来自工具条、译文或侧栏。必须先配对真正命中正文的
+    // mouseDown，否则按钮位置会被当成选词终点，误裁跨行选区并移动在途按钮。
+    selectionMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
+      self?.handleSelectionMouseEvent(event)
       return event
     }
     // 点击既有标注 → 点选删除：走 pdfView 的 mouseDown 钩子而非手势识别器
@@ -111,8 +112,8 @@ final class AnnotationToolbarController: NSObject {
 
   deinit {
     NotificationCenter.default.removeObserver(self)
-    if let mouseUpMonitor {
-      NSEvent.removeMonitor(mouseUpMonitor)
+    if let selectionMouseMonitor {
+      NSEvent.removeMonitor(selectionMouseMonitor)
     }
     if let keyMonitor {
       NSEvent.removeMonitor(keyMonitor)
@@ -138,16 +139,55 @@ final class AnnotationToolbarController: NSObject {
     }
   }
 
-  private func revealIfSelection(at event: NSEvent) {
+  /// 本地事件监听入口；不吞事件，不在按钮的 mouseUp 分派前改变选区或工具条。
+  func handleSelectionMouseEvent(_ event: NSEvent) {
+    switch event.type {
+    case .leftMouseDown:
+      selectionGestureGeneration += 1
+      selectionGesture = nil
+      guard let pdfView, let window = pdfView.window, event.window === window,
+        let document = pdfView.document, let content = window.contentView
+      else { return }
+      // hitTest 参数必须是被测视图的父坐标；从窗口根命中可排除覆盖层和另一侧 PDF。
+      let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+      guard let hit = content.hitTest(point), hit === pdfView || hit.isDescendant(of: pdfView) else { return }
+      // 滚动条虽在 PDFView 子树内，但不是一次文本选择。
+      var ancestor: NSView? = hit
+      while let view = ancestor, view !== pdfView {
+        if view is NSScroller { return }
+        ancestor = view.superview
+      }
+      selectionGesture = (pdfView.convert(event.locationInWindow, from: nil), document)
+    case .leftMouseUp:
+      let gesture = selectionGesture
+      selectionGesture = nil
+      guard let gesture, let pdfView, let window = pdfView.window,
+        event.window === window, pdfView.document === gesture.document
+      else { return }
+      let end = pdfView.convert(event.locationInWindow, from: nil)
+      let generation = selectionGestureGeneration
+      // 本地监听早于事件分派；等 PDFKit 处理完松手再读取最终选区。
+      DispatchQueue.main.async { [weak self, weak window] in
+        guard let self, let window, self.pdfView?.window === window,
+          self.selectionGestureGeneration == generation,
+          self.pdfView?.document === gesture.document
+        else { return }
+        self.revealIfSelection(dragStart: gesture.start, dragEnd: end)
+      }
+    default:
+      break
+    }
+  }
+
+  private func revealIfSelection(dragStart: NSPoint, dragEnd: NSPoint) {
     guard let pdfView, pdfView.currentSelection != nil, !(pdfView.currentSelection?.pages.isEmpty ?? true) else {
       hide()
       return
     }
     // 双栏跨栏误选裁剪：拖拽起止在同一栏时仅保留该栏内容（右栏划词不再连带左栏）
-    let dragEnd = pdfView.convert(event.locationInWindow, from: nil)
     SelectionColumnTrimmer.trimSelection(
       of: pdfView,
-      dragStart: (pdfView as? ZoomablePDFView)?.lastMouseDownPoint,
+      dragStart: dragStart,
       dragEnd: dragEnd
     )
     guard let selection = pdfView.currentSelection, !selection.pages.isEmpty else {

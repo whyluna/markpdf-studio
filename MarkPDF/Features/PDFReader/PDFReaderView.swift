@@ -34,7 +34,8 @@ final class ZoomablePDFView: PDFView {
   /// 容差不触发识别，若只靠点击手势，「选中 → 浮动工具条标注」全程不产生焦点认领
   var onFocusClaim: (() -> Void)?
 
-  /// 最近一次 mouseDown 位置（视图坐标）：划词选区分栏裁剪（SelectionColumnTrimmer）的拖拽起点
+  /// 最近一次正文 mouseDown 位置（视图坐标）：区分超链接点击和拖拽选词。
+  /// 浮动工具条的裁栏逻辑自行配对一次性事件，不能复用这里的历史位置。
   private(set) var lastMouseDownPoint: NSPoint?
 
   override init(frame frameRect: NSRect) {
