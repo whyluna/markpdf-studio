@@ -595,18 +595,21 @@ final class AnnotationToolbarController: NSObject {
     hideDelete()
   }
 
-  /// 标注增删后立刻重画（只涉及改动过的那几页，实际绘制仅发生在可见区域，开销可忽略）。
+  /// 标注增删后只失效真正变化的页；空集合不能失效整本文档（普通标注后滚动卡顿）。
   /// 关键是失效通知要打在 documentView 上——页面是画在 PDFView 的内层文档视图里的，
   /// 只标脏 PDFView 自己不会重画标注层，实测删掉批注后高亮/虚线/图标要等下一次刷新才消失
   private func redraw(pages: [PDFPage]) {
-    guard let pdfView else { return }
+    guard !pages.isEmpty, let pdfView else { return }
     for page in pages {
       pdfView.annotationsChanged(on: page)
+      let rect = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
+      guard rect.isFiniteRect else { continue }
+      if let documentView = pdfView.documentView {
+        documentView.setNeedsDisplay(documentView.convert(rect, from: pdfView))
+      }
+      let visible = rect.intersection(pdfView.bounds)
+      if !visible.isEmpty, !visible.isNull { pdfView.setNeedsDisplay(visible) }
     }
-    if let documentView = pdfView.documentView {
-      documentView.setNeedsDisplay(documentView.bounds)
-    }
-    pdfView.setNeedsDisplay(pdfView.bounds)
   }
 
   private func hideDelete() {
@@ -677,6 +680,12 @@ final class AnnotationToolbarController: NSObject {
     commentCardCancellable = store.$revision
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.rebuildCommentCards() }
+    // didLiveScroll 同时覆盖无 phase 的普通鼠标滚轮；惯性滚动期间也持续报告。
+    for name in [NSScrollView.willStartLiveScrollNotification,
+      NSScrollView.didLiveScrollNotification, NSScrollView.didEndLiveScrollNotification] {
+      NotificationCenter.default.addObserver(self, selector: #selector(viewportScrollActivity(_:)),
+        name: name, object: nil)
+    }
     for name in [Notification.Name.PDFViewScaleChanged, .PDFViewPageChanged] {
       NotificationCenter.default.addObserver(
         self, selector: #selector(commentCardsLayoutChanged), name: name, object: pdfView
@@ -706,6 +715,12 @@ final class AnnotationToolbarController: NSObject {
       )
     }
     rebuildCommentCards()
+  }
+
+  @objc private func viewportScrollActivity(_ notification: Notification) {
+    guard let pdfView, let scrollView = notification.object as? NSScrollView,
+      scrollView.isDescendant(of: pdfView) else { return }
+    store.noteViewportInteraction()
   }
 
   @objc private func commentCardsLayoutChanged() {
@@ -740,7 +755,7 @@ final class AnnotationToolbarController: NSObject {
   }
 
   /// 全量重建：清空后为「可见页」的每个批注标记建卡（数量小，直接全建）
-  private func rebuildCommentCards() {
+  func rebuildCommentCards() {
     guard let pdfView else { return }
     visiblePagesSignature = pdfView.visiblePages
       .compactMap { pdfView.document?.index(for: $0) }
@@ -754,9 +769,7 @@ final class AnnotationToolbarController: NSObject {
     for page in pdfView.visiblePages {
       let pageBounds = page.bounds(for: pdfView.displayBox)
       for marker in page.annotations where marker.isCommentMarker {
-        if !commentPages.contains(where: { $0 === page }) {
-          commentPages.append(page)
-        }
+        var pageChanged = false
         let isLeft = marker.bounds.midX < pageBounds.midX
         // 内容锚点（页坐标）：高亮合集的近侧边缘 + 行中心；无高亮退用旧虚线点远端
         var anchor: NSPoint? = nil
@@ -769,7 +782,7 @@ final class AnnotationToolbarController: NSObject {
           if b.width > 5 {
             contentUnion = contentUnion?.union(b) ?? b
             // 只作为虚线框的几何数据，原生下划线/高亮不参与显示。
-            PDFAnnotationStore.hideNativeCommentVisualForOverlay(annotation)
+            pageChanged = PDFAnnotationStore.hideNativeCommentVisualForOverlay(annotation) || pageChanged
           } else if kind == .highlight, b.width < 2, b.height < 2 {
             legacyDots.append(annotation)
           }
@@ -783,11 +796,13 @@ final class AnnotationToolbarController: NSObject {
           anchor = NSPoint(x: far.bounds.midX, y: far.bounds.midY)
         }
         // 卡片会因同侧避让而离开原锚点，不能依赖它遮住原生 /Text 图标。
-        PDFAnnotationStore.hideNativeCommentVisualForOverlay(marker)
+        pageChanged = PDFAnnotationStore.hideNativeCommentVisualForOverlay(marker) || pageChanged
         for dot in legacyDots {
           page.removeAnnotation(dot)
           migratedPages.insert(page)
+          pageChanged = true
         }
+        if pageChanged, !commentPages.contains(where: { $0 === page }) { commentPages.append(page) }
         let slot = CommentCardSlot(
           marker: marker,
           hosting: NSHostingView(rootView: CommentCardView(

@@ -96,4 +96,58 @@ final class AnnotationItemsCacheTests: XCTestCase {
     doc.page(at: 0)!.addAnnotation(highlight(y: 50))
     XCTAssertEqual(store.annotationItems().count, 1, "annotationItems() 应保持实时全扫语义")
   }
+
+  func testScrollDefersRefreshAndSaveThenAutomaticallyCatchesUp() async throws {
+    var now: TimeInterval = 10
+    store = PDFAnnotationStore(defaults: defaults, uptime: { now })
+    let (doc, url) = makeDocument()
+    store.attach(document: doc, url: url)
+    store.add(highlight(y: 50), to: doc.page(at: 0)!)
+    store.noteViewportInteraction()
+    let revision = store.revision
+    // fake monotonic time stays inside scrolling grace period while real debounce timers run.
+    try await Task.sleep(nanoseconds: 650_000_000)
+    XCTAssertEqual(store.revision, revision, "滚动期间不应刷新整份标注列表")
+    XCTAssertTrue(store.hasUnsavedChanges, "滚动期间不启动保存快照")
+    XCTAssertTrue(PDFDocument(url: url)!.page(at: 0)!.annotations.isEmpty)
+    // 对非标注属性的发布也不应由每帧滚动产生；停止滚动不需要再次标注才能保存。
+    now += 1
+    try await Task.sleep(nanoseconds: 650_000_000)
+    XCTAssertEqual(store.revision, revision + 1)
+    XCTAssertEqual(store.annotationItemsSnapshot.count, 1)
+    XCTAssertFalse(store.hasUnsavedChanges)
+    XCTAssertEqual(PDFDocument(url: url)!.page(at: 0)!.annotations.count, 1)
+  }
+
+  func testExplicitFlushStillSavesWhileScrolling() throws {
+    store = PDFAnnotationStore(defaults: defaults, uptime: { 10 })
+    let (doc, url) = makeDocument()
+    store.attach(document: doc, url: url)
+    store.add(highlight(y: 50), to: doc.page(at: 0)!)
+    store.noteViewportInteraction()
+    store.flushPendingWrites(blocking: true)
+    XCTAssertFalse(store.hasUnsavedChanges)
+    XCTAssertEqual(PDFDocument(url: url)!.page(at: 0)!.annotations.count, 1,
+      "关闭/退出的强制保存不能被滚动避让挡住")
+  }
+
+  func testInteractionThatStartsAfterMarkingAlsoDefersPendingTimers() async throws {
+    let (doc, url) = makeDocument()
+    store.attach(document: doc, url: url)
+    store.add(highlight(y: 50), to: doc.page(at: 0)!)
+    var editing = true
+    let token = store.registerInteractionCheck { editing }
+    defer { store.unregisterInteractionCheck(token) }
+    let revision = store.revision
+    try await Task.sleep(nanoseconds: 650_000_000)
+    XCTAssertEqual(store.revision, revision)
+    XCTAssertTrue(store.hasUnsavedChanges)
+    store.resumeDeferredWrites()
+    XCTAssertTrue(store.hasUnsavedChanges, "其他编辑框仍打开时不恢复保存")
+    editing = false
+    store.resumeDeferredWrites()
+    try await Task.sleep(nanoseconds: 650_000_000)
+    XCTAssertEqual(store.revision, revision + 1)
+    XCTAssertEqual(PDFDocument(url: url)!.page(at: 0)!.annotations.count, 1)
+  }
 }

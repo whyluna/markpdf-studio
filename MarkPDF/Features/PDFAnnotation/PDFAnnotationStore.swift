@@ -37,6 +37,14 @@ final class PDFAnnotationStore: ObservableObject {
 
   private var writer: AnnotationWriter
   private let defaults: UserDefaults
+  private let uptime: () -> TimeInterval
+  private var viewportActivityUntil: TimeInterval = 0
+  /// 包括触控板惯性和普通鼠标滚轮；只记时间，不发布 SwiftUI 状态或重新创建任务。
+  func noteViewportInteraction() {
+    viewportActivityUntil = uptime() + 0.2
+  }
+
+  private var isViewportActive: Bool { uptime() < viewportActivityUntil }
   private let debouncer = Debouncer(interval: 0.5)
   /// 交互进行中查询（批注编辑框 / 点选编辑条是否打开）：由 AnnotationToolbarController 注册。
   /// 期间的标注变更只标脏不落盘，交互结束统一写（见 markDirty）。
@@ -72,9 +80,11 @@ final class PDFAnnotationStore: ObservableObject {
   /// sidecar 加载持续失败只提示一次（attach 随分栏焦点切换反复发生），加载恢复后复位
   private var hasReportedSidecarLoadFailure = false
 
-  init(writer: AnnotationWriter = LiveAnnotationWriter(), defaults: UserDefaults = .standard) {
+  init(writer: AnnotationWriter = LiveAnnotationWriter(), defaults: UserDefaults = .standard,
+    uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
     self.writer = writer
     self.defaults = defaults
+    self.uptime = uptime
     var colors: [AnnotationKind: AnnotationColor] = [:]
     for kind in AnnotationKind.allCases {
       if let raw = defaults.string(forKey: Self.colorKey(for: kind)),
@@ -409,7 +419,7 @@ final class PDFAnnotationStore: ObservableObject {
 
   /// 交互结束（编辑框关闭 / 编辑条收起）：把挂起的重扫与写回排上
   func resumeDeferredWrites() {
-    guard hasDeferredWrites else { return }
+    guard hasDeferredWrites, !anyInteracting else { return }
     hasDeferredWrites = false
     scheduleWrites()
   }
@@ -424,11 +434,39 @@ final class PDFAnnotationStore: ObservableObject {
   }
 
   private func scheduleWrites() {
+    scheduleRevisionRefresh()
+    scheduleBackgroundWrite()
+  }
+
+  private func scheduleRevisionRefresh() {
     revisionDebouncer.schedule { [weak self] in
-      self?.revision += 1
+      guard let self else { return }
+      guard !self.anyInteracting else {
+        self.hasDeferredWrites = true
+        return
+      }
+      // 标注后立即滚动时不要插入列表重扫/覆盖层刷新；滚动停止后自动补做。
+      guard !self.isViewportActive else {
+        self.scheduleRevisionRefresh()
+        return
+      }
+      self.revision += 1
     }
+  }
+
+  private func scheduleBackgroundWrite() {
     debouncer.schedule { [weak self] in
-      self?.writeBackInBackground()
+      guard let self else { return }
+      guard !self.anyInteracting else {
+        self.hasDeferredWrites = true
+        return
+      }
+      // 重绘/序列化虽在私有后台 PDF 上，也会竞争 PDFKit/字体资源；滚动时不启动新保存。
+      guard !self.isViewportActive else {
+        self.scheduleBackgroundWrite()
+        return
+      }
+      self.writeBackInBackground()
     }
   }
 
