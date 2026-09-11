@@ -8,6 +8,8 @@ import SwiftUI
 /// 重排会丢弃残留图层变换（视觉弹回）。原生 pinch 直接改 scaleFactor，经
 /// PDFViewScaleChanged 通知同步 Store，状态栏比例实时跟随，边界由 min/maxScaleFactor 钳制
 final class ZoomablePDFView: PDFView {
+  /// 随文档在后台构建的导航快照；分栏焦点切换时直接复用。
+  var outlineIndex: PDFOutlineIndex?
   /// 手型光标区域（视图坐标）：命中时显示手型并屏蔽 PDFKit 的文本 I 形光标
   /// （用于浮动按钮——PDFView 会按文字命中把光标抢设为 I 形，必须在 PDFKit 管线内拦截）
   var handCursorRects: [CGRect] = []
@@ -330,8 +332,12 @@ struct PDFReaderView: NSViewRepresentable {
       // Bug 修复 1/2：查找状态整体复位（findMatches 是旧文档的 PDFSelection，
       // ⌘G/回车会作用于新文档，行为未定义）；缩放归位 100%，避免旧倍率在加载窗口期
       // 误关 autoScales（存档缩放由加载完成后的 restorePosition 恢复，不受影响）
-      pdfStore.resetForDocumentSwitch()
+      // 另一分栏在后台换文档时，不能清掉当前焦点 PDF 的目录和阅读状态。
+      if pdfStore.pdfView === pdfView {
+        pdfStore.resetForDocumentSwitch()
+      }
       // 切换文档：清空旧文档并异步解析新文档（同 makeNSView 的异步通道）
+      pdfView.outlineIndex = nil
       pdfView.document = nil
       context.coordinator.loadDocumentAsync(url: url)
       return
@@ -394,6 +400,7 @@ struct PDFReaderView: NSViewRepresentable {
   }
 
   static func dismantleNSView(_ viewport: PDFViewportView, coordinator: Coordinator) {
+    coordinator.cancelDocumentLoad()
     NotificationCenter.default.removeObserver(coordinator)
     // local monitor 由系统事件通道持有，与 coordinator 生命周期无关——
     // 不摘除则每次开 PDF 标签泄漏一个全局监控器（随标签开闭线性增长）
@@ -421,6 +428,7 @@ struct PDFReaderView: NSViewRepresentable {
     private(set) var requestedURL: URL?
     /// 文档解析代际号：快速连续切换时丢弃过期结果
     private var loadToken = 0
+    private var loadTask: Task<Void, Never>?
     /// 是否有解析在途
     private var inFlight = false
     /// 解析中的加载指示
@@ -449,6 +457,7 @@ struct PDFReaderView: NSViewRepresentable {
     /// 标注关联/位置恢复/待跳转页消费；大文档主线程同步解析会整窗卡顿。按代际号防串档。
     func loadDocumentAsync(url: URL) {
       if inFlight, requestedURL == url { return }
+      loadTask?.cancel()
       requestedURL = url
       loadToken += 1
       let token = loadToken
@@ -457,8 +466,11 @@ struct PDFReaderView: NSViewRepresentable {
       // 新一次加载尝试：清掉上次的失败占位与错误（Bug 修复 3）
       showLoadFailure(false)
       parent.pdfStore.lastError = nil
-      Task.detached(priority: .userInitiated) { [weak self] in
+      loadTask = Task.detached(priority: .userInitiated) { [weak self] in
         let document = PDFDocument(url: url)
+        // 文档尚未交给 UI，安全地在同一后台任务中提取导航；不在滚动/布局时扫页。
+        let outlineIndex = document.map { PDFOutlineIndex.build(document: $0, isCancelled: { Task.isCancelled }) }
+        guard !Task.isCancelled else { return }
         await MainActor.run { [weak self] in
           guard let self, token == self.loadToken, let pdfView = self.pdfView else { return }
           self.inFlight = false
@@ -472,12 +484,14 @@ struct PDFReaderView: NSViewRepresentable {
             return
           }
           pdfView.document = document
+          (pdfView as? ZoomablePDFView)?.outlineIndex = outlineIndex
           pdfView.autoScales = true
           self.lastLivePageIndex = -1
           self.startScrollObservationIfNeeded()
           // 分栏双 PDF：仅本 pane 当前持有焦点时才关联标注 Store——否则后加载完成的
           // 视图会覆盖先加载视图的关联，把 A 窗标注写进 B 文档（焦点切换由 claimFocus 补关联）
           if self.parent.pdfStore.pdfView === pdfView {
+            self.parent.pdfStore.refreshOutlineIndex()
             self.parent.annotationStore.attach(document: document, url: url)
           }
           self.syncPageState()
@@ -486,6 +500,13 @@ struct PDFReaderView: NSViewRepresentable {
           self.jumpToPendingPageIfAny()
         }
       }
+    }
+
+    func cancelDocumentLoad() {
+      loadToken += 1
+      loadTask?.cancel()
+      loadTask = nil
+      inFlight = false
     }
 
     /// 解析中的旋转指示（完成或失败后移除）；挂覆盖层宿主（夜间反色不波及 UI）

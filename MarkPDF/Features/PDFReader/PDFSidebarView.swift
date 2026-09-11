@@ -60,58 +60,37 @@ struct PDFSidebarView: View {
 
   // MARK: - 目录（文档大纲 + 用户书签）
 
-  /// 大纲扁平条目（行级渲染用；层级即缩进）
-  fileprivate struct OutlineEntry: Identifiable {
-    let outline: PDFOutline
-    let level: Int
-    /// 目标页（1 起；无目标为 nil——仅作容器的大纲节点不参与当前节判定）
-    let page: Int?
-    var id: ObjectIdentifier { ObjectIdentifier(outline) }
-  }
-
-  /// 扁平化缓存（@State）：原实现每次 body 求值都重建递归行树，
-  /// 而 currentPage 在滚动中持续发布 → 整树每秒重建几十次（下滚抽搐的根因）。
-  /// 换文档（docKey 变化）才重建
-  @State private var outlineEntries: [OutlineEntry] = []
-  @State private var outlineDocKey = ""
-
-  /// 扁平化文档大纲（递归转先序序列；目标页取 destination 页，命名目的地经 document 解析）
-  fileprivate static func flattenOutline(root: PDFOutline, in document: PDFDocument?) -> [OutlineEntry] {
-    var entries: [OutlineEntry] = []
-
-    func page(of outline: PDFOutline) -> Int? {
-      guard let page = outline.destination?.page, let document else { return nil }
-      return document.index(for: page) + 1
-    }
-    func walk(_ outline: PDFOutline, level: Int) {
-      entries.append(OutlineEntry(outline: outline, level: level, page: page(of: outline)))
-      for index in 0..<outline.numberOfChildren {
-        if let child = outline.child(at: index) {
-          walk(child, level: level + 1)
-        }
-      }
-    }
-    for index in 0..<root.numberOfChildren {
-      if let child = root.child(at: index) {
-        walk(child, level: 0)
-      }
-    }
-    return entries
-  }
+  private var outlineEntries: [PDFOutlineIndex.Entry] { pdfStore.outlineIndex?.entries ?? [] }
 
   private var bookmarkContent: some View {
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
           if !outlineEntries.isEmpty {
-            sectionTitle(String(localized: "文档大纲"))
+            sectionTitle(pdfStore.outlineIndex?.source == .linkedContents
+              ? String(localized: "目录（从目录页提取）") : String(localized: "文档大纲"))
             ForEach(outlineEntries) { entry in
               PDFOutlineRow(
                 entry: entry,
                 isActive: entry.id == activeOutlineEntryID
-              ) { destination in
-                pdfStore.go(to: destination)
+              ) {
+                pdfStore.go(to: entry)
               }
+            }
+          } else {
+            Text(pdfStore.lastError != nil ? String(localized: "目录暂不可用")
+              : (pdfStore.outlineIndex == nil ? String(localized: "正在读取目录…")
+                : String(localized: "此 PDF 未包含可用目录")))
+              .font(.system(size: AppTypography.secondary))
+              .foregroundStyle(.secondary)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 6)
+            if pdfStore.outlineIndex != nil {
+              Text("未找到内嵌目录或可提取的目录页链接，可使用缩略图或添加书签。")
+                .font(.system(size: AppTypography.metadata))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
             }
           }
           sectionTitle(String(localized: "我的书签"))
@@ -152,14 +131,12 @@ struct PDFSidebarView: View {
         .padding(8)
       }
       .onAppear {
-        rebuildOutlineEntriesIfNeeded()
         // 段切换重建 ScrollView 后回到当前节（否则回到文档开头）
         if let activeID = activeOutlineEntryID {
           proxy.scrollTo(activeID)
         }
       }
-      .onChange(of: pdfStore.pdfView?.document?.documentURL?.path ?? "") { _, _ in
-        rebuildOutlineEntriesIfNeeded()
+      .onChange(of: pdfStore.outlineIndex) { _, _ in
         // 切标签/换文档：等行重建与阅读位置恢复落定后滚到当前节
         //（异步解析 + currentPage 回写分几步完成，同步滚会打到旧位置）
         DispatchQueue.main.async {
@@ -179,19 +156,11 @@ struct PDFSidebarView: View {
   }
 
   /// 当前阅读页所属大纲条目（最后一个目标页 ≤ 当前页的条目）
-  private var activeOutlineEntryID: ObjectIdentifier? {
-    ActiveSection.index(
-      positions: outlineEntries.map { $0.page ?? .max },
-      current: pdfStore.currentPage
-    ).map { outlineEntries[$0].id }
-  }
-
-  private func rebuildOutlineEntriesIfNeeded() {
-    let document = pdfStore.pdfView?.document
-    let key = document?.documentURL?.path ?? ""
-    guard key != outlineDocKey else { return }
-    outlineDocKey = key
-    outlineEntries = document?.outlineRoot.flatMap { Self.flattenOutline(root: $0, in: document) } ?? []
+  private var activeOutlineEntryID: Int? {
+    // 容器节点没有目标页，不能用 .max 占位破坏二分查找的有序前提。
+    outlineEntries.last(where: { entry in
+      entry.page.map { $0 <= pdfStore.currentPage } ?? false
+    })?.id
   }
 
   private func sectionTitle(_ title: String) -> some View {
@@ -214,18 +183,14 @@ struct PDFSidebarView: View {
 // MARK: - 文档大纲行（扁平条目 + 当前节高亮）
 
 private struct PDFOutlineRow: View {
-  let entry: PDFSidebarView.OutlineEntry
+  let entry: PDFOutlineIndex.Entry
   let isActive: Bool
-  let onJump: (PDFDestination) -> Void
+  let onJump: () -> Void
   @State private var isHovered = false
 
   var body: some View {
-    Button {
-      if let destination = entry.outline.destination {
-        onJump(destination)
-      }
-    } label: {
-      Text(entry.outline.label ?? String(localized: "未命名"))
+    Button(action: onJump) {
+      Text(entry.title.isEmpty ? String(localized: "未命名") : entry.title)
         .font(.system(size: AppTypography.primary))
         .fontWeight(isActive ? .semibold : .regular)
         .foregroundStyle(isActive ? Color.accentColor : Color.primary)

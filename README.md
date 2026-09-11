@@ -27,7 +27,7 @@ MarkPDF 把通常分散在阅读器、Markdown 编辑器和 AI 对话框里的�
 | 模块 | 能力 |
 |---|---|
 | **Markdown 编辑** | 所见即所得 / 源码 / 阅读三模式 · GFM 全集 · KaTeX / Mermaid / 脚注 / 高亮 / Callout · 文内 TOC · 图片尺寸语法与粘贴自动入 assets · 导出 PDF / HTML · 打字机与专注模式 |
-| **PDF 阅读** | 缩放 50%–400% · 大纲 / 书签 / 缩略图 · 页内搜索 · 阅读位置记忆 · 夜间主题（智能反色、图片不反色） |
+| **PDF 阅读** | 缩放 50%–400% · 内嵌目录 / 可点击目录页提取 / 书签 / 缩略图 · 页内搜索 · 阅读位置记忆 · 夜间主题（智能反色、图片不反色） |
 | **PDF 标注** | 高亮 / 下划线 / 删除线 / 页边批注 · 四色系统 · 写回标准 PDF（自动 .bak 备份）· 只读 sidecar 模式 · 一键导出全部标注为 Markdown（按页分组 + 页码回链 + 增量去重） |
 | **划词翻译** | PDF 选中松手即弹译文气泡 · 双引擎：系统翻译（macOS 15 端侧、不出网）/ AI 大模型 · 中英互译自动判断、目标语言可设 · 顶部开关切自动/手动 |
 | **AI 阅读与写作** | 右侧面板 `⌘⇧A` 多轮流式问答 · 三层上下文（选中文字 / 当前文档 / 工作区工具）· Agent 自主「搜索 → 看大纲 → 读章节」· 回答带来源锚点 · 写作模式生成可审查提案，支持逐段勾选、diff、应用与撤销 · 会话按文档分线程并持久化 |
@@ -39,8 +39,8 @@ MarkPDF 把通常分散在阅读器、Markdown 编辑器和 AI 对话框里的�
 ## 下载安装
 
 - **要求**：macOS 15 Sequoia 及以上（Apple Silicon / Intel）
-- 下载 [**MarkPDF-1.0.5.dmg**](https://github.com/whyluna/markpdf-studio/releases/download/v1.0.5/MarkPDF-1.0.5.dmg)，打开后把 MarkPDF.app 拖入 Applications（后续版本见 [Releases](https://github.com/whyluna/markpdf-studio/releases)）
-- **SHA-256**：`b7fb8ad7d36d822f722a9310d98e1d02acdde18e86e028bdd4dc404489dcbbac`（通用二进制：`arm64 + x86_64`）
+- 下载 [**MarkPDF-1.0.6.dmg**](https://github.com/whyluna/markpdf-studio/releases/download/v1.0.6/MarkPDF-1.0.6.dmg)，打开后把 MarkPDF.app 拖入 Applications（后续版本见 [Releases](https://github.com/whyluna/markpdf-studio/releases)）
+- **SHA-256**：`727426b14650a9f025f99f5dd600f319e7618fbbf0859ad7a4ceecfd3b75821b`（通用二进制：`arm64 + x86_64`）
 - **首次打开请右键点击图标 →「打开」**（当前未购买 Apple Developer ID 签名，Gatekeeper 提示「无法验证开发者」属正常现象，仅需首次操作一次）
 
 ## 快速上手

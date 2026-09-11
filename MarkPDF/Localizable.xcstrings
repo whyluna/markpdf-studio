@@ -1,6 +1,36 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "目录（从目录页提取）" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Contents (from contents pages)" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "目录（从目录页提取）" } }
+      }
+    },
+    "正在读取目录…" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading contents…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在读取目录…" } }
+      }
+    },
+    "此 PDF 未包含可用目录" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "No usable contents found in this PDF" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此 PDF 未包含可用目录" } }
+      }
+    },
+    "目录暂不可用" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Contents unavailable" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "目录暂不可用" } }
+      }
+    },
+    "未找到内嵌目录或可提取的目录页链接，可使用缩略图或添加书签。" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "No embedded outline or usable contents links were found. Use thumbnails or add bookmarks." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未找到内嵌目录或可提取的目录页链接，可使用缩略图或添加书签。" } }
+      }
+    },
     "" : {
 
     },

@@ -19,7 +19,16 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
   /// 缩放倍率（1.0 = 100%）
   @Published var scale: CGFloat = 1.0
   /// 当前 PDFView 实例（弱引用，供缩略图/大纲/书签跳转共享；非发布属性）
-  weak var pdfView: PDFView?
+  weak var pdfView: PDFView? {
+    didSet { refreshOutlineIndex() }
+  }
+  /// nil 表示目录尚在加载；空快照表示已检查但没有可用目录。
+  @Published private(set) var outlineIndex: PDFOutlineIndex?
+
+  func refreshOutlineIndex() {
+    let next = (pdfView as? ZoomablePDFView)?.outlineIndex
+    if outlineIndex != next { outlineIndex = next }
+  }
   /// 待跳转页（FR-6.2 全文搜索 / FR-5.3 回链）：携带目标文件 URL——分栏双 PDF 时
   /// 只有目标文档所在视图可消费（否则先挂载文档的视图会抢跳到自己文档的第 N 页）
   var pendingJump: (url: URL, page: Int)?
@@ -65,6 +74,13 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
     pdfView?.go(to: destination)
   }
 
+  func go(to entry: PDFOutlineIndex.Entry) {
+    guard outlineIndex?.entries.contains(entry) == true,
+      let pdfView, let document = pdfView.document,
+      let destination = entry.target?.destination(in: document) else { return }
+    pdfView.go(to: destination)
+  }
+
   /// 消费指向 url 的待跳转页：仅目标文档所在视图可消费（URL 标准化 + 符号链接归一比较，
   /// 与标注写回的 isSameFile 口径一致——符号链接工作区下回链跳转不应失配卡死），
   /// 匹配时连同闪烁标记一并取出；不匹配则原样保留，等目标视图来取
@@ -89,6 +105,7 @@ final class PDFReaderStore: ObservableObject, ZoomTarget {
   /// - 缩放归位 100%：避免旧文档倍率（如 2.0）在加载窗口期经 updateNSView 误关 autoScales，
   ///   新文档失去自适应宽度（有存档缩放时由加载完成后的位置恢复重新设置）
   func resetForDocumentSwitch() {
+    outlineIndex = nil
     closeFindBar()
     scale = 1.0
     // 页码一并归零：新文档异步解析的窗口期内若停留旧文档页码，
