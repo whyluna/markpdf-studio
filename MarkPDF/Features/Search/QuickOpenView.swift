@@ -43,14 +43,14 @@ struct QuickOpenView: View {
     }
     // 查询正规化只做一次，全体候选复用
     let prepared = FuzzyMatcher.prepare(query)
-    return
-      files
-      .compactMap { node in
-        FuzzyMatcher.match(prepared, in: node.name).map { (node, $0.score) }
-      }
-      .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.id.path < $1.0.id.path }
+    // 中间结果显式标注类型：整条链一体推断在新工具链下类型检查超时（实测）
+    let scored: [(node: FileNode, score: Int)] = files.compactMap { node in
+      FuzzyMatcher.match(prepared, in: node.name).map { (node, $0.score) }
+    }
+    return scored
+      .sorted { $0.score != $1.score ? $0.score > $1.score : $0.node.id.path < $1.node.id.path }
       .prefix(maxResults)
-      .map(\.0)
+      .map(\.node)
   }
 
   var body: some View {

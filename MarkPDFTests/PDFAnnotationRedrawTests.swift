@@ -1,9 +1,35 @@
 import PDFKit
+import SwiftUI
 import XCTest
 @testable import MarkPDF
 
 @MainActor
 final class PDFAnnotationRedrawTests: XCTestCase {
+  func testOverlayMaintenanceKeepsToolbarsAndUnchangedCardsInTheirWindow() throws {
+    let fixture = try Fixture()
+    defer { fixture.close() }
+    let marker = PDFAnnotation(bounds: NSRect(x: 15, y: 250, width: 22, height: 22),
+      forType: .text, withProperties: nil)
+    marker.userName = UUID().uuidString
+    marker.contents = "A comment that stays visible while scrolling"
+    fixture.page.addAnnotation(marker)
+    fixture.controller.rebuildCommentCards()
+    let originalCards = fixture.overlay.subviews.filter { $0 is NSHostingView<CommentCardView> }.map(ObjectIdentifier.init)
+    fixture.overlay.removedHostedViews = 0
+    let begin = ProcessInfo.processInfo.systemUptime
+    for _ in 0..<20 { fixture.controller.rebuildCommentCards() }
+    let elapsed = (ProcessInfo.processInfo.systemUptime - begin) * 1000
+    print("Overlay rebuild 20x: \(elapsed)ms, detached hosted views: \(fixture.overlay.removedHostedViews)")
+    XCTAssertEqual(fixture.overlay.removedHostedViews, 0,
+      "维护覆盖层的层级不应让工具条/未变卡片离开窗口，避免重新触发 SwiftUI 环境与窗口约束")
+    XCTAssertEqual(fixture.overlay.subviews.filter { $0 is NSHostingView<CommentCardView> }.map(ObjectIdentifier.init), originalCards)
+    // 删除仍及时清理旧卡片，并保留其他浮动面板。
+    fixture.page.removeAnnotation(marker)
+    fixture.controller.rebuildCommentCards()
+    XCTAssertTrue(fixture.overlay.subviews.filter { $0 is NSHostingView<CommentCardView> }.isEmpty)
+    XCTAssertEqual(fixture.overlay.removedHostedViews, 1)
+  }
+
   func testTextAnnotationRefreshDoesNotInvalidatePDFPageRendering() throws {
     let fixture = try Fixture()
     defer { fixture.close() }
@@ -78,6 +104,16 @@ final class PDFAnnotationRedrawTests: XCTestCase {
     }
   }
 
+  private final class TrackingOverlayHost: NSView {
+    var removedHostedViews = 0
+    override func willRemoveSubview(_ subview: NSView) {
+      if subview is NSHostingView<SelectionFloatingPanel> || subview is NSHostingView<CommentCardView> {
+        removedHostedViews += 1
+      }
+      super.willRemoveSubview(subview)
+    }
+  }
+
   @MainActor
   private final class Fixture {
     let view: RecordingPDFView
@@ -86,6 +122,7 @@ final class PDFAnnotationRedrawTests: XCTestCase {
     let window: NSWindow
     let store: PDFAnnotationStore
     let defaults: UserDefaults
+    let overlay: TrackingOverlayHost
 
     init(uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
       defaults = try XCTUnwrap(UserDefaults(suiteName: "PDFAnnotationRedrawTests"))
@@ -101,7 +138,7 @@ final class PDFAnnotationRedrawTests: XCTestCase {
       let root = NSView(frame: view.frame)
       window.contentView = root
       root.addSubview(view)
-      let overlay = OverlayPassthroughView(frame: view.frame)
+      overlay = TrackingOverlayHost(frame: view.frame)
       root.addSubview(overlay)
       view.document = document
       view.autoScales = true

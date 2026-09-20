@@ -135,3 +135,48 @@ extension ViewLayerLogicTests {
     XCTAssertEqual(ActiveSection.index(positions: [5, 12, 30], current: 99), 2)
   }
 }
+
+extension ViewLayerLogicTests {
+  // MARK: - 批注虚线框同视觉行归并（填空下划线切片问题）
+
+  /// selectionsByLine 按 PDF 文本流分行，填空下划线（矢量绘图）会把同一视觉行
+  /// 切成多片段 → 逐片段画框一行裂成多个框（实测）。竖直重叠过半者归并取并集
+  func testMergeSameVisualLineJoinsFragments() {
+    // 模拟实测切片：文字段 + 偏高的空格段 + 文字段（三段同一视觉行）
+    let text = NSRect(x: 100, y: 700, width: 60, height: 18)
+    let blank = NSRect(x: 160, y: 712, width: 80, height: 16)  // 与文字段重叠 6/16
+    let tail = NSRect(x: 240, y: 706, width: 70, height: 17)
+    let merged = AnnotationToolbarController.mergeSameVisualLine([text, blank, tail])
+    XCTAssertEqual(merged.count, 1, "同一视觉行的三个片段归并为一个框")
+    XCTAssertEqual(merged[0], NSRect(x: 100, y: 700, width: 210, height: 28), "并集覆盖整行（含偏高片段）")
+  }
+
+  /// 相邻两行行距远大于行高：不得误并
+  func testMergeKeepsAdjacentLinesApart() {
+    let line1 = NSRect(x: 100, y: 700, width: 200, height: 18)
+    let line2 = NSRect(x: 100, y: 676, width: 180, height: 18)  // 间隙 6pt（行距 24）
+    let merged = AnnotationToolbarController.mergeSameVisualLine([line1, line2])
+    XCTAssertEqual(merged.count, 2, "相邻真实行不合并")
+  }
+
+  /// 无效矩形过滤与单矩形直通
+  func testMergeFiltersInvalidRects() {
+    let valid = NSRect(x: 10, y: 10, width: 50, height: 20)
+    XCTAssertEqual(
+      AnnotationToolbarController.mergeSameVisualLine([valid, .null, NSRect.zero, .zero]),
+      [valid], "零面积/空矩形剔除；单矩形原样返回")
+  }
+
+  /// 同行判定本身：高度同量级任意正重叠为真（相邻行框从不竖直相交）；
+  /// 高度悬殊须实质重叠；相离为假
+  func testIsSameVisualLineThreshold() {
+    let a = NSRect(x: 0, y: 100, width: 50, height: 20)
+    XCTAssertTrue(AnnotationToolbarController.isSameVisualLine(a, NSRect(x: 100, y: 108, width: 30, height: 16)), "同量级，重叠 12")
+    XCTAssertTrue(AnnotationToolbarController.isSameVisualLine(a, NSRect(x: 100, y: 116, width: 30, height: 16)), "同量级，重叠 4 也算同行（正常行距不相交）")
+    XCTAssertFalse(AnnotationToolbarController.isSameVisualLine(a, NSRect(x: 100, y: 130, width: 30, height: 16)), "相离")
+    // 高度悬殊（片段跨多行）：重叠不过较矮者六成不并
+    let tall = NSRect(x: 0, y: 100, width: 50, height: 60)  // y 100-160
+    XCTAssertFalse(AnnotationToolbarController.isSameVisualLine(tall, NSRect(x: 100, y: 150, width: 30, height: 18)), "悬殊 + 重叠 10/18 未过 0.6")
+    XCTAssertTrue(AnnotationToolbarController.isSameVisualLine(tall, NSRect(x: 100, y: 146, width: 30, height: 18)), "悬殊 + 重叠 14/18 > 0.6")
+  }
+}

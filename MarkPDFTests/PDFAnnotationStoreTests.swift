@@ -393,6 +393,39 @@ final class PDFAnnotationStoreTests: XCTestCase {
     XCTAssertNil(layer.hitTest(CGPoint(x: 10, y: 10)))
   }
 
+  func testCommentRangesKeepNarrowCharactersAndIgnoreLegacyDotsAndOtherGroups() {
+    let page = PDFPage()
+    let marker = PDFAnnotation(bounds: CGRect(x: 0, y: 0, width: 22, height: 22), forType: .text, withProperties: nil)
+    marker.userName = UUID().uuidString
+    page.addAnnotation(marker)
+    let rects = [CGRect(x: 180, y: 120, width: 80, height: 12), CGRect(x: 40, y: 100, width: 2, height: 12)]
+    for rect in rects {
+      let a = PDFAnnotation(bounds: rect, forType: .underline, withProperties: nil)
+      a.userName = marker.userName
+      page.addAnnotation(a)
+    }
+    let dot = PDFAnnotation(bounds: CGRect(x: 5, y: 5, width: 1.1, height: 1.1), forType: .highlight, withProperties: nil)
+    dot.userName = marker.userName
+    page.addAnnotation(dot)
+    let unrelated = PDFAnnotation(bounds: CGRect(x: 20, y: 120, width: 280, height: 12), forType: .highlight, withProperties: nil)
+    unrelated.userName = UUID().uuidString
+    page.addAnnotation(unrelated)
+    XCTAssertEqual(AnnotationToolbarController.commentLineRects(for: marker, on: page), rects)
+    XCTAssertEqual(AnnotationToolbarController.commentConnectionAnchor(lineRects: rects, isLeft: true), NSPoint(x: 40, y: 106))
+    XCTAssertEqual(AnnotationToolbarController.commentConnectionAnchor(lineRects: rects, isLeft: false), NSPoint(x: 260, y: 126))
+  }
+
+  func testCommentWithOnlyAnAuthorNameDoesNotClaimUnrelatedTextRanges() {
+    let page = PDFPage()
+    let marker = PDFAnnotation(bounds: .zero, forType: .text, withProperties: nil)
+    marker.userName = "Reader"
+    let annotation = PDFAnnotation(bounds: CGRect(x: 20, y: 100, width: 300, height: 12), forType: .underline, withProperties: nil)
+    annotation.userName = "Reader"
+    page.addAnnotation(marker)
+    page.addAnnotation(annotation)
+    XCTAssertTrue(AnnotationToolbarController.commentLineRects(for: marker, on: page).isEmpty)
+  }
+
   /// isPopup 兼容 PDFKit 上报的两种子类型形态
   func testIsPopupAcceptsBothSubtypeForms() {
     let annotation = PDFAnnotation(bounds: .zero, forType: .popup, withProperties: nil)

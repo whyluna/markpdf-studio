@@ -632,11 +632,51 @@ final class AnnotationToolbarController: NSObject {
   /// 卡片槽位：marker（数据与锚点）+ hosting（显示）；几何每次从页坐标现算
   private struct CommentCardSlot {
     let marker: PDFAnnotation
-    let hosting: NSHostingView<CommentCardView>
+    let presentation: CommentCardPresentation
+    var hosting: NSHostingView<CommentCardView> { presentation.hosting }
     /// 连接线的内容端锚点（页坐标）：x = 内容近侧边缘，y = 内容行中心。
     /// 优先取同组正文高亮；无高亮的组退用旧版虚线点标注的远端点
     let anchor: NSPoint?
     let isLeftMargin: Bool
+    /// 保存每一行的实际选区；滚动时只换算坐标，不重扫或合并成外包矩形。
+    let lineRects: [NSRect]
+  }
+
+  /// 页面滚动只改变 frame.origin。相同内容、字号和宽度不重建 SwiftUI rootView，
+  /// 也不重新触发文字测量/窗口尺寸约束；标记仍可实时改色与编辑。
+  @MainActor
+  private final class CommentCardPresentation {
+    private struct State: Equatable {
+      let text: String
+      let color: NSColor
+      let isLeft: Bool
+      let scale: CGFloat
+      let width: CGFloat?
+    }
+    let hosting = NSHostingView(rootView: CommentCardView(
+      text: "", color: .systemBlue, isLeftMargin: true, scale: 1, width: nil, onClick: {}))
+    private var state: State?
+    private var fittedSize = NSSize.zero
+
+    func update(text: String, color: NSColor, isLeft: Bool, scale: CGFloat, width: CGFloat?,
+      onClick: @escaping () -> Void) -> NSSize {
+      let next = State(text: text, color: color, isLeft: isLeft, scale: scale, width: width)
+      if state != next {
+        hosting.rootView = CommentCardView(text: text, color: color, isLeftMargin: isLeft,
+          scale: scale, width: width, onClick: onClick)
+        fittedSize = hosting.fittingSize
+        state = next
+      }
+      return fittedSize
+    }
+
+    func place(at frame: NSRect) {
+      if hosting.frame.size != frame.size {
+        hosting.frame = frame
+      } else if hosting.frame.origin != frame.origin {
+        hosting.setFrameOrigin(frame.origin)
+      }
+    }
   }
 
   private var commentCards: [CommentCardSlot] = []
@@ -740,7 +780,7 @@ final class AnnotationToolbarController: NSObject {
   /// 覆盖层 z 序固定（自下而上）：连线层 → 批注卡片 → 点选虚线边框 →
   /// 编辑条 → 浮动工具条。addSubview 恒置顶，卡片随 revision 全量重建后
   /// 会垫到工具条上方（虚线框/卡片盖住工具条、撑出 PDF 区的根因），
-  /// 每次覆盖层增删后统一重排
+  /// 原位排序保留窗口归属；remove/add 会重启 NSHostingView 生命周期与窗口约束。
   private func restackOverlays() {
     guard let parent = overlayParent else { return }
     let order: [NSView?] =
@@ -748,22 +788,30 @@ final class AnnotationToolbarController: NSObject {
       + commentCards.map(\.hosting)
       + borderViews
       + [deleteHosting, hostingView]
-    for case let view? in order where view.superview === parent {
-      view.removeFromSuperview()
-      parent.addSubview(view)
+    let managed = order.compactMap { $0 }.filter { $0.superview === parent }
+    let managedIDs = Set(managed.map(ObjectIdentifier.init))
+    let desired = parent.subviews.filter { !managedIDs.contains(ObjectIdentifier($0)) } + managed
+    guard !parent.subviews.elementsEqual(desired, by: { $0 === $1 }) else { return }
+    var ranks = Dictionary(uniqueKeysWithValues: desired.enumerated().map { (ObjectIdentifier($0.element), $0.offset) })
+    withUnsafeMutablePointer(to: &ranks) { pointer in
+      parent.sortSubviews({ left, right, context in
+        guard let context else { return .orderedSame }
+        let ranks = context.assumingMemoryBound(to: [ObjectIdentifier: Int].self).pointee
+        let lhs = ranks[ObjectIdentifier(left)] ?? -1
+        let rhs = ranks[ObjectIdentifier(right)] ?? -1
+        return lhs < rhs ? .orderedAscending : (lhs > rhs ? .orderedDescending : .orderedSame)
+      }, context: UnsafeMutableRawPointer(pointer))
     }
   }
 
-  /// 全量重建：清空后为「可见页」的每个批注标记建卡（数量小，直接全建）
+  /// 同步可见页的卡片：保留既有标记的显示实例，只增删真正进入/离开可见页的卡片。
   func rebuildCommentCards() {
     guard let pdfView else { return }
     visiblePagesSignature = pdfView.visiblePages
       .compactMap { pdfView.document?.index(for: $0) }
       .map(String.init)
       .joined(separator: ",")
-    for slot in commentCards {
-      slot.hosting.removeFromSuperview()
-    }
+    let previousCards = Dictionary(uniqueKeysWithValues: commentCards.map { (ObjectIdentifier($0.marker), $0) })
     commentCards = []
     var commentPages: [PDFPage] = []
     for page in pdfView.visiblePages {
@@ -771,27 +819,24 @@ final class AnnotationToolbarController: NSObject {
       for marker in page.annotations where marker.isCommentMarker {
         var pageChanged = false
         let isLeft = marker.bounds.midX < pageBounds.midX
-        // 内容锚点（页坐标）：高亮合集的近侧边缘 + 行中心；无高亮退用旧虚线点远端
+        // 内容锚点（页坐标）：靠近卡片的实际选区行边缘；无范围数据退用旧虚线点远端。
         var anchor: NSPoint? = nil
         var legacyDots: [PDFAnnotation] = []
-        var contentUnion: CGRect? = nil
-        for annotation in page.annotations where annotation.userName == marker.userName {
+        let lineRects = Self.commentLineRects(for: marker, on: page)
+        for annotation in page.annotations where isAnnotationGroupID(marker.userName)
+          && annotation.userName == marker.userName {
           let kind = AnnotationKind.of(annotation)
           guard kind == .highlight || kind == .underline else { continue }
           let b = annotation.bounds
-          if b.width > 5 {
-            contentUnion = contentUnion?.union(b) ?? b
+          if Self.isCommentContentRange(annotation) {
             // 只作为虚线框的几何数据，原生下划线/高亮不参与显示。
             pageChanged = PDFAnnotationStore.hideNativeCommentVisualForOverlay(annotation) || pageChanged
           } else if kind == .highlight, b.width < 2, b.height < 2 {
             legacyDots.append(annotation)
           }
         }
-        if let union = contentUnion {
-          anchor = NSPoint(
-            x: isLeft ? union.minX : union.maxX,
-            y: union.midY
-          )
+        if let selectedEdge = Self.commentConnectionAnchor(lineRects: lineRects, isLeft: isLeft) {
+          anchor = selectedEdge
         } else if let far = legacyDots.max(by: { $0.bounds.midX * (isLeft ? 1 : -1) < $1.bounds.midX * (isLeft ? 1 : -1) }) {
           anchor = NSPoint(x: far.bounds.midX, y: far.bounds.midY)
         }
@@ -805,15 +850,18 @@ final class AnnotationToolbarController: NSObject {
         if pageChanged, !commentPages.contains(where: { $0 === page }) { commentPages.append(page) }
         let slot = CommentCardSlot(
           marker: marker,
-          hosting: NSHostingView(rootView: CommentCardView(
-            text: "", color: .systemBlue, isLeftMargin: true, scale: 1, width: nil, onClick: {}
-          )),
+          presentation: previousCards[ObjectIdentifier(marker)]?.presentation ?? CommentCardPresentation(),
           anchor: anchor,
-          isLeftMargin: isLeft
+          isLeftMargin: isLeft,
+          lineRects: lineRects
         )
-        overlayParent?.addSubview(slot.hosting)
+        if slot.hosting.superview == nil { overlayParent?.addSubview(slot.hosting) }
         commentCards.append(slot)
       }
+    }
+    let currentIDs = Set(commentCards.map { ObjectIdentifier($0.marker) })
+    for (id, slot) in previousCards where !currentIDs.contains(id) {
+      slot.hosting.removeFromSuperview()
     }
     if !migratedPages.isEmpty {
       migratedPages.removeAll()
@@ -888,16 +936,15 @@ final class AnnotationToolbarController: NSObject {
       let commentColor = slot.marker.color.usingColorSpace(.deviceRGB)
         ?? store.colorsByKind[.freeText]?.nsColor
         ?? .systemBlue
-      slot.hosting.rootView = CommentCardView(
+      let fitted = slot.presentation.update(
         text: text,
         color: commentColor,
-        isLeftMargin: slot.isLeftMargin,
+        isLeft: slot.isLeftMargin,
         scale: scale,
         width: isEmpty ? nil : cardWidth,
-        onClick: { [weak self] in self?.activateComment(slot.marker) }
+        onClick: { [weak self, marker = slot.marker] in self?.activateComment(marker) }
       )
 
-      let fitted = slot.hosting.fittingSize
       let width = cardWidth ?? fitted.width
       let height = fitted.height
       guard width > 0, height > 0, width.isFinite, height.isFinite else {
@@ -974,7 +1021,7 @@ final class AnnotationToolbarController: NSObject {
         continue
       }
       slot.hosting.isHidden = false
-      slot.hosting.frame = p.frame
+      slot.presentation.place(at: p.frame)
       guard let page = slot.marker.page else { continue }
       let markColor = slot.marker.color.usingColorSpace(.deviceRGB)
         ?? store.colorsByKind[.freeText]?.nsColor
@@ -995,23 +1042,23 @@ final class AnnotationToolbarController: NSObject {
         p.frame.width > clear * scale - 6 * scale
       {
         let allowed = max(clear * scale - 6 * scale, 24 * scale)
-        slot.hosting.rootView = CommentCardView(
+        let refit = slot.presentation.update(
           text: slot.marker.contents ?? "",
           color: markColor,
-          isLeftMargin: slot.isLeftMargin,
+          isLeft: slot.isLeftMargin,
           scale: scale,
           width: allowed,
-          onClick: { [weak self] in self?.activateComment(slot.marker) }
+          onClick: { [weak self, marker = slot.marker] in self?.activateComment(marker) }
         )
-        let refit = slot.hosting.fittingSize
         p.frame.size.width = allowed
         p.frame.size.height = refit.height
-        slot.hosting.frame = p.frame
+        slot.presentation.place(at: p.frame)
       }
-      // 内容块虚线框：围住批注所指文本（组内全部数据标记的合集）
-      if let content = contentUnion(of: slot, on: page) {
+      // 逐行描边：外包矩形会把首行未选中的行首、末行未选中的行尾也框进去。
+      // 每一行共用 marker，点击、颜色和删除仍按同一条批注处理。
+      for content in slot.lineRects {
         let viewRect = pdfView.convert(content, from: page)
-        if viewRect.isFiniteRect, viewRect.width > 4, viewRect.height > 2 {
+        if viewRect.isFiniteRect, viewRect.width > 0, viewRect.height > 0 {
           frames.append(.init(
             rect: viewRect, color: markColor,
             lineWidth: markLineWidth, marker: slot.marker
@@ -1039,15 +1086,61 @@ final class AnnotationToolbarController: NSObject {
     connectorLayer?.needsDisplay = true
   }
 
-  /// 批注组内容块合集（页坐标）：组内宽标记（高亮/下划线，均为数据标记）bounds 并集
-  private func contentUnion(of slot: CommentCardSlot, on page: PDFPage) -> CGRect? {
-    var union: CGRect? = nil
-    for annotation in page.annotations where annotation.userName == slot.marker.userName {
-      let kind = AnnotationKind.of(annotation)
-      guard kind == .highlight || kind == .underline, annotation.bounds.width > 5 else { continue }
-      union = union?.union(annotation.bounds) ?? annotation.bounds
+  private static func isCommentContentRange(_ annotation: PDFAnnotation) -> Bool {
+    let kind = AnnotationKind.of(annotation)
+    let bounds = annotation.bounds
+    guard kind == .highlight || kind == .underline,
+      bounds.isFiniteRect, !bounds.isEmpty, !bounds.isNull else { return false }
+    // 旧版连接线由 1.1pt 高亮方块组成；窄字符/标点的下划线仍是有效选区。
+    return !(kind == .highlight && bounds.width < 2 && bounds.height < 2)
+  }
+
+  static func commentLineRects(for marker: PDFAnnotation, on page: PDFPage) -> [NSRect] {
+    guard isAnnotationGroupID(marker.userName) else { return [] }
+    let rects = page.annotations.filter {
+      $0.userName == marker.userName && isCommentContentRange($0)
+    }.map(\.bounds)
+    return mergeSameVisualLine(rects).sorted {
+      $0.midY == $1.midY ? $0.minX < $1.minX : $0.midY > $1.midY
     }
-    return union
+  }
+
+  /// 同一视觉行的片段归并：selectionsByLine 按 PDF 文本流分行，填空下划线
+  /// （矢量绘图，非文字）等会把同一视觉行切成多个片段 → 逐片段画虚线框时
+  /// 一行裂成多个框（实测）。基线重叠判定：两矩形竖直重叠超过较矮者一半
+  /// 视为同行取并集；真相邻两行的行距远大于行高，不会被误并
+  nonisolated static func mergeSameVisualLine(_ rects: [NSRect]) -> [NSRect] {
+    let valid = rects.filter { $0.isFiniteRect && !$0.isEmpty && !$0.isNull }
+    guard valid.count > 1 else { return valid }
+    var merged: [NSRect] = []
+    for rect in valid {
+      if let index = merged.firstIndex(where: { Self.isSameVisualLine($0, rect) }) {
+        merged[index] = merged[index].union(rect)
+      } else {
+        merged.append(rect)
+      }
+    }
+    return merged
+  }
+
+  /// 竖直方向有实质重叠 → 同一视觉行。正常排版相邻两行的行框从不竖直相交，
+  /// 所以高度同量级（都是单行高）时任意正重叠即同行；高度悬殊（片段跨多行）
+  /// 时要求重叠过较矮者六成，防一个跨行大片段把整段吞并
+  nonisolated static func isSameVisualLine(_ a: NSRect, _ b: NSRect) -> Bool {
+    let overlap = min(a.maxY, b.maxY) - max(a.minY, b.minY)
+    guard overlap > 0 else { return false }
+    let shorter = min(a.height, b.height)
+    let taller = max(a.height, b.height)
+    return shorter >= taller * 0.5 || overlap > shorter * 0.6
+  }
+
+  /// 连接线落在靠近卡片一侧的真实选区边缘，不能落在多行外包矩形的空白处。
+  nonisolated static func commentConnectionAnchor(lineRects: [NSRect], isLeft: Bool) -> NSPoint? {
+    let valid = lineRects.filter { $0.isFiniteRect && !$0.isEmpty && !$0.isNull }
+    guard let line = valid.min(by: {
+      isLeft ? $0.minX < $1.minX : $0.maxX > $1.maxX
+    }) else { return nil }
+    return NSPoint(x: isLeft ? line.minX : line.maxX, y: line.midY)
   }
 
   private var editingComment: PDFAnnotation?
@@ -1126,7 +1219,7 @@ final class AnnotationToolbarController: NSObject {
   /// PDFKit 程序化 Square/Line 实测不渲染，色块高亮又过重）；
   /// 高亮工具 FR-4.1 的色块路径不受影响
   @discardableResult
-  private func underlineLines(of selection: PDFSelection, color: NSColor, groupID: String) -> Int {
+  func underlineLines(of selection: PDFSelection, color: NSColor, groupID: String) -> Int {
     var created = 0
     for lineSelection in selection.selectionsByLine() {
       for page in lineSelection.pages {
@@ -1283,13 +1376,9 @@ final class AnnotationToolbarController: NSObject {
   /// 批注组正文内容块（视图坐标）：组内高亮/下划线合集换算；弹窗锚点用
   private func contentUnionViewRect(of marker: PDFAnnotation) -> NSRect? {
     guard let pdfView, let page = marker.page else { return nil }
-    var union: NSRect? = nil
-    for annotation in page.annotations where annotation.userName == marker.userName {
-      let kind = AnnotationKind.of(annotation)
-      guard kind == .highlight || kind == .underline, annotation.bounds.width > 5 else { continue }
-      union = union?.union(annotation.bounds) ?? annotation.bounds
-    }
-    guard let u = union else { return nil }
+    // 仅弹窗摆放使用外包矩形；可视描边和命中区域始终按逐行选区处理。
+    let u = Self.commentLineRects(for: marker, on: page).reduce(NSRect.null) { $0.union($1) }
+    guard !u.isNull else { return nil }
     let rect = pdfView.convert(u, from: page)
     return rect.isFiniteRect ? rect : nil
   }
@@ -1420,7 +1509,7 @@ final class CommentConnectorLayer: NSView {
   var segments: [Segment] = [] {
     didSet { needsDisplay = true }
   }
-  /// 内容块虚线圆角框（视图坐标）：围住批注所指文本，与卡片同色系
+  /// 逐行虚线圆角框（视图坐标）：同一条批注的所有行共享 marker，与卡片同色系。
   var frames: [Frame] = [] {
     didSet {
       needsDisplay = true

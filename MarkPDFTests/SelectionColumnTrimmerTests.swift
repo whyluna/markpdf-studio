@@ -114,6 +114,100 @@ final class SelectionColumnTrimmerTests: XCTestCase {
 /// 隐藏窗口内验证真正的 PDFSelection、控制器事件入口与工具条动作，不操作用户窗口。
 @MainActor
 final class SelectionToolbarEventTests: XCTestCase {
+  func testHighlightFollowedByNativeScrollKeepsViewportMovingAndDefersMaintenance() async throws {
+    let fixture = try SelectionToolbarFixture()
+    defer { fixture.close() }
+    fixture.pdfView.scaleFactor = 2
+    fixture.pdfView.layoutDocumentView()
+    fixture.pdfView.setCurrentSelection(fixture.selection, animate: false)
+    let panel = try fixture.panel()
+    panel.rootView.onApply(.highlight)
+    XCTAssertEqual(fixture.page.annotations.filter { AnnotationKind.of($0) == .highlight }.count, 2)
+    XCTAssertNil(fixture.pdfView.currentSelection)
+    let revision = fixture.store.revision
+    let scroll = try XCTUnwrap(fixture.pdfView.documentView?.enclosingScrollView)
+    let start = scroll.contentView.bounds.origin
+    // 直接走 PDFKit 的真实 NSScrollView.scrollWheel 通道，不能用手工通知代替事件。
+    for _ in 0..<8 {
+      let cgEvent = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+        wheelCount: 1, wheel1: -30, wheel2: 0, wheel3: 0))
+      cgEvent.location = fixture.window.convertPoint(toScreen: NSPoint(x: 250, y: 300))
+      scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: cgEvent)))
+      try await Task.sleep(nanoseconds: 80_000_000)
+    }
+    XCTAssertNotEqual(scroll.contentView.bounds.origin, start, "高亮后第一段滚轮事件必须实际移动视口")
+    XCTAssertEqual(fixture.store.revision, revision, "真实滚动期间维护不能抢入")
+    try await Task.sleep(nanoseconds: 650_000_000)
+    XCTAssertEqual(fixture.store.revision, revision + 1)
+  }
+
+  func testCommentFramesFollowSelectedFragmentsAcrossLines() async throws {
+    let fixture = try SelectionToolbarFixture()
+    defer { fixture.close() }
+    let expected = fixture.selection.selectionsByLine().map { $0.bounds(for: fixture.page) }
+      .sorted { $0.midY > $1.midY }
+    let groupID = UUID().uuidString
+    let marker = PDFAnnotation(bounds: NSRect(x: 4, y: expected[0].midY, width: 22, height: 22),
+      forType: .text, withProperties: nil)
+    marker.userName = groupID
+    marker.color = .systemBlue
+    marker.contents = "Comment on the selected fragments"
+    fixture.page.addAnnotation(marker)
+    XCTAssertEqual(fixture.controller.underlineLines(of: fixture.selection, color: .systemBlue, groupID: groupID), 2)
+    // 与选区重叠的普通高亮有自己的组，不得扩大批注范围或被隐藏。
+    let ordinary = PDFAnnotation(bounds: NSRect(x: 10, y: expected[1].minY, width: 450, height: expected[1].height),
+      forType: .highlight, withProperties: nil)
+    ordinary.userName = UUID().uuidString
+    fixture.page.addAnnotation(ordinary)
+    fixture.controller.rebuildCommentCards()
+    let layer = try XCTUnwrap(fixture.viewport.overlayHost.subviews.compactMap { $0 as? CommentConnectorLayer }.first)
+    for scale in [CGFloat(0.5), 1, 1.8] {
+      fixture.pdfView.scaleFactor = scale
+      fixture.pdfView.layoutDocumentView()
+      fixture.controller.rebuildCommentCards()
+      XCTAssertEqual(layer.frames.count, 2, "每一行各有独立虚线框，不能合成一个外包框")
+      let expectedInView = expected.map { fixture.pdfView.convert($0, from: fixture.page) }
+      for (frame, rect) in zip(layer.frames, expectedInView) {
+        XCTAssertEqual(frame.rect.minX, rect.minX, accuracy: 0.01)
+        XCTAssertEqual(frame.rect.maxX, rect.maxX, accuracy: 0.01)
+        XCTAssertEqual(frame.rect.minY, rect.minY, accuracy: 0.01)
+        XCTAssertEqual(frame.rect.maxY, rect.maxY, accuracy: 0.01)
+        XCTAssertTrue(layer.marker(at: NSPoint(x: rect.midX, y: rect.midY)) === marker)
+        XCTAssertEqual(frame.color.usingColorSpace(.deviceRGB), marker.color.usingColorSpace(.deviceRGB))
+      }
+      let unselectedPrefix = fixture.pdfView.convert(NSPoint(x: expected[1].minX, y: expected[0].midY), from: fixture.page)
+      let unselectedSuffix = fixture.pdfView.convert(NSPoint(x: expected[0].midX, y: expected[1].midY), from: fixture.page)
+      XCTAssertNil(layer.marker(at: unselectedPrefix), "首行未选中的行首不能触发批注")
+      XCTAssertNil(layer.marker(at: unselectedSuffix), "末行未选中的行尾不能触发批注")
+      let connector = try XCTUnwrap(layer.segments.first)
+      XCTAssertTrue(expectedInView.contains { $0.insetBy(dx: -0.01, dy: -0.01).contains(connector.start) },
+        "连接线起点必须落在真实选中文字的边缘")
+    }
+    marker.color = .systemGreen
+    fixture.controller.rebuildCommentCards()
+    XCTAssertTrue(layer.frames.allSatisfy {
+      $0.color.usingColorSpace(.deviceRGB) == marker.color.usingColorSpace(.deviceRGB)
+    }, "同一批注各行的颜色必须同步")
+    XCTAssertTrue(ordinary.shouldDisplay)
+    // 写回采用同样的逐行数据，重开后仍可得到精确范围（无需用户删除重建已有批注）。
+    let entries = SidecarAnnotationStorage.entries(for: fixture.pdfView.document!)
+    let restored = PDFDocument()
+    let restoredPage = PDFPage()
+    restoredPage.setBounds(fixture.page.bounds(for: .mediaBox), for: .mediaBox)
+    restored.insert(restoredPage, at: 0)
+    for (_, annotation) in SidecarAnnotationStorage.annotations(from: entries) { restoredPage.addAnnotation(annotation) }
+    let loaded = try XCTUnwrap(PDFDocument(data: try XCTUnwrap(restored.dataRepresentation())))
+    let loadedPage = try XCTUnwrap(loaded.page(at: 0))
+    let loadedMarker = try XCTUnwrap(loadedPage.annotations.first { $0.isCommentMarker && $0.userName == groupID })
+    let loadedRects = AnnotationToolbarController.commentLineRects(for: loadedMarker, on: loadedPage)
+    XCTAssertEqual(loadedRects.count, expected.count)
+    for (rect, original) in zip(loadedRects, expected) {
+      XCTAssertEqual(rect.minX, original.minX, accuracy: 0.01)
+      XCTAssertEqual(rect.width, original.width, accuracy: 0.01)
+      XCTAssertEqual(rect.minY, original.minY, accuracy: 0.01)
+    }
+  }
+
   func testToolbarClickPreservesWrappedSelectionAndAppliesBothLines() async throws {
     for kind in [AnnotationKind.underline, .highlight, .strikeOut] {
       let fixture = try SelectionToolbarFixture()
