@@ -177,14 +177,18 @@ final class PDFOutlineIndexTests: XCTestCase {
 
   /// 手写正规 PDF（页引用直写的 /Dest、精确 xref）：5 页、首页 Contents + 4 条
   /// 带页引用目的地的链接、目标页 3/3/4/5——模拟真实产物（非 PDFKit 序列化器输出）。
-  static func handCraftedLinkedContentsPDF() -> Data {
+  /// includeOutline = 额外挂一条内嵌书签（写回存活验证用）。
+  static func handCraftedLinkedContentsPDF(includeOutline: Bool = false) -> Data {
     var body = "%PDF-1.4\n"
     var offsets: [Int] = []
     func appendObject(_ bodyText: String) {
       offsets.append(body.utf8.count)
       body += "\(offsets.count) 0 obj\n\(bodyText)\nendobj\n"
     }
-    appendObject("<< /Type /Catalog /Pages 2 0 R >>")
+    let catalog = includeOutline
+      ? "<< /Type /Catalog /Pages 2 0 R /Outlines 15 0 R >>"
+      : "<< /Type /Catalog /Pages 2 0 R >>"
+    appendObject(catalog)
     appendObject("<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 >>")
     appendObject(
       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
@@ -217,6 +221,10 @@ final class PDFOutlineIndexTests: XCTestCase {
     appendObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
     let bodyStream = "BT /F1 12 Tf 1 0 0 1 60 690 Tm (Body page) Tj ET"
     appendObject("<< /Length \(bodyStream.utf8.count) >>\nstream\n\(bodyStream)\nendstream")
+    if includeOutline {
+      appendObject("<< /Type /Outlines /First 16 0 R /Last 16 0 R /Count 1 >>")
+      appendObject("<< /Title (Marked Chapter) /Parent 15 0 R /Dest [4 0 R /XYZ 55 700 0] >>")
+    }
 
     let startxref = body.utf8.count
     body += "xref\n0 \(offsets.count + 1)\n0000000000 65535 f \n"

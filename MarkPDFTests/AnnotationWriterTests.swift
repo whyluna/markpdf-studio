@@ -257,4 +257,34 @@ final class AnnotationWriterTests: XCTestCase {
     XCTAssertEqual(markers.first?.iconType, .comment)
     XCTAssertEqual(markers.first?.contents, "图标回归")
   }
+  /// OS 回归守卫（新版 macOS PDFKit）：序列化器会把「被读取过 destination 的链接」
+  /// 物化成不可解析的名字令牌 /A（按规范 /A 优先于完好的 /Dest → 链接失效），
+  /// 且丢掉运行时书签。写回链路（snapshot/commit）从不读 destination——
+  /// 链接、内嵌书签、原始 /Dest 必须原样存活（触发即警觉写回链路被引入了目标读取）。
+  @MainActor
+  func testWriteBackPreservesLinkDestinationsAndOutline() throws {
+    let url = dir.appendingPathComponent("links-outline.pdf")
+    try PDFOutlineIndexTests.handCraftedLinkedContentsPDF(includeOutline: true).write(to: url)
+    let doc = try XCTUnwrap(PDFDocument(url: url))
+    let link = try XCTUnwrap(
+      doc.page(at: 0)!.annotations.first { $0.type?.hasSuffix("Link") == true })
+    XCTAssertNotNil(link.destination?.page, "前置：干净文件的链接目标可解析")
+    XCTAssertNotNil(doc.outlineRoot?.child(at: 0)?.destination?.page, "前置：内嵌书签可解析")
+
+    doc.page(at: 0)!.addAnnotation(highlightAnnotation())
+    try writer.writeBack(document: doc, to: url)
+
+    let out = try XCTUnwrap(PDFDocument(url: url))
+    let outLink = try XCTUnwrap(
+      out.page(at: 0)!.annotations.first { $0.type?.hasSuffix("Link") == true })
+    XCTAssertNotNil(outLink.destination?.page, "写回不得触发 destination 物化损坏")
+    let raw = String(data: try Data(contentsOf: url), encoding: .isoLatin1) ?? ""
+    XCTAssertFalse(raw.contains("/#"), "出现十六进制转义名字 = 物化损坏的指纹")
+    let outline = try XCTUnwrap(out.outlineRoot?.child(at: 0))
+    XCTAssertEqual(outline.label, "Marked Chapter", "磁盘解析的内嵌书签写回后存活")
+    XCTAssertNotNil(outline.destination?.page)
+    XCTAssertTrue(
+      out.page(at: 0)!.annotations.contains { $0.type?.hasSuffix("Highlight") == true },
+      "用户标注本身正常落地")
+  }
 }
