@@ -57,10 +57,11 @@ struct PDFOutlineIndex: Equatable, Sendable {
 
     var all: [Candidate] = []
     var gapPages = 0
+    let fallback = DestinationFallback(document: document)
     for pageIndex in 0..<min(scanPageLimit, document.pageCount) {
       guard !isCancelled(), all.count < entryLimit else { break }
       guard let page = document.page(at: pageIndex) else { continue }
-      let candidates = linkedRows(on: page, document: document)
+      let candidates = linkedRows(on: page, document: document, fallback: fallback)
       let hasHeading = (page.string ?? "").components(separatedBy: .newlines).contains {
         let title = $0.filter { !$0.isWhitespace }.lowercased()
         return ["目录", "目錄", "contents", "tableofcontents", "contents(continued)", "目录（续）", "目錄（續）"].contains(title)
@@ -100,6 +101,96 @@ struct PDFOutlineIndex: Equatable, Sendable {
     let hasLeader: Bool
   }
 
+  /// CG 层 /Dest 回退解析（OS 回归兜底）：新版 macOS PDFKit 把「被读取过 destination
+  /// 的链接」写回时物化成不可解析的名字令牌（/A /D [ /#xx… /XYZ … ]），按规范 /A 优先
+  /// 于 /Dest → PDFKit 侧 destination.page 变 nil；而文件里原始 /Dest 页引用完好。
+  /// 此回退经 CG 直接读取它恢复目标（CGPDF 的取值 API 会透明解引用间接页引用）。
+  final class DestinationFallback {
+    /// 页字典引用 → PDFKit 页索引（惰性建立；CF 类型不可哈希，线性 CFEqual）
+    private var pageDicts: [(dict: CGPDFDictionaryRef, index: Int)]?
+    private let document: PDFDocument
+
+    init(document: PDFDocument) {
+      self.document = document
+    }
+
+    func target(for link: PDFAnnotation, on page: PDFPage) -> Target? {
+      guard let cgPage = page.pageRef, let cgDict = cgPage.dictionary else { return nil }
+      var annotsRef: CGPDFArrayRef?
+      guard CGPDFDictionaryGetArray(cgDict, "Annots", &annotsRef), let annots = annotsRef else { return nil }
+      let bounds = link.bounds
+      for i in 0..<CGPDFArrayGetCount(annots) {
+        var annotDict: CGPDFDictionaryRef?
+        guard CGPDFArrayGetDictionary(annots, i, &annotDict), let annot = annotDict else { continue }
+        var subtype: UnsafePointer<CChar>?
+        CGPDFDictionaryGetName(annot, "Subtype", &subtype)
+        guard subtype.map({ String(cString: $0) }) == "Link" else { continue }
+        // 以 /Rect 匹配 PDFKit 链接（页空间同向，中心点容差 1pt）
+        var rectRef: CGPDFArrayRef?
+        guard CGPDFDictionaryGetArray(annot, "Rect", &rectRef), let rect = rectRef,
+          CGPDFArrayGetCount(rect) == 4 else { continue }
+        var coords: [CGFloat] = []
+        for j in 0..<4 {
+          var n: CGFloat = 0
+          if CGPDFArrayGetNumber(rect, j, &n) { coords.append(n) }
+        }
+        guard coords.count == 4 else { continue }
+        let box = CGRect(x: coords[0], y: coords[1], width: coords[2] - coords[0], height: coords[3] - coords[1])
+        guard abs(box.midX - bounds.midX) < 1, abs(box.midY - bounds.midY) < 1 else { continue }
+        var destRef: CGPDFArrayRef?
+        if CGPDFDictionaryGetArray(annot, "Dest", &destRef), let dest = destRef,
+          let fromDest = target(fromCG: dest)
+        {
+          return fromDest
+        }
+        var actionDict: CGPDFDictionaryRef?
+        if CGPDFDictionaryGetDictionary(annot, "A", &actionDict), let action = actionDict {
+          var s: UnsafePointer<CChar>?
+          CGPDFDictionaryGetName(action, "S", &s)
+          guard s.map({ String(cString: $0) }) == "GoTo" else { continue }
+          var dRef: CGPDFArrayRef?
+          if CGPDFDictionaryGetArray(action, "D", &dRef), let d = dRef,
+            let fromAction = target(fromCG: d)
+          {
+            return fromAction
+          }
+        }
+      }
+      return nil
+    }
+
+    /// /Dest 或 /A /D 数组：[页引用 /XYZ x y zoom]（XYZ 之外的 fit 类型只定位到页）
+    private func target(fromCG dest: CGPDFArrayRef) -> Target? {
+      guard CGPDFArrayGetCount(dest) >= 3 else { return nil }
+      var pageDict: CGPDFDictionaryRef?
+      // 名字令牌（损坏目的地的首元素）解析不出字典 → 放弃
+      guard CGPDFArrayGetDictionary(dest, 0, &pageDict), let pageDict else { return nil }
+      guard let index = pageIndex(of: pageDict) else { return nil }
+      var fit: UnsafePointer<CChar>?
+      CGPDFArrayGetName(dest, 1, &fit)
+      guard fit.map({ String(cString: $0) }) == "XYZ" else {
+        return Target(pageIndex: index, point: CGPoint(x: 0, y: 0), zoom: kPDFDestinationUnspecifiedValue)
+      }
+      var x: CGFloat = 0
+      var y: CGFloat = 0
+      CGPDFArrayGetNumber(dest, 2, &x)
+      CGPDFArrayGetNumber(dest, 3, &y)
+      var zoom = kPDFDestinationUnspecifiedValue
+      var zoomValue: CGFloat = 0
+      if CGPDFArrayGetCount(dest) > 4, CGPDFArrayGetNumber(dest, 4, &zoomValue), zoomValue > 0 { zoom = zoomValue }
+      return Target(pageIndex: index, point: CGPoint(x: x, y: y), zoom: zoom)
+    }
+
+    private func pageIndex(of dict: CGPDFDictionaryRef) -> Int? {
+      if pageDicts == nil {
+        pageDicts = (0..<document.pageCount).compactMap { i in
+          document.page(at: i)?.pageRef?.dictionary.map { (dict: $0, index: i) }
+        }
+      }
+      return pageDicts?.first { CFEqual($0.dict as CFTypeRef, dict as CFTypeRef) }?.index
+    }
+  }
+
   private static func target(_ destination: PDFDestination?, in document: PDFDocument) -> Target? {
     guard let destination, let page = destination.page else { return nil }
     let index = document.index(for: page)
@@ -111,13 +202,14 @@ struct PDFOutlineIndex: Equatable, Sendable {
       zoom: destination.zoom.isFinite ? destination.zoom : kPDFDestinationUnspecifiedValue)
   }
 
-  private static func linkedRows(on page: PDFPage, document: PDFDocument) -> [Candidate] {
+  private static func linkedRows(on page: PDFPage, document: PDFDocument, fallback: DestinationFallback) -> [Candidate] {
     let crop = page.bounds(for: .cropBox)
     var rows: [Candidate] = []
     let links = page.annotations.filter { $0.type?.replacingOccurrences(of: "/", with: "") == "Link" }
       .sorted { $0.bounds.midY == $1.bounds.midY ? $0.bounds.minX < $1.bounds.minX : $0.bounds.midY > $1.bounds.midY }
     for link in links.prefix(entryLimit * 2) {
-      guard let target = target(link.destination ?? (link.action as? PDFActionGoTo)?.destination, in: document),
+      let pdfKitTarget = target(link.destination ?? (link.action as? PDFActionGoTo)?.destination, in: document)
+      guard let target = pdfKitTarget ?? fallback.target(for: link, on: page),
         !link.bounds.isEmpty, !link.bounds.isNull,
         [link.bounds.minX, link.bounds.minY, link.bounds.width, link.bounds.height].allSatisfy(\.isFinite)
       else { continue }

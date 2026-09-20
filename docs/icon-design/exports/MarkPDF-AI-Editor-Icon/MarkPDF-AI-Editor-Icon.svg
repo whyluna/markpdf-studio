@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="editor-panel">
+      <rect x="28" y="28" width="968" height="968" rx="226"/>
+    </clipPath>
+  </defs>
+
+  <!-- The editor surface itself is the macOS icon tile. -->
+  <g clip-path="url(#editor-panel)">
+    <rect x="28" y="28" width="968" height="968" fill="#F5F2E9"/>
+
+    <!-- A light assistant sidebar separated by one accent rule -->
+    <rect x="679" y="228" width="44" height="568" rx="22" fill="#3159C7"/>
+
+    <!-- Two restrained text lines -->
+    <rect x="168" y="381" width="390" height="64" rx="32" fill="#26324A"/>
+    <rect x="168" y="529" width="286" height="64" rx="32" fill="#26324A"/>
+
+    <!-- Active text insertion caret -->
+    <rect x="478" y="504" width="42" height="114" rx="21" fill="#3159C7"/>
+  </g>
+
+  <!-- A single AI mark in the assistant rail -->
+  <path
+    d="M840 364
+       C853 433 883 463 952 476
+       C883 489 853 519 840 588
+       C827 519 797 489 728 476
+       C797 463 827 433 840 364Z"
+    fill="#3159C7"/>
+
+  <!-- A faint neutral edge keeps the white icon legible on light desktops. -->
+  <rect x="30" y="30" width="964" height="964" rx="224" fill="none" stroke="#DADDE6" stroke-width="4"/>
+</svg>

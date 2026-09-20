@@ -79,17 +79,36 @@ final class PDFOutlineIndexTests: XCTestCase {
   }
 
   func testReadOnlyRoundTripAndScanLimit() throws {
-    let doc = try fixture(duplicateNumbers: true)
-    let data = try XCTUnwrap(doc.dataRepresentation())
-    let reloaded = try XCTUnwrap(PDFDocument(data: data))
-    XCTAssertEqual(PDFOutlineIndex.build(document: reloaded).entries.count, 4)
+    // 回归（新 macOS PDFKit 写路径）：被读取过 destination 的链接在 dataRepresentation
+    // 写回时被物化成不可解析的名字令牌 /A（按规范 /A 优先于 /Dest）→ 重载后
+    // destination.page 全部失效；文件里原始 /Dest 页引用仍完好，生产侧 CG 回退据此恢复。
+    // 内存态 fixture 的链接经同一序列化器写出的 /Dest 本身即损坏（不可恢复），
+    // 故往返路径用手写正规 PDF（页引用直写）走真实使用路径：URL 加载 → 提取 → 写回 → 再加载。
+    let originalURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("outline-rt-\(UUID().uuidString).pdf")
+    try Self.handCraftedLinkedContentsPDF().write(to: originalURL)
+    defer { try? FileManager.default.removeItem(at: originalURL) }
+    guard let firstLoad = PDFDocument(url: originalURL) else {
+      return XCTFail("无法加载手写 PDF")
+    }
+    XCTAssertEqual(PDFOutlineIndex.build(document: firstLoad).entries.count, 4)
+
+    let rewrittenURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("outline-rt-\(UUID().uuidString).pdf")
+    try XCTUnwrap(firstLoad.dataRepresentation()).write(to: rewrittenURL)
+    defer { try? FileManager.default.removeItem(at: rewrittenURL) }
+    let reloaded = try XCTUnwrap(PDFDocument(url: rewrittenURL))
+    XCTAssertEqual(
+      PDFOutlineIndex.build(document: reloaded).entries.count, 4,
+      "写回后原始 /Dest 页引用仍在 → CG 回退恢复目录提取")
     XCTAssertNil(reloaded.outlineRoot)
+
     // 目录移至扫描界限之后不会扫描整本书。
-    let toc = try XCTUnwrap(doc.page(at: 0))
-    doc.removePage(at: 0)
-    for _ in 0..<PDFOutlineIndex.scanPageLimit { doc.insert(PDFPage(), at: 0) }
-    doc.insert(toc, at: PDFOutlineIndex.scanPageLimit)
-    XCTAssertEqual(PDFOutlineIndex.build(document: doc), .empty)
+    let toc = try XCTUnwrap(reloaded.page(at: 0))
+    reloaded.removePage(at: 0)
+    for _ in 0..<PDFOutlineIndex.scanPageLimit { reloaded.insert(PDFPage(), at: 0) }
+    reloaded.insert(toc, at: PDFOutlineIndex.scanPageLimit)
+    XCTAssertEqual(PDFOutlineIndex.build(document: reloaded), .empty)
   }
 
   func testCancellationDoesNotReadLinkedContents() throws {
@@ -156,9 +175,60 @@ final class PDFOutlineIndexTests: XCTestCase {
     XCTAssertFalse(window.isVisible)
   }
 
+  /// 手写正规 PDF（页引用直写的 /Dest、精确 xref）：5 页、首页 Contents + 4 条
+  /// 带页引用目的地的链接、目标页 3/3/4/5——模拟真实产物（非 PDFKit 序列化器输出）。
+  static func handCraftedLinkedContentsPDF() -> Data {
+    var body = "%PDF-1.4\n"
+    var offsets: [Int] = []
+    func appendObject(_ bodyText: String) {
+      offsets.append(body.utf8.count)
+      body += "\(offsets.count) 0 obj\n\(bodyText)\nendobj\n"
+    }
+    appendObject("<< /Type /Catalog /Pages 2 0 R >>")
+    appendObject("<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 >>")
+    appendObject(
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        + "/Resources <</Font <</F1 13 0 R>>>> /Contents 12 0 R /Annots [8 0 R 9 0 R 10 0 R 11 0 R] >>")
+    for _ in 0..<4 {
+      appendObject(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+          + "/Resources <</Font <</F1 13 0 R>>>> /Contents 14 0 R >>")
+    }
+    let titles = ["Chapter One", "Section One", "Detail", "Chapter Two"]
+    let indents: [CGFloat] = [60, 80, 100, 60]
+    let targets = [4, 4, 5, 6]
+    for n in 0..<4 {
+      let y = 687 - CGFloat(n) * 30
+      appendObject(
+        "<< /Type /Annot /Subtype /Link /F 4 "
+          + "/Rect [\(indents[n]) \(y) 430 \(y + 21)] "
+          + "/Dest [\(targets[n]) 0 R /XYZ 55 \(700 - CGFloat(n) * 30) 0] >>")
+    }
+    let contentsStream = """
+      BT /F1 12 Tf
+      1 0 0 1 220 750 Tm (Contents) Tj
+      1 0 0 1 60 690 Tm (Chapter One ................... 1) Tj
+      1 0 0 1 80 660 Tm (Section One ................... 2) Tj
+      1 0 0 1 100 630 Tm (Detail ................... 3) Tj
+      1 0 0 1 60 600 Tm (Chapter Two ................... 4) Tj
+      ET
+      """
+    appendObject("<< /Length \(contentsStream.utf8.count) >>\nstream\n\(contentsStream)\nendstream")
+    appendObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    let bodyStream = "BT /F1 12 Tf 1 0 0 1 60 690 Tm (Body page) Tj ET"
+    appendObject("<< /Length \(bodyStream.utf8.count) >>\nstream\n\(bodyStream)\nendstream")
+
+    let startxref = body.utf8.count
+    body += "xref\n0 \(offsets.count + 1)\n0000000000 65535 f \n"
+    for offset in offsets {
+      body += String(format: "%010d 00000 n \n", offset)
+    }
+    body += "trailer\n<< /Size \(offsets.count + 1) /Root 1 0 R >>\nstartxref\n\(startxref)\n%%EOF"
+    return Data(body.utf8)
+  }
+
   private func fixture(duplicateNumbers: Bool = false, numberOnly: Bool = false,
-    heading: String = "Contents", leaders: Bool = true, continuation: Bool = false) throws -> PDFDocument {
-    let data = NSMutableData()
+    heading: String = "Contents", leaders: Bool = true, continuation: Bool = false) throws -> PDFDocument {    let data = NSMutableData()
     var mediaBox = CGRect(x: 0, y: 0, width: 600, height: 800)
     let consumer = try XCTUnwrap(CGDataConsumer(data: data))
     let context = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &mediaBox, nil))
